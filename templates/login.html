@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login | Dreamz Fitness</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-black text-white min-h-screen flex items-center justify-center">
+  <div class="w-full max-w-md p-6 bg-gray-900 rounded-xl shadow-lg">
+    <div class="text-center mb-6">
+      <img src="/static/logo.jpg" alt="Dreamz Fitness" class="mx-auto h-16">
+      <h2 class="text-2xl font-bold mt-4">Member Login</h2>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="mb-4 text-red-400 text-sm">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="flex justify-center gap-4 mb-4">
+      <button onclick="toggleLogin('email')" id="emailBtn" class="py-1 px-3 rounded bg-white text-black font-semibold">Email Login</button>
+      <button onclick="toggleLogin('member')" id="memberBtn" class="py-1 px-3 rounded bg-gray-700">Member ID Login</button>
+    </div>
+
+    <form method="POST" id="emailForm">
+      <input type="hidden" name="login_type" value="email">
+      <div class="mb-4">
+        <label class="block mb-1">Email Address</label>
+        <input type="email" name="email" class="w-full p-2 rounded bg-gray-800 border border-gray-700" required>
+      </div>
+      <div class="mb-4">
+        <label class="block mb-1">Password</label>
+        <input type="password" name="password" class="w-full p-2 rounded bg-gray-800 border border-gray-700" required>
+      </div>
+      <button type="submit" class="w-full bg-gold-500 text-black font-bold py-2 rounded bg-yellow-500 hover:bg-yellow-400">Log In</button>
+    </form>
+
+    <form method="POST" id="memberForm" style="display: none;">
+      <input type="hidden" name="login_type" value="member_id">
+      <div class="mb-4">
+        <label class="block mb-1">Member ID</label>
+        <input type="text" name="member_id" class="w-full p-2 rounded bg-gray-800 border border-gray-700" required>
+      </div>
+      <div class="mb-4">
+        <label class="block mb-1">Birthdate (YYYY-MM-DD)</label>
+        <input type="text" name="birthdate" placeholder="1990-06-15" class="w-full p-2 rounded bg-gray-800 border border-gray-700">
+      </div>
+      <button type="submit" class="w-full bg-yellow-500 text-black font-bold py-2 rounded hover:bg-yellow-400">Log In</button>
+    </form>
+  </div>
+
+  <script>
+    function toggleLogin(type) {
+      const emailForm = document.getElementById('emailForm');
+      const memberForm = document.getElementById('memberForm');
+      const emailBtn = document.getElementById('emailBtn');
+      const memberBtn = document.getElementById('memberBtn');
+
+      if (type === 'email') {
+        emailForm.style.display = 'block';
+        memberForm.style.display = 'none';
+        emailBtn.classList.add('bg-white', 'text-black');
+        memberBtn.classList.remove('bg-white', 'text-black');
+        memberBtn.classList.add('bg-gray-700');
+      } else {
+        emailForm.style.display = 'none';
+        memberForm.style.display = 'block';
+        memberBtn.classList.add('bg-white', 'text-black');
+        emailBtn.classList.remove('bg-white', 'text-black');
+        emailBtn.classList.add('bg-gray-700');
+      }
+    }
+  </script>
+</body>
+</html>

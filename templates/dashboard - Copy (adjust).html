@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Member Dashboard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"/>
+  <style>
+    body {
+      background-color: #f8f9fa;
+      padding-top: 20px;
+    }
+    .logo {
+      max-height: 80px;
+    }
+    .btn-logout {
+      float: right;
+      margin-top: 20px;
+    }
+    .info-section {
+      background-color: white;
+      border-radius: 6px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+    }
+    .section-title {
+      border-bottom: 1px solid #dee2e6;
+      margin-bottom: 15px;
+      padding-bottom: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+      <img src="{{ url_for('static', filename='logo.jpg') }}" class="logo" alt="Logo" />
+      <a href="{{ url_for('logout') }}" class="btn btn-danger btn-logout">Log Out</a>
+    </div>
+
+    <h2 class="mb-4">Welcome, {{ member.name }}!</h2>
+
+        <div class="info-panels">
+            <section>
+                <h3>🧍 Member Information</h3>
+                <p><strong>Member ID:</strong> {{ member.member_id }}</p>
+                {% if member.email %}<p><strong>Email:</strong> {{ member.email }}</p>{% endif %}
+                <p><strong>Phone:</strong> {{ member.phone if member.phone else "Not available" }}</p>
+
+                {% if member.birthdate %}<p><strong>Birthdate:</strong> {{ (member.birthdate) }}</p>{% endif %}
+            </section>
+
+            <section>
+                <h3>🏋️ Subscription Details</h3>
+                {% if member.plan_type %}<p><strong>Plan Type:</strong> {{ member.plan_type }}</p>{% endif %}
+                <p><strong>Contract Type:</strong> {{ contract_type }}</p>
+                {% if member.start_date %}<p><strong>Start Date:</strong> {{ (member.start_date) }}</p>{% endif %}
+                {% if member.end_date %}
+                    <p><strong>End Date:</strong> {{ (member.end_date) }}</p>
+                {% else %}
+                    <p><strong>End Date:</strong> Automatic Renewal</p>
+                {% endif %}
+                <p><strong>Time Remaining:</strong> {{ calculate_time_remaining(member.end_date) }}</p>
+            </section>
+
+            <section>
+                <h3>💳 Payment Information</h3>
+                {% if member.last_payment %}<p><strong>Last Payment:</strong> {{ (member.last_payment) }}</p>{% endif %}
+                {% if member.next_payment %}<p><strong>Next Payment:</strong> {{ (member.next_payment) }}</p>{% endif %}
+                <p><strong>Outstanding Balance:</strong> {{ "%.2f"|format(member.balance or 0.00) }}</p>
+            </section>
+
+            <section>
+                <h3>📎 Documents</h3>
+                <ul>
+                    <li><strong>Signup Form:</strong>
+                        {% if has_form %}<a href="{{ url_for('static', filename='forms/' ~ member.member_id ~ '_form.pdf') }}">Available</a>
+
+                        {% else %}<span class="not-available">Not available</span>{% endif %}
+                    </li>
+                    <li><strong>Contract:</strong>
+                        {% if has_contract %}<a href="{{ url_for('static', filename='contracts/' ~ member.member_id ~ '_contract.pdf') }}">Available</a>
+                        {% else %}<span class="not-available">Not available</span>{% endif %}
+                    </li>
+                    <li><strong>Direct Debit Mandate:</strong>
+                        {% if has_mandate %}<a href="{{ url_for('static', filename='mandates/' ~ member.member_id ~ '_mandate.pdf') }}">Available</a>
+
+                        {% else %}<span class="not-available">Not available</span>{% endif %}
+                    </li>
+                </ul>
+            </section>
+
+            {% if cancellation_info %}
+            <section class="cancel-box">
+                <h3>📅 Cancellation Info</h3>
+                <p>{{ cancellation_info | safe }}</p>
+                <button class="btn cancel-btn">Request Cancellation</button>
+            </section>
+            {% endif %}
+        </div>
+
+        <footer>
+            <p>© 2025 Dreamz Fitness Bonaire</p>
+        </footer>
+    </div>
+</body>
+</html>

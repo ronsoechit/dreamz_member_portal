@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Member Dashboard | Dreamz Fitness</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-950 text-white min-h-screen font-sans">
+
+    <!-- Header -->
+    <header class="bg-black py-4 shadow-md">
+        <div class="container mx-auto flex justify-between items-center px-6">
+            <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Fitness" class="h-10">
+            <form action="{{ url_for('logout') }}" method="post">
+                <button class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded font-semibold">Log Out</button>
+            </form>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container mx-auto p-6">
+
+        <h1 class="text-2xl font-bold text-gold mb-6">Welcome, {{ member.name }}!</h1>
+
+        <!-- Member Info Section -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+            <div class="bg-gray-900 p-6 rounded-lg shadow-md">
+                <h2 class="text-lg font-semibold mb-2 text-gold">👤 Member Information</h2>
+                <p><strong>Member ID:</strong> {{ member.member_id }}</p>
+                <p><strong>Email:</strong> {{ member.email }}</p>
+                <p><strong>Phone:</strong> {{ member.phone }}</p>
+                <p><strong>Birthdate:</strong> {{ member.birthdate }}</p>
+            </div>
+
+            <div class="bg-gray-900 p-6 rounded-lg shadow-md">
+                <h2 class="text-lg font-semibold mb-2 text-gold">🏋️ Subscription Details</h2>
+                <p><strong>Plan Type:</strong> {{ member.plan_type }}</p>
+                <p><strong>Contract Type:</strong> {{ member.contract_type }}</p>
+                <p><strong>Start Date:</strong> {{ member.start_date }}</p>
+                <p><strong>End Date:</strong> {{ member.end_date }}</p>
+                <p><strong>Time Remaining:</strong> {{ member.remaining_time }}</p>
+            </div>
+
+            <div class="bg-gray-900 p-6 rounded-lg shadow-md">
+                <h2 class="text-lg font-semibold mb-2 text-gold">💳 Payment Information</h2>
+                <p><strong>Last Payment:</strong> {{ member.last_payment }}</p>
+                <p><strong>Next Payment:</strong> {{ member.next_payment }}</p>
+                <p><strong>Outstanding Balance:</strong> {{ member.balance }}</p>
+            </div>
+			
+			<div class="bg-gray-900 p-6 rounded-lg shadow-md">
+				<h2 class="text-lg font-semibold mb-2 text-gold">📎 Documents</h2>
+				<ul class="list-disc ml-5 text-sm space-y-1">
+					<li>
+						Signup Form:
+						{% if member.has_form %}
+							<a href="{{ url_for('static', filename=member.form_path) }}" class="text-blue-400 underline" target="_blank">View</a>
+						{% else %}
+							<span class="text-gray-400 italic">Not available</span>
+						{% endif %}
+					</li>
+					<li>
+						Contract:
+						{% if member.has_contract %}
+							<a href="{{ url_for('static', filename=member.contract_path) }}" class="text-blue-400 underline" target="_blank">View</a>
+						{% else %}
+							<span class="text-gray-400 italic">Not available</span>
+						{% endif %}
+					</li>
+					<li>
+						Direct Debit Mandate:
+						{% if member.has_mandate %}
+							<a href="{{ url_for('static', filename=member.mandate_path) }}" class="text-blue-400 underline" target="_blank">View</a>
+						{% else %}
+							<span class="text-gray-400 italic">Not available</span>
+						{% endif %}
+					</li>
+				</ul>
+			</div>
+
+
+
+            <div class="bg-gray-900 p-6 rounded-lg shadow-md">
+                <h2 class="text-lg font-semibold mb-2 text-gold">📅 Cancellation Info</h2>
+                <div class="bg-gray-900 p-6 rounded-lg shadow-md">
+				
+				<div class="text-sm text-white leading-relaxed space-y-2">
+					{% if member.cancellation_policy and ("Contract detected" in member.cancellation_policy or "No contract" in member.cancellation_policy) %}
+						<ul class="list-none space-y-1 text-sm text-white leading-relaxed">
+							{% for line in member.cancellation_policy.split('\n') %}
+								{% if line.strip() %}
+									<li>{{ line.strip() }}</li>
+								{% endif %}
+							{% endfor %}
+						</ul>
+
+					{% else %}
+						{% set lines = (member.cancellation_policy or '').split('\n') %}
+						<ul class="list-disc ml-5 space-y-1">
+							{% for line in lines %}
+								{% if line.strip() %}
+									<li>{{ line.strip() }}</li>
+								{% endif %}
+							{% endfor %}
+						</ul>
+					{% endif %}
+				</div>
+			</div>
+
+                <form action="/request-cancellation" method="post" class="mt-4">
+                    <button class="bg-yellow-600 hover:bg-yellow-500 text-black px-4 py-2 rounded font-semibold">Request Cancellation</button>
+                </form>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="text-center text-sm text-gray-500 mt-12 mb-4">
+        &copy; 2025 Dreamz Fitness Bonaire
+    </footer>
+
+</body>
+</html>

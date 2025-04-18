@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Member Dashboard | Dreamz Fitness</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Fitness" class="logo">
+            <form action="{{ url_for('login') }}" method="GET" class="logout">
+                <button type="submit" class="btn logout-btn">Log Out</button>
+            </form>
+        </header>
+
+        <h2>Welcome, {{ member.name }}!</h2>
+
+        <div class="info-panels">
+            <section>
+                <h3>🧍 Member Information</h3>
+                <p><strong>Member ID:</strong> {{ member.member_id }}</p>
+                {% if member.email %}<p><strong>Email:</strong> {{ member.email }}</p>{% endif %}
+                <p><strong>Phone:</strong> {{ member.phone if member.phone else "Not available" }}</p>
+
+                {% if member.birthdate %}<p><strong>Birthdate:</strong> {{ (member.birthdate) }}</p>{% endif %}
+            </section>
+
+            <section>
+                <h3>🏋️ Subscription Details</h3>
+                {% if member.plan_type %}<p><strong>Plan Type:</strong> {{ member.plan_type }}</p>{% endif %}
+                <p><strong>Contract Type:</strong> {{ contract_type }}</p>
+                {% if member.start_date %}<p><strong>Start Date:</strong> {{ (member.start_date) }}</p>{% endif %}
+                {% if member.end_date %}
+                    <p><strong>End Date:</strong> {{ (member.end_date) }}</p>
+                {% else %}
+                    <p><strong>End Date:</strong> Automatic Renewal</p>
+                {% endif %}
+                <p><strong>Time Remaining:</strong> {{ calculate_time_remaining(member.end_date) }}</p>
+            </section>
+
+            <section>
+                <h3>💳 Payment Information</h3>
+                {% if member.last_payment %}<p><strong>Last Payment:</strong> {{ (member.last_payment) }}</p>{% endif %}
+                {% if member.next_payment %}<p><strong>Next Payment:</strong> {{ (member.next_payment) }}</p>{% endif %}
+                <p><strong>Outstanding Balance:</strong> {{ "%.2f"|format(member.balance or 0.00) }}</p>
+            </section>
+
+            <section>
+                <h3>📎 Documents</h3>
+                <ul>
+                    <li><strong>Signup Form:</strong>
+                        {% if has_form %}<a href="{{ url_for('static', filename='forms/' ~ member.member_id ~ '_form.pdf') }}">Available</a>
+
+                        {% else %}<span class="not-available">Not available</span>{% endif %}
+                    </li>
+                    <li><strong>Contract:</strong>
+                        {% if has_contract %}<a href="{{ url_for('static', filename='contracts/' ~ member.member_id ~ '_contract.pdf') }}">Available</a>
+                        {% else %}<span class="not-available">Not available</span>{% endif %}
+                    </li>
+                    <li><strong>Direct Debit Mandate:</strong>
+                        {% if has_mandate %}<a href="{{ url_for('static', filename='mandates/' ~ member.member_id ~ '_mandate.pdf') }}">Available</a>
+
+                        {% else %}<span class="not-available">Not available</span>{% endif %}
+                    </li>
+                </ul>
+            </section>
+
+            {% if cancellation_info %}
+            <section class="cancel-box">
+                <h3>📅 Cancellation Info</h3>
+                <p>{{ cancellation_info | safe }}</p>
+                <button class="btn cancel-btn">Request Cancellation</button>
+            </section>
+            {% endif %}
+        </div>
+
+        <footer>
+            <p>© 2025 Dreamz Fitness Bonaire</p>
+        </footer>
+    </div>
+</body>
+</html>
