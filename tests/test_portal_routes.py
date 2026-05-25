@@ -285,6 +285,15 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("/member-photo/1206", response.get_data(as_text=True))
 
+    def test_dashboard_shows_s3_member_photo_when_available(self):
+        self.add_member(member_id="1206", photo_path="s3://dreamz-test/portal/Data/Pictures/0001206.jpg")
+        self.login_as("1206")
+
+        response = self.client.get("/dashboard?id=1206")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("/member-photo/1206", response.get_data(as_text=True))
+
     def test_member_photo_serves_image_for_logged_in_owner(self):
         with tempfile.TemporaryDirectory() as tmp:
             photos_root = Path(tmp)

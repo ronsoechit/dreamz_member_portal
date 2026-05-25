@@ -1867,7 +1867,7 @@ def member_dashboard_context(member, staff_admin_view=False):
     member.last_payment_amount = member.last_payment_amount or 0.0
     member.balance = member.balance or 0.0
     member.billing_amount = member.billing_amount or 0.0
-    member_photo_available = bool(resolved_photo_path(member.photo_path))
+    member_photo_available = bool(is_s3_uri(member.photo_path) or resolved_photo_path(member.photo_path))
 
     return {
         "member": member,
@@ -2513,7 +2513,7 @@ def dashboard():
     member.last_payment_amount = member.last_payment_amount or 0.0
     member.balance             = member.balance or 0.0
     member.billing_amount      = member.billing_amount or 0.0
-    member_photo_available = bool(resolved_photo_path(member.photo_path))
+    member_photo_available = bool(is_s3_uri(member.photo_path) or resolved_photo_path(member.photo_path))
 
     return render_template(
         "dashboard.html",
