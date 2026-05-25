@@ -382,6 +382,7 @@ def build_sync_payload(
     upload_changed_only: bool = False,
     changed_file_paths: set[str] | None = None,
     existing_member_ids: set[str] | None = None,
+    missing_file_keys: set[str] | None = None,
     storage_bucket: str | None = None,
 ) -> dict:
     source_root = source_root.resolve()
@@ -407,6 +408,7 @@ def build_sync_payload(
     portal_upload_uris = {}
     changed_file_paths = changed_file_paths or set()
     existing_member_ids = {str(member_id) for member_id in (existing_member_ids or set())}
+    missing_file_keys = {str(key).replace("\\", "/").lstrip("/") for key in (missing_file_keys or set())}
 
     def file_storage_key(path: Path) -> str:
         return storage_key(storage_prefix, relative_path(path.resolve(), source_root))
@@ -415,6 +417,8 @@ def build_sync_payload(
         if not upload_changed_only:
             return True
         if member_id and member_id not in existing_member_ids:
+            return True
+        if file_storage_key(path) in missing_file_keys:
             return True
         return relative_path(path.resolve(), source_root) in changed_file_paths
 
@@ -528,6 +532,25 @@ def get_existing_member_ids(portal_url: str, token: str, timeout: int = 60) -> s
     return {str(member_id) for member_id in member_ids}
 
 
+def get_missing_file_keys(portal_url: str, token: str, timeout: int = 120) -> set[str]:
+    endpoint = portal_url.rstrip("/") + "/api/sync/missing-file-keys"
+    http_request = urlrequest.Request(
+        endpoint,
+        method="GET",
+        headers={"X-Sync-Token": token},
+    )
+    try:
+        with urlrequest.urlopen(http_request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+            payload = json.loads(raw) if raw else {}
+    except Exception:
+        return set()
+    missing_keys = payload.get("missing_keys")
+    if not isinstance(missing_keys, list):
+        return set()
+    return {str(key).replace("\\", "/").lstrip("/") for key in missing_keys}
+
+
 def load_manifest(path: Path) -> dict | None:
     if not path.exists():
         return None
@@ -629,8 +652,10 @@ def main() -> None:
         if not args.sync_token:
             raise SystemExit("--sync-token or SYNC_API_TOKEN is required with --push-members")
         existing_member_ids = None
+        missing_file_keys = set()
         if args.upload_files and args.upload_via_portal and args.upload_changed_only:
             existing_member_ids = get_existing_member_ids(args.portal_url, args.sync_token)
+            missing_file_keys = get_missing_file_keys(args.portal_url, args.sync_token)
         payload = build_sync_payload(
             source_root,
             member_limit=args.member_limit,
@@ -643,6 +668,7 @@ def main() -> None:
             upload_changed_only=args.upload_changed_only,
             changed_file_paths=set(diff.added + diff.changed),
             existing_member_ids=existing_member_ids,
+            missing_file_keys=missing_file_keys,
             storage_bucket=args.storage_bucket,
         )
         endpoint = args.portal_url.rstrip("/") + "/api/sync/members"

@@ -151,6 +151,29 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(set(response.json["member_ids"]), {"1206", "34838"})
 
+    def test_sync_missing_file_keys_reports_missing_storage_objects(self):
+        db.session.add(Member(member_id="1206", name="Example, Member", photo_path="s3://bucket/gymassistant/photos/1206.jpg"))
+        db.session.add(MemberDocument(
+            member_id="1206",
+            document_type="contract",
+            title="Contract",
+            path="s3://bucket/gymassistant/docs/contract.pdf",
+            source_filename="contract.pdf",
+        ))
+        db.session.commit()
+
+        def fake_exists(uri):
+            return uri.endswith("photos/1206.jpg")
+
+        with patch("dreamz_portal.s3_object_exists", side_effect=fake_exists):
+            response = self.client.get(
+                "/api/sync/missing-file-keys",
+                headers={"X-Sync-Token": "sync-test-token"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["missing_keys"], ["gymassistant/docs/contract.pdf"])
+
     def test_member_document_file_returns_404_when_storage_object_is_missing(self):
         db.session.add(Member(member_id="1206", name="Example, Member"))
         db.session.add(MemberDocument(

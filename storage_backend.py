@@ -116,6 +116,23 @@ def open_s3_object(uri: str):
     return response["Body"]
 
 
+def s3_object_exists(uri: str) -> bool:
+    from botocore.exceptions import ClientError
+
+    parsed = parse_s3_uri(uri)
+    if not parsed:
+        return False
+    bucket, key = parsed
+    try:
+        s3_client().head_object(Bucket=bucket, Key=key)
+    except ClientError as exc:
+        code = (exc.response.get("Error") or {}).get("Code")
+        if code in {"404", "NoSuchKey", "NotFound"}:
+            return False
+        raise
+    return True
+
+
 def s3_download_name(uri: str) -> str:
     parsed = parse_s3_uri(uri)
     if not parsed:

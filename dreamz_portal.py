@@ -31,7 +31,7 @@ from translations import (
     normalize_language,
     translate,
 )
-from storage_backend import is_s3_uri, open_s3_object, s3_download_name, upload_bytes_to_s3
+from storage_backend import is_s3_uri, open_s3_object, parse_s3_uri, s3_download_name, s3_object_exists, upload_bytes_to_s3
 
 import csv
 import secrets
@@ -2243,6 +2243,39 @@ def api_sync_member_ids():
             for (member_id,) in db.session.query(Member.member_id).all()
         ]
     }
+
+
+@app.get("/api/sync/missing-file-keys")
+def api_sync_missing_file_keys():
+    require_sync_access()
+    ensure_runtime_schema()
+    uris = []
+    for (photo_path,) in db.session.query(Member.photo_path).filter(Member.photo_path.isnot(None)).all():
+        if is_s3_uri(photo_path):
+            uris.append(photo_path)
+    for (path,) in db.session.query(MemberDocument.path).filter(MemberDocument.path.isnot(None)).all():
+        if is_s3_uri(path):
+            uris.append(path)
+
+    missing_keys = []
+    seen = set()
+    for uri in uris:
+        parsed = parse_s3_uri(uri)
+        if not parsed:
+            continue
+        _, key = parsed
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            exists = s3_object_exists(uri)
+        except Exception as exc:
+            app.logger.exception("Could not check storage object %s", uri)
+            return {"status": "failed", "error": str(exc), "missing_keys": missing_keys}, 500
+        if not exists:
+            missing_keys.append(key)
+
+    return {"status": "success", "missing_keys": missing_keys}
 
 
 @app.route("/staff/settings", methods=["GET", "POST"])
