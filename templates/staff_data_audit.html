@@ -179,4 +179,21 @@
   </nav>
 {% endif %}
 
+<script>
+  const searchInput = document.getElementById("member-search");
+  const searchForm = searchInput?.closest("form");
+  let searchTimer;
+
+  searchInput?.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      const current = new URL(window.location.href);
+      const currentQuery = current.searchParams.get("q") || "";
+      if (searchInput.value.trim() === currentQuery.trim()) {
+        return;
+      }
+      searchForm?.submit();
+    }, 450);
+  });
+</script>
 {% endblock %}
