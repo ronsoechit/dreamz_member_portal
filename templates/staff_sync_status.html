@@ -81,24 +81,31 @@
           <td class="max-w-xs break-words p-3 text-gray-300">{{ run.source or 'N/A' }}</td>
           <td class="whitespace-nowrap p-3">{{ run.members_received }} received / {{ run.members_new }} new / {{ run.members_updated }} updated</td>
           <td class="whitespace-nowrap p-3">{{ run.documents_received }}</td>
-          <td class="min-w-[18rem] p-3">
+          <td class="min-w-[22rem] p-3">
             {% if new_members or changed_members or document_changes %}
               <details>
-                <summary class="cursor-pointer text-yellow-300">
-                  {{ new_members|length }} new,
-                  {{ changed_members|length }} changed,
-                  {{ document_changes|length }} document updates
+                <summary class="cursor-pointer list-none">
+                  <span class="inline-flex flex-wrap gap-1">
+                    {% if new_members %}
+                      <span class="rounded bg-green-500/15 px-2 py-1 text-xs font-semibold text-green-200">{{ new_members|length }} new</span>
+                    {% endif %}
+                    {% if changed_members %}
+                      <span class="rounded bg-yellow-500/15 px-2 py-1 text-xs font-semibold text-yellow-200">{{ changed_members|length }} changed</span>
+                    {% endif %}
+                    {% if document_changes %}
+                      <span class="rounded bg-blue-500/15 px-2 py-1 text-xs font-semibold text-blue-200">{{ document_changes|length }} docs</span>
+                    {% endif %}
+                  </span>
                 </summary>
-                <div class="mt-3 space-y-3 text-xs text-gray-300">
+                <div class="mt-3 grid max-w-xl gap-3 text-xs text-gray-300 xl:grid-cols-2">
                   {% if new_members %}
-                    <div>
-                      <div class="font-semibold text-green-300">New members</div>
-                      <ul class="mt-1 space-y-1">
+                    <div class="rounded border border-green-500/20 bg-green-500/5 p-3">
+                      <div class="mb-2 font-semibold text-green-300">New members</div>
+                      <ul class="space-y-2">
                         {% for item in new_members[:10] %}
                           <li>
-                            <a class="text-green-300 underline" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">{{ item.name or 'Unknown' }}</a>
-                            <span class="text-gray-500">#{{ item.member_id }}</span>
-                            {% if item.plan_type %}<span class="text-gray-400">- {{ item.plan_type }}</span>{% endif %}
+                            <a class="font-semibold text-green-200 underline" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">{{ item.name or 'Unknown' }}</a>
+                            <div class="mt-0.5 text-gray-400">#{{ item.member_id }}{% if item.plan_type %} · {{ item.plan_type }}{% endif %}</div>
                           </li>
                         {% endfor %}
                       </ul>
@@ -106,16 +113,16 @@
                   {% endif %}
 
                   {% if changed_members %}
-                    <div>
-                      <div class="font-semibold text-yellow-300">Member changes</div>
-                      <ul class="mt-1 space-y-2">
+                    <div class="rounded border border-yellow-500/20 bg-yellow-500/5 p-3">
+                      <div class="mb-2 font-semibold text-yellow-300">Member changes</div>
+                      <ul class="space-y-3">
                         {% for item in changed_members[:10] %}
                           <li>
-                            <a class="text-green-300 underline" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">{{ item.name or 'Unknown' }}</a>
-                            <span class="text-gray-500">#{{ item.member_id }}</span>
+                            <a class="font-semibold text-green-200 underline" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">{{ item.name or 'Unknown' }}</a>
+                            <div class="mt-0.5 text-gray-500">#{{ item.member_id }}</div>
                             <ul class="mt-1 space-y-1 text-gray-400">
                               {% for change in item.changes[:4] %}
-                                <li>{{ change.label }}: {{ change.old or 'empty' }} -> {{ change.new or 'empty' }}</li>
+                                <li><span class="text-gray-300">{{ change.label }}:</span> {{ change.old or 'empty' }} -> {{ change.new or 'empty' }}</li>
                               {% endfor %}
                             </ul>
                           </li>
@@ -125,14 +132,13 @@
                   {% endif %}
 
                   {% if document_changes %}
-                    <div>
-                      <div class="font-semibold text-blue-300">Document changes</div>
-                      <ul class="mt-1 space-y-1">
+                    <div class="rounded border border-blue-500/20 bg-blue-500/5 p-3">
+                      <div class="mb-2 font-semibold text-blue-300">Document changes</div>
+                      <ul class="space-y-2">
                         {% for item in document_changes[:10] %}
                           <li>
-                            <a class="text-green-300 underline" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">{{ item.name or 'Unknown' }}</a>
-                            <span class="text-gray-500">#{{ item.member_id }}</span>
-                            <span class="text-gray-400">{{ item.old_count }} -> {{ item.new_count }} docs</span>
+                            <a class="font-semibold text-green-200 underline" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">{{ item.name or 'Unknown' }}</a>
+                            <div class="mt-0.5 text-gray-400">#{{ item.member_id }} · {{ item.old_count }} -> {{ item.new_count }} docs</div>
                           </li>
                         {% endfor %}
                       </ul>
