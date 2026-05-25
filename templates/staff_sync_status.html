@@ -48,7 +48,7 @@
         <th class="p-3 text-left">Members</th>
         <th class="p-3 text-left">Documents</th>
         <th class="p-3 text-left">Changes</th>
-        <th class="p-3 text-left">Error</th>
+        <th class="p-3 text-left">Warning / Error</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-800">
@@ -129,7 +129,7 @@
               <span class="text-gray-500">No tracked changes</span>
             {% endif %}
           </td>
-          <td class="max-w-sm break-words p-3 text-red-200">{{ run.error or '' }}</td>
+          <td class="max-w-sm break-words p-3 {% if run.status == 'success' and run.error %}text-yellow-200{% else %}text-red-200{% endif %}">{{ run.error or '' }}</td>
         </tr>
       {% else %}
         <tr>

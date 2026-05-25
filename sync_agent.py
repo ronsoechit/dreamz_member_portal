@@ -36,6 +36,7 @@ class SyncScan:
     scanned_at: str
     member_source: str | None
     latest_backup: str | None
+    warning: str | None
     member_count: int
     relevant_file_count: int
     relevant_total_bytes: int
@@ -73,12 +74,28 @@ def live_members_path(source_root: Path) -> Path:
     return data_root(source_root) / "Members.btx"
 
 
+def live_members_dat_path(source_root: Path) -> Path:
+    return data_root(source_root) / "Members.dat"
+
+
 def latest_backup_path(source_root: Path) -> Path | None:
     root = backup_root(source_root)
     if not root.exists():
         return None
     backups = [path for path in root.glob("*.gbu") if path.is_file()]
     return max(backups, key=lambda path: path.stat().st_mtime) if backups else None
+
+
+def live_member_data_warning(source_root: Path, backup: Path | None) -> str | None:
+    live_dat = live_members_dat_path(source_root)
+    if not backup or not live_dat.exists():
+        return None
+    if live_dat.stat().st_mtime > backup.stat().st_mtime:
+        return (
+            "GymAssistant Members.dat is newer than the latest .gbu backup. "
+            "The portal imported the latest backup, so recently added or edited members may not appear until a new GymAssistant backup is created."
+        )
+    return None
 
 
 def relative_path(path: Path, source_root: Path) -> str:
@@ -120,6 +137,7 @@ def scan_source(source_root: Path) -> SyncScan:
 
     backup = latest_backup_path(source_root)
     live_members = live_members_path(source_root)
+    live_dat = live_members_dat_path(source_root)
     files: list[FileSignature] = []
     member_count = 0
     member_source: Path | None = None
@@ -134,6 +152,8 @@ def scan_source(source_root: Path) -> SyncScan:
 
     if backup:
         files.append(file_signature(backup, source_root, "backup"))
+    if live_dat.exists():
+        files.append(file_signature(live_dat, source_root, "live_member_data"))
 
     files.extend(iter_attachment_files(source_root) or [])
     files.extend(iter_photo_files(source_root) or [])
@@ -144,6 +164,7 @@ def scan_source(source_root: Path) -> SyncScan:
         scanned_at=utc_now_iso(),
         member_source=str(member_source) if member_source else None,
         latest_backup=str(backup) if backup else None,
+        warning=live_member_data_warning(source_root, backup),
         member_count=member_count,
         relevant_file_count=len(files),
         relevant_total_bytes=sum(item.size for item in files),
@@ -157,6 +178,7 @@ def manifest_payload(scan: SyncScan) -> dict:
         "scanned_at": scan.scanned_at,
         "member_source": scan.member_source,
         "latest_backup": scan.latest_backup,
+        "warning": scan.warning,
         "member_count": scan.member_count,
         "files": [asdict(item) for item in scan.files],
     }
@@ -409,6 +431,7 @@ def build_sync_payload(
         "source": str(source_root),
         "backup": str(backup),
         "member_source": str(member_source),
+        "warning": live_member_data_warning(source_root, backup),
         "generated_at": utc_now_iso(),
         "members": [json_safe_member(member) for member in members],
         "documents": documents,
@@ -485,6 +508,8 @@ def print_scan_report(scan: SyncScan, diff: SyncDiff | None = None) -> None:
     print(f"Scanned at: {scan.scanned_at}")
     print(f"Member source: {scan.member_source or 'not found'}")
     print(f"Latest backup: {scan.latest_backup or 'not found'}")
+    if scan.warning:
+        print(f"Warning: {scan.warning}")
     print(f"Parsed members: {scan.member_count}")
     print(f"Relevant files: {scan.relevant_file_count}")
     print(f"Relevant size: {round(scan.relevant_total_bytes / 1024 / 1024, 2)} MB")

@@ -1,6 +1,7 @@
 from pathlib import Path
 import tempfile
 import unittest
+import os
 import zipfile
 from unittest.mock import patch
 
@@ -71,6 +72,27 @@ class SyncAgentTests(unittest.TestCase):
         self.assertIn("Data/Members.btx", [item.path for item in scan.files])
         self.assertEqual(payload["members"][0]["member_id"], "101")
         self.assertEqual(payload["members"][0]["name"], "Tester, Live")
+
+    def test_scan_source_warns_when_live_members_dat_is_newer_than_backup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            backup_dir = data_dir / "Backup"
+            backup_dir.mkdir(parents=True)
+            backup = backup_dir / "GABackup-test.gbu"
+            write_backup(backup, member_id="100")
+            live_dat = data_dir / "Members.dat"
+            live_dat.write_bytes(b"live binary member data")
+            os.utime(backup, (1000, 1000))
+            os.utime(live_dat, (2000, 2000))
+
+            scan = scan_source(root)
+            payload = build_sync_payload(root)
+
+        self.assertTrue(scan.member_source.endswith("GABackup-test.gbu"))
+        self.assertIn("Members.dat is newer", scan.warning)
+        self.assertIn("Members.dat is newer", payload["warning"])
+        self.assertIn("Data/Members.dat", [item.path for item in scan.files])
 
     def test_manifest_diff_detects_added_changed_and_removed_files(self):
         with tempfile.TemporaryDirectory() as tmp:

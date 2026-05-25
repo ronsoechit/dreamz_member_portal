@@ -719,11 +719,13 @@ def apply_sync_payload(payload):
     members = payload.get("members") or []
     documents_by_member = payload.get("documents") or {}
     source = payload.get("source") or "sync-agent"
+    warning = (payload.get("warning") or "").strip() or None
     sync_run = SyncRun(
         source=source,
         status="running",
         members_received=len(members),
         documents_received=sum(len(records or []) for records in documents_by_member.values()),
+        error=warning,
     )
     db.session.add(sync_run)
     db.session.commit()
