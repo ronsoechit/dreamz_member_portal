@@ -19,6 +19,7 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.exc import IntegrityError
 from dateutil.relativedelta import relativedelta
 from datetime import datetime, date, timedelta   # ← bestaande regel uitbreiden
+from datetime import timezone
 from cancellation_policy import evaluate_cancellation_policy
 from ga_fields import GA_FIELDS
 from translations import (
@@ -276,6 +277,21 @@ DEFAULT_SETTINGS = {
     "notification_cc": "",
     "always_cc_admin": "1",
 }
+
+DEFAULT_PORTAL_TIMEZONE_OFFSET_HOURS = -4
+
+
+def portal_timezone():
+    offset_hours = int(os.getenv("PORTAL_TIMEZONE_OFFSET_HOURS", DEFAULT_PORTAL_TIMEZONE_OFFSET_HOURS))
+    return timezone(timedelta(hours=offset_hours), name="Dreamz local time")
+
+
+def local_datetime(value):
+    if not isinstance(value, datetime):
+        return value
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(portal_timezone())
 
 
 def ensure_sqlite_model_column(table_name, column_name, column_definition):
@@ -1509,6 +1525,8 @@ def format_date(value, fmt=None):
     """
     if value is None:
         return ""
+    if isinstance(value, datetime):
+        value = local_datetime(value)
     if fmt:
         return value.strftime(fmt)
     return fmt_policy_date(value, current_language())

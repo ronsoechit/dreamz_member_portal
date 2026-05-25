@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 import importlib.util
 import os
 import unittest
@@ -116,7 +116,15 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(Member.query.filter_by(member_id="1206").one().name, "New Name")
 
     def test_staff_sync_status_lists_runs(self):
-        db.session.add(SyncRun(source="unit-test", status="success", members_received=2, members_updated=2, documents_received=3))
+        db.session.add(SyncRun(
+            source="unit-test",
+            status="success",
+            started_at=datetime(2026, 5, 25, 18, 5),
+            completed_at=datetime(2026, 5, 25, 18, 5),
+            members_received=2,
+            members_updated=2,
+            documents_received=3,
+        ))
         db.session.commit()
         with self.client.session_transaction() as sess:
             sess["staff_role"] = "admin"
@@ -129,6 +137,7 @@ class SyncApiTests(unittest.TestCase):
         self.assertIn("Sync Status", body)
         self.assertIn("unit-test", body)
         self.assertIn("2 received", body)
+        self.assertIn("25/05/2026 14:05", body)
 
 
 if __name__ == "__main__":
