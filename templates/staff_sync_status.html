@@ -81,71 +81,25 @@
           <td class="max-w-xs break-words p-3 text-gray-300">{{ run.source or 'N/A' }}</td>
           <td class="whitespace-nowrap p-3">{{ run.members_received }} received / {{ run.members_new }} new / {{ run.members_updated }} updated</td>
           <td class="whitespace-nowrap p-3">{{ run.documents_received }}</td>
-          <td class="min-w-[22rem] p-3">
+          <td class="min-w-[10rem] p-3">
             {% if new_members or changed_members or document_changes %}
-              <details>
-                <summary class="cursor-pointer list-none">
-                  <span class="inline-flex flex-wrap gap-1">
-                    {% if new_members %}
-                      <span class="rounded bg-green-500/15 px-2 py-1 text-xs font-semibold text-green-200">{{ new_members|length }} new</span>
-                    {% endif %}
-                    {% if changed_members %}
-                      <span class="rounded bg-yellow-500/15 px-2 py-1 text-xs font-semibold text-yellow-200">{{ changed_members|length }} changed</span>
-                    {% endif %}
-                    {% if document_changes %}
-                      <span class="rounded bg-blue-500/15 px-2 py-1 text-xs font-semibold text-blue-200">{{ document_changes|length }} docs</span>
-                    {% endif %}
-                  </span>
-                </summary>
-                <div class="mt-3 grid max-w-xl gap-3 text-xs text-gray-300 xl:grid-cols-2">
-                  {% if new_members %}
-                    <div class="rounded border border-green-500/20 bg-green-500/5 p-3">
-                      <div class="mb-2 font-semibold text-green-300">New members</div>
-                      <ul class="space-y-2">
-                        {% for item in new_members[:10] %}
-                          <li>
-                            <a class="font-semibold text-green-200 underline" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">{{ item.name or 'Unknown' }}</a>
-                            <div class="mt-0.5 text-gray-400">#{{ item.member_id }}{% if item.plan_type %} · {{ item.plan_type }}{% endif %}</div>
-                          </li>
-                        {% endfor %}
-                      </ul>
-                    </div>
-                  {% endif %}
-
-                  {% if changed_members %}
-                    <div class="rounded border border-yellow-500/20 bg-yellow-500/5 p-3">
-                      <div class="mb-2 font-semibold text-yellow-300">Member changes</div>
-                      <ul class="space-y-3">
-                        {% for item in changed_members[:10] %}
-                          <li>
-                            <a class="font-semibold text-green-200 underline" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">{{ item.name or 'Unknown' }}</a>
-                            <div class="mt-0.5 text-gray-500">#{{ item.member_id }}</div>
-                            <ul class="mt-1 space-y-1 text-gray-400">
-                              {% for change in item.changes[:4] %}
-                                <li><span class="text-gray-300">{{ change.label }}:</span> {{ change.old or 'empty' }} -> {{ change.new or 'empty' }}</li>
-                              {% endfor %}
-                            </ul>
-                          </li>
-                        {% endfor %}
-                      </ul>
-                    </div>
-                  {% endif %}
-
-                  {% if document_changes %}
-                    <div class="rounded border border-blue-500/20 bg-blue-500/5 p-3">
-                      <div class="mb-2 font-semibold text-blue-300">Document changes</div>
-                      <ul class="space-y-2">
-                        {% for item in document_changes[:10] %}
-                          <li>
-                            <a class="font-semibold text-green-200 underline" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">{{ item.name or 'Unknown' }}</a>
-                            <div class="mt-0.5 text-gray-400">#{{ item.member_id }} · {{ item.old_count }} -> {{ item.new_count }} docs</div>
-                          </li>
-                        {% endfor %}
-                      </ul>
-                    </div>
-                  {% endif %}
-                </div>
-              </details>
+              <button
+                type="button"
+                class="inline-flex flex-wrap items-center gap-1 rounded border border-gray-700 bg-gray-800 px-2 py-2 text-left transition hover:border-yellow-400 hover:bg-gray-700"
+                data-sync-modal-target="sync-modal-{{ run.id }}"
+                aria-label="View sync changes"
+              >
+                {% if new_members %}
+                  <span class="rounded bg-green-500/15 px-2 py-1 text-xs font-semibold text-green-200">{{ new_members|length }} new</span>
+                {% endif %}
+                {% if changed_members %}
+                  <span class="rounded bg-yellow-500/15 px-2 py-1 text-xs font-semibold text-yellow-200">{{ changed_members|length }} changed</span>
+                {% endif %}
+                {% if document_changes %}
+                  <span class="rounded bg-blue-500/15 px-2 py-1 text-xs font-semibold text-blue-200">{{ document_changes|length }} docs</span>
+                {% endif %}
+                <span class="w-full text-xs font-semibold text-yellow-300">View details</span>
+              </button>
             {% else %}
               <span class="text-gray-500">No tracked changes</span>
             {% endif %}
@@ -185,6 +139,117 @@
     </tbody>
   </table>
 </div>
+
+{% for run in runs %}
+  {% set changes = run_changes.get(run.id, {}) %}
+  {% set new_members = changes.get('new_members', []) %}
+  {% set changed_members = changes.get('changed_members', []) %}
+  {% set document_changes = changes.get('document_changes', []) %}
+  {% if new_members or changed_members or document_changes %}
+    <div id="sync-modal-{{ run.id }}" class="sync-modal fixed inset-0 z-50 hidden items-center justify-center bg-black bg-opacity-70 p-4">
+      <div class="max-h-[88vh] w-full max-w-6xl overflow-hidden rounded border border-gray-700 bg-gray-900 shadow-2xl">
+        <div class="flex flex-col gap-4 border-b border-gray-700 bg-gray-800 px-5 py-4 md:flex-row md:items-start md:justify-between">
+          <div>
+            <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">Sync changes</div>
+            <h3 class="mt-1 text-xl font-semibold">{{ run.started_at|format_date('%d/%m/%Y %H:%M') }}</h3>
+            <p class="mt-1 text-sm text-gray-400">{{ run.members_received }} received / {{ run.members_new }} new / {{ run.members_updated }} updated / {{ run.documents_received }} documents</p>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            {% if new_members %}
+              <span class="rounded bg-green-500/15 px-3 py-1 text-xs font-semibold text-green-200">{{ new_members|length }} new</span>
+            {% endif %}
+            {% if changed_members %}
+              <span class="rounded bg-yellow-500/15 px-3 py-1 text-xs font-semibold text-yellow-200">{{ changed_members|length }} changed</span>
+            {% endif %}
+            {% if document_changes %}
+              <span class="rounded bg-blue-500/15 px-3 py-1 text-xs font-semibold text-blue-200">{{ document_changes|length }} document updates</span>
+            {% endif %}
+            <button type="button" class="sync-modal-close rounded bg-gray-700 px-3 py-2 text-sm font-semibold text-white hover:bg-gray-600">Close</button>
+          </div>
+        </div>
+
+        <div class="max-h-[72vh] overflow-y-auto p-5">
+          {% if new_members %}
+            <section class="mb-5 rounded border border-green-500/20 bg-green-500/5 p-4">
+              <div class="mb-3 flex items-center justify-between">
+                <h4 class="font-semibold text-green-300">New members</h4>
+                <span class="rounded bg-green-500/15 px-2 py-1 text-xs text-green-200">{{ new_members|length }}</span>
+              </div>
+              <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {% for item in new_members[:30] %}
+                  <a class="block rounded border border-gray-800 bg-gray-950/40 p-3 hover:border-green-400" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">
+                    <span class="block font-semibold text-green-200 underline">{{ item.name or 'Unknown' }}</span>
+                    <span class="mt-1 block text-xs text-gray-400">#{{ item.member_id }}{% if item.plan_type %} / {{ item.plan_type }}{% endif %}</span>
+                  </a>
+                {% endfor %}
+              </div>
+              {% if new_members|length > 30 %}
+                <p class="mt-3 text-xs text-gray-400">Showing the first 30 new members.</p>
+              {% endif %}
+            </section>
+          {% endif %}
+
+          {% if changed_members %}
+            <section class="mb-5 rounded border border-yellow-500/20 bg-yellow-500/5 p-4">
+              <div class="mb-3 flex items-center justify-between">
+                <h4 class="font-semibold text-yellow-300">Member changes</h4>
+                <span class="rounded bg-yellow-500/15 px-2 py-1 text-xs text-yellow-200">{{ changed_members|length }}</span>
+              </div>
+              <div class="space-y-4">
+                {% for item in changed_members[:20] %}
+                  <article class="rounded border border-gray-700 bg-gray-950/40">
+                    <div class="flex flex-col gap-1 border-b border-gray-800 px-4 py-3 md:flex-row md:items-center md:justify-between">
+                      <a class="font-semibold text-green-200 underline" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">{{ item.name or 'Unknown' }}</a>
+                      <span class="text-xs text-gray-400">#{{ item.member_id }}</span>
+                    </div>
+                    <div class="divide-y divide-gray-800">
+                      {% for change in item.changes[:10] %}
+                        <div class="grid gap-2 px-4 py-3 text-sm md:grid-cols-3">
+                          <div class="font-semibold text-gray-200">{{ change.label }}</div>
+                          <div class="rounded bg-gray-900 px-3 py-2 text-gray-400">
+                            <span class="block text-xs uppercase text-gray-500">From</span>
+                            {{ change.old or 'empty' }}
+                          </div>
+                          <div class="rounded bg-gray-900 px-3 py-2 text-gray-100">
+                            <span class="block text-xs uppercase text-gray-500">To</span>
+                            {{ change.new or 'empty' }}
+                          </div>
+                        </div>
+                      {% endfor %}
+                    </div>
+                  </article>
+                {% endfor %}
+              </div>
+              {% if changed_members|length > 20 %}
+                <p class="mt-3 text-xs text-gray-400">Showing the first 20 changed members.</p>
+              {% endif %}
+            </section>
+          {% endif %}
+
+          {% if document_changes %}
+            <section class="rounded border border-blue-500/20 bg-blue-500/5 p-4">
+              <div class="mb-3 flex items-center justify-between">
+                <h4 class="font-semibold text-blue-300">Document changes</h4>
+                <span class="rounded bg-blue-500/15 px-2 py-1 text-xs text-blue-200">{{ document_changes|length }}</span>
+              </div>
+              <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {% for item in document_changes[:30] %}
+                  <a class="block rounded border border-gray-800 bg-gray-950/40 p-3 hover:border-blue-400" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">
+                    <span class="block font-semibold text-green-200 underline">{{ item.name or 'Unknown' }}</span>
+                    <span class="mt-1 block text-xs text-gray-400">#{{ item.member_id }} / {{ item.old_count }} -> {{ item.new_count }} docs</span>
+                  </a>
+                {% endfor %}
+              </div>
+              {% if document_changes|length > 30 %}
+                <p class="mt-3 text-xs text-gray-400">Showing the first 30 document changes.</p>
+              {% endif %}
+            </section>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+{% endfor %}
 </section>
 
 <script>
@@ -194,6 +259,11 @@
     if (!panel || !status) return;
 
     const refreshSyncStatus = async () => {
+      if (document.querySelector(".sync-modal:not(.hidden)")) {
+        status.textContent = "Auto-refresh paused while change details are open.";
+        return;
+      }
+
       try {
         status.textContent = "Checking for new sync activity...";
         const response = await fetch(window.location.href, {
@@ -213,6 +283,43 @@
     };
 
     window.setInterval(refreshSyncStatus, 20000);
+
+    document.addEventListener("click", (event) => {
+      const openButton = event.target.closest("[data-sync-modal-target]");
+      if (openButton) {
+        const modal = document.getElementById(openButton.dataset.syncModalTarget);
+        if (modal) {
+          modal.classList.remove("hidden");
+          modal.classList.add("flex");
+          status.textContent = "Auto-refresh paused while change details are open.";
+        }
+      }
+
+      const closeButton = event.target.closest(".sync-modal-close");
+      if (closeButton) {
+        const modal = closeButton.closest(".sync-modal");
+        if (modal) {
+          modal.classList.add("hidden");
+          modal.classList.remove("flex");
+          status.textContent = "Auto-refreshing every 20 seconds.";
+        }
+      }
+
+      if (event.target.classList.contains("sync-modal")) {
+        event.target.classList.add("hidden");
+        event.target.classList.remove("flex");
+        status.textContent = "Auto-refreshing every 20 seconds.";
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      document.querySelectorAll(".sync-modal:not(.hidden)").forEach((modal) => {
+        modal.classList.add("hidden");
+        modal.classList.remove("flex");
+      });
+      status.textContent = "Auto-refreshing every 20 seconds.";
+    });
   })();
 </script>
 {% endblock %}
