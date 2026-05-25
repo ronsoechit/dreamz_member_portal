@@ -16,6 +16,7 @@ from flask import (
 )
 
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.exc import IntegrityError
 from dateutil.relativedelta import relativedelta
 from datetime import datetime, date, timedelta   # ← bestaande regel uitbreiden
 from cancellation_policy import evaluate_cancellation_policy
@@ -355,14 +356,18 @@ def seed_default_staff_users():
     for data in defaults:
         if StaffUser.query.filter_by(username=data["username"]).first():
             continue
-        db.session.add(StaffUser(
+        user = StaffUser(
             username=data["username"],
             role=data["role"],
             email=data["email"],
             password_hash=generate_password_hash(data["password"]),
             is_active=True,
-        ))
-    db.session.commit()
+        )
+        db.session.add(user)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
 
 
 @app.before_request
