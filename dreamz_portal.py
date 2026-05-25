@@ -825,6 +825,12 @@ def cancellation_message(policy, language=DEFAULT_LANGUAGE):
 def cancellation_message_parts(policy, language=DEFAULT_LANGUAGE):
     language = normalize_language(language)
 
+    if policy.status == "not_applicable_short_pass":
+        return (
+            translated_text("policy_short_pass_summary", language),
+            translated_text("policy_short_pass_detail", language),
+        )
+
     if policy.status == "allowed_no_fixed_term":
         return (
             translated_text("policy_no_fixed_summary", language),
@@ -1431,7 +1437,8 @@ def is_staff_membership(member):
 
 
 def cancellation_portal_available_for_member(member):
-    return not is_staff_membership(member)
+    policy = cancellation_policy_for_member(member)
+    return not is_staff_membership(member) and policy.status != "not_applicable_short_pass"
 
 
 def requires_direct_debit_mandate(member):

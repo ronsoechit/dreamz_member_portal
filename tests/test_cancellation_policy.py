@@ -5,6 +5,7 @@ from cancellation_policy import (
     add_months,
     detect_term_months,
     evaluate_cancellation_policy,
+    is_short_pass,
 )
 
 
@@ -87,6 +88,18 @@ class CancellationPolicyTests(unittest.TestCase):
         self.assertTrue(result.can_request)
         self.assertEqual(result.status, "allowed_no_fixed_term")
         self.assertIsNone(result.term_months)
+
+    def test_short_pass_does_not_allow_cancellation_request(self):
+        result = evaluate_cancellation_policy(
+            today=date(2026, 5, 25),
+            plan_type="2 WEEKS PASS",
+            contract_type="No-Contract",
+            contract_begin=date(2026, 5, 25),
+        )
+
+        self.assertFalse(result.can_request)
+        self.assertEqual(result.status, "not_applicable_short_pass")
+        self.assertTrue(is_short_pass("2 WEEKS PASS", "No-Contract"))
 
 
 if __name__ == "__main__":

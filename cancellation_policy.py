@@ -41,6 +41,30 @@ def detect_term_months(plan_type: str | None = None, contract_type: str | None =
     return None
 
 
+def is_short_pass(plan_type: str | None = None, contract_type: str | None = None) -> bool:
+    normalized = re.sub(
+        r"\s+",
+        " ",
+        " ".join(value for value in [plan_type, contract_type] if value).strip().lower(),
+    )
+    if not normalized:
+        return False
+    if "contract" in normalized and "no-contract" not in normalized and "no contract" not in normalized:
+        return False
+    return any(
+        re.search(pattern, normalized)
+        for pattern in [
+            r"\bday\s*pass\b",
+            r"\bweek\s*pass\b",
+            r"\bweeks\s*pass\b",
+            r"\b\d+\s*week",
+            r"\b1\s*weeks?\s*inv\b",
+            r"\b2\s*weeks?\s*inv\b",
+            r"\b3\s*weeks?\s*inv\b",
+        ]
+    )
+
+
 def add_months(value: date, months: int) -> date:
     month_index = value.month - 1 + months
     year = value.year + month_index // 12
@@ -66,6 +90,13 @@ def evaluate_cancellation_policy(
     contract_end: date | None = None,
     signup_date: date | None = None,
 ) -> CancellationPolicyResult:
+    if is_short_pass(plan_type=plan_type, contract_type=contract_type):
+        return CancellationPolicyResult(
+            can_request=False,
+            status="not_applicable_short_pass",
+            reason="This short-term pass ends automatically and does not need a cancellation request.",
+        )
+
     term_months = detect_term_months(plan_type=plan_type, contract_type=contract_type)
     if term_months is None:
         return CancellationPolicyResult(

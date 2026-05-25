@@ -565,6 +565,24 @@ class PortalRouteTests(unittest.TestCase):
         self.assertNotIn("Cancellation Policy", body)
         self.assertNotIn("I want to cancel my contract", body)
 
+    def test_short_pass_hides_cancellation_policy(self):
+        self.add_member(
+            member_id="34844",
+            name="Gerard V Donzelaar",
+            plan_type="2 WEEKS PASS",
+            contract_type="No-Contract",
+            signup_date=date(2026, 5, 25),
+            start_date=date(2026, 5, 25),
+        )
+        self.login_as("34844")
+
+        response = self.client.get("/dashboard?id=34844")
+
+        body = response.get_data(as_text=True)
+        self.assertNotIn("Cancellation Policy", body)
+        self.assertNotIn("Cancellation request is available now", body)
+        self.assertNotIn("I want to cancel my contract", body)
+
     def test_staff_membership_cannot_submit_cancellation(self):
         self.add_member(
             member_id="13659",
