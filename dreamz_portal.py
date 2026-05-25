@@ -1371,6 +1371,33 @@ def filtered_plan_rows(rows, plan_filter):
     return [row for row in rows if row["plan_type"] == plan_filter]
 
 
+def filtered_search_rows(rows, search_query):
+    query = (search_query or "").strip().lower()
+    if not query:
+        return rows
+
+    terms = [term for term in query.split() if term]
+    if not terms:
+        return rows
+
+    def searchable_text(row):
+        values = [
+            row.get("member_id"),
+            row.get("name"),
+            row.get("raw_name"),
+            row.get("email"),
+            row.get("plan_type"),
+            row.get("contract_type"),
+            " ".join(row.get("issues") or []),
+        ]
+        return " ".join(str(value or "").lower() for value in values)
+
+    return [
+        row for row in rows
+        if all(term in searchable_text(row) for term in terms)
+    ]
+
+
 def audit_plan_options(rows):
     plans = sorted({row["plan_type"] for row in rows if row["plan_type"]})
     return plans
@@ -2196,6 +2223,7 @@ def staff_data_audit():
     staff_role = require_staff_access()
     issue_filter = request.args.get("issue", "").strip()
     plan_filter = request.args.get("plan", "").strip()
+    search_query = request.args.get("q", "").strip()
     sort_key = request.args.get("sort", "issues").strip()
     direction = request.args.get("dir", "desc").strip().lower()
     try:
@@ -2207,6 +2235,7 @@ def staff_data_audit():
     all_rows = audit_rows()
     filtered_rows = filtered_audit_rows(all_rows, issue_filter)
     filtered_rows = filtered_plan_rows(filtered_rows, plan_filter)
+    filtered_rows = filtered_search_rows(filtered_rows, search_query)
     filtered_rows = sort_audit_rows(filtered_rows, sort_key, direction)
     total_filtered = len(filtered_rows)
     total_pages = max((total_filtered + AUDIT_PAGE_SIZE - 1) // AUDIT_PAGE_SIZE, 1)
@@ -2222,6 +2251,7 @@ def staff_data_audit():
         plan_options=audit_plan_options(all_rows),
         selected_issue=issue_filter,
         selected_plan=plan_filter,
+        search_query=search_query,
         sort_key=sort_key,
         sort_dir=direction,
         total_members=len(all_rows),

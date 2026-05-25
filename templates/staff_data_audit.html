@@ -4,7 +4,7 @@
 {% macro sort_link(label, key) %}
   {% set next_dir = 'asc' if sort_key != key or sort_dir == 'desc' else 'desc' %}
   <a class="inline-flex items-center gap-1 hover:text-yellow-300"
-     href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, sort=key, dir=next_dir, page=1) }}">
+     href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, q=search_query, sort=key, dir=next_dir, page=1) }}">
     <span>{{ label }}</span>
     {% if sort_key == key %}
       <span class="text-yellow-400">{{ 'v' if sort_dir == 'desc' else '^' }}</span>
@@ -30,7 +30,7 @@
 
 <div class="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
   {% for issue, count in issue_counts.items() %}
-    <a href="{{ url_for('staff_data_audit', issue=issue, plan=selected_plan, sort=sort_key, dir=sort_dir, page=1) }}"
+    <a href="{{ url_for('staff_data_audit', issue=issue, plan=selected_plan, q=search_query, sort=sort_key, dir=sort_dir, page=1) }}"
        class="rounded border border-gray-700 bg-gray-800/60 p-4 hover:bg-gray-800 {% if selected_issue == issue %}ring-2 ring-yellow-400{% endif %}">
       <div class="text-sm text-gray-300">{{ issue_labels.get(issue, issue.replace('_', ' ')|title) }}</div>
       <div class="mt-1 text-2xl font-semibold text-yellow-400">{{ count }}</div>
@@ -42,31 +42,44 @@
   <nav class="mb-4 flex flex-wrap items-center gap-2 text-sm" aria-label="Audit pages">
     <span class="mr-2 text-gray-400">Page {{ page }} of {{ total_pages }}</span>
     {% if page > 1 %}
-      <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, sort=sort_key, dir=sort_dir, page=page-1) }}">Previous</a>
+      <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, q=search_query, sort=sort_key, dir=sort_dir, page=page-1) }}">Previous</a>
     {% endif %}
     {% for page_number in range(1, total_pages + 1) %}
       <a class="rounded px-3 py-2 {% if page_number == page %}bg-yellow-500 text-black{% else %}bg-gray-700 hover:bg-gray-600{% endif %}"
-         href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, sort=sort_key, dir=sort_dir, page=page_number) }}">{{ page_number }}</a>
+         href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, q=search_query, sort=sort_key, dir=sort_dir, page=page_number) }}">{{ page_number }}</a>
     {% endfor %}
     {% if page < total_pages %}
-      <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, sort=sort_key, dir=sort_dir, page=page+1) }}">Next</a>
+      <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, q=search_query, sort=sort_key, dir=sort_dir, page=page+1) }}">Next</a>
     {% endif %}
   </nav>
 {% endif %}
 
 <div class="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
   <div class="flex w-full flex-col gap-3 md:flex-row md:items-center">
-    <label class="block w-full md:max-w-md">
+    <form method="get" action="{{ url_for('staff_data_audit') }}" class="flex w-full gap-2 md:max-w-md">
+      <input type="hidden" name="issue" value="{{ selected_issue }}">
+      <input type="hidden" name="plan" value="{{ selected_plan }}">
+      <input type="hidden" name="sort" value="{{ sort_key }}">
+      <input type="hidden" name="dir" value="{{ sort_dir }}">
+      <label class="block min-w-0 flex-1">
       <span class="sr-only">Search members</span>
       <input
         id="member-search"
+        name="q"
         type="search"
+        value="{{ search_query }}"
         placeholder="Search name, member ID, email, plan or issue"
         class="w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white placeholder-gray-500"
       >
-    </label>
+      </label>
+      <button type="submit" class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black hover:bg-yellow-400">Search</button>
+      {% if search_query %}
+        <a class="rounded bg-gray-700 px-3 py-2 text-sm hover:bg-gray-600" href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, sort=sort_key, dir=sort_dir, page=1) }}">Clear</a>
+      {% endif %}
+    </form>
     <form method="get" action="{{ url_for('staff_data_audit') }}" class="flex w-full gap-2 md:max-w-lg">
       <input type="hidden" name="issue" value="{{ selected_issue }}">
+      <input type="hidden" name="q" value="{{ search_query }}">
       <input type="hidden" name="sort" value="{{ sort_key }}">
       <input type="hidden" name="dir" value="{{ sort_dir }}">
       <label class="sr-only" for="plan-filter">Plan</label>
@@ -78,7 +91,7 @@
       </select>
       <button type="submit" class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black hover:bg-yellow-400">Apply</button>
       {% if selected_plan %}
-        <a class="rounded bg-gray-700 px-3 py-2 text-sm hover:bg-gray-600" href="{{ url_for('staff_data_audit', issue=selected_issue, sort=sort_key, dir=sort_dir, page=1) }}">Clear</a>
+        <a class="rounded bg-gray-700 px-3 py-2 text-sm hover:bg-gray-600" href="{{ url_for('staff_data_audit', issue=selected_issue, q=search_query, sort=sort_key, dir=sort_dir, page=1) }}">Clear</a>
       {% endif %}
     </form>
   </div>
@@ -154,14 +167,14 @@
   <nav class="mt-4 flex flex-wrap items-center gap-2 text-sm" aria-label="Audit pages bottom">
     <span class="mr-2 text-gray-400">Page {{ page }} of {{ total_pages }}</span>
     {% if page > 1 %}
-      <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, sort=sort_key, dir=sort_dir, page=page-1) }}">Previous</a>
+      <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, q=search_query, sort=sort_key, dir=sort_dir, page=page-1) }}">Previous</a>
     {% endif %}
     {% for page_number in range(1, total_pages + 1) %}
       <a class="rounded px-3 py-2 {% if page_number == page %}bg-yellow-500 text-black{% else %}bg-gray-700 hover:bg-gray-600{% endif %}"
-         href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, sort=sort_key, dir=sort_dir, page=page_number) }}">{{ page_number }}</a>
+         href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, q=search_query, sort=sort_key, dir=sort_dir, page=page_number) }}">{{ page_number }}</a>
     {% endfor %}
     {% if page < total_pages %}
-      <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, sort=sort_key, dir=sort_dir, page=page+1) }}">Next</a>
+      <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, q=search_query, sort=sort_key, dir=sort_dir, page=page+1) }}">Next</a>
     {% endif %}
   </nav>
 {% endif %}
