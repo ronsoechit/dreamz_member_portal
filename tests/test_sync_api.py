@@ -1,0 +1,114 @@
+from datetime import date
+import importlib.util
+import os
+import unittest
+
+
+if importlib.util.find_spec("flask") is None or importlib.util.find_spec("flask_sqlalchemy") is None:
+    raise unittest.SkipTest("Flask app dependencies are not installed in this Python runtime")
+
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+os.environ["SECRET_KEY"] = "test-secret"
+
+from dreamz_portal import Member, MemberDocument, SyncRun, app, db  # noqa: E402
+
+
+class SyncApiTests(unittest.TestCase):
+    def setUp(self):
+        app.config["TESTING"] = True
+        app.config["SYNC_API_TOKEN"] = "sync-test-token"
+        app.config["_RUNTIME_SCHEMA_READY"] = False
+        self.ctx = app.app_context()
+        self.ctx.push()
+        db.drop_all()
+        db.create_all()
+        self.client = app.test_client()
+
+    def tearDown(self):
+        db.session.remove()
+        db.drop_all()
+        self.ctx.pop()
+        app.config["SYNC_API_TOKEN"] = None
+        app.config["_RUNTIME_SCHEMA_READY"] = False
+
+    def test_sync_api_requires_token(self):
+        response = self.client.post("/api/sync/members", json={"members": []})
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_sync_api_upserts_members_and_documents(self):
+        payload = {
+            "source": "unit-test",
+            "members": [
+                {
+                    "member_id": "1206",
+                    "name": "Example, Member",
+                    "email": "member@example.com",
+                    "plan_type": "contract Dreamz 12 m",
+                    "contract_type": "12-months",
+                    "start_date": "2025-06-23",
+                    "billing_amount": 55.0,
+                }
+            ],
+            "documents": {
+                "1206": [
+                    {
+                        "document_type": "contract",
+                        "title": "Contract",
+                        "path": "Data/Attachments/0001206/contract.pdf",
+                        "source_filename": "contract.pdf",
+                    }
+                ]
+            },
+        }
+
+        response = self.client.post(
+            "/api/sync/members",
+            json=payload,
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["members_new"], 1)
+        self.assertEqual(response.json["documents_received"], 1)
+        member = Member.query.filter_by(member_id="1206").one()
+        self.assertEqual(member.start_date, date(2025, 6, 23))
+        self.assertEqual(member.billing_amount, 55.0)
+        document = MemberDocument.query.filter_by(member_id="1206").one()
+        self.assertEqual(document.document_type, "contract")
+        sync_run = SyncRun.query.one()
+        self.assertEqual(sync_run.status, "success")
+        self.assertEqual(sync_run.members_received, 1)
+
+    def test_sync_api_updates_existing_member(self):
+        db.session.add(Member(member_id="1206", name="Old Name"))
+        db.session.commit()
+
+        response = self.client.post(
+            "/api/sync/members",
+            json={"members": [{"member_id": "1206", "name": "New Name"}]},
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["members_updated"], 1)
+        self.assertEqual(Member.query.filter_by(member_id="1206").one().name, "New Name")
+
+    def test_staff_sync_status_lists_runs(self):
+        db.session.add(SyncRun(source="unit-test", status="success", members_received=2, members_updated=2, documents_received=3))
+        db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+
+        response = self.client.get("/staff/sync")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Sync Status", body)
+        self.assertIn("unit-test", body)
+        self.assertIn("2 received", body)
+
+
+if __name__ == "__main__":
+    unittest.main()

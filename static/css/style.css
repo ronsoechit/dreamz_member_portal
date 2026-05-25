@@ -1,0 +1,26 @@
+:root{
+  --dreamz-dark:#072942;
+  --dreamz-green:#24c46b;
+  --dreamz-light:#f7f9fa;
+}
+
+body{
+  font-family:"Helvetica Neue",Arial,sans-serif;
+  background:var(--dreamz-light);
+}
+
+h1,h2,h3,h4,h5{
+  color:var(--dreamz-dark);
+  font-weight:600;
+}
+
+a{color:var(--dreamz-green);}
+a:hover{color:#1ea85c;text-decoration:none;}
+
+.card{
+  background:#fff;
+  border-radius:0.75rem;
+  padding:1.5rem;
+  box-shadow:0 2px 6px rgba(0,0,0,.05);
+  margin-bottom:1.5rem;
+}

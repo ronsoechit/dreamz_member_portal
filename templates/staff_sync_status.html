@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Sync Status | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+  <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">Admin Dashboard</div>
+  <h2 class="text-2xl font-semibold">Sync Status</h2>
+  <p class="text-sm text-gray-400">Latest GymAssistant sync activity received by the portal.</p>
+</div>
+
+{% if latest %}
+  <div class="mb-6 grid gap-3 md:grid-cols-5">
+    <div class="rounded border border-gray-700 bg-gray-800/40 p-4">
+      <div class="text-sm text-gray-300">Latest Status</div>
+      <div class="mt-1 text-2xl font-semibold {% if latest.status == 'success' %}text-green-300{% elif latest.status == 'failed' %}text-red-300{% else %}text-yellow-400{% endif %}">{{ latest.status|title }}</div>
+    </div>
+    <div class="rounded border border-gray-700 bg-gray-800/40 p-4">
+      <div class="text-sm text-gray-300">Members Received</div>
+      <div class="mt-1 text-2xl font-semibold text-yellow-400">{{ latest.members_received }}</div>
+    </div>
+    <div class="rounded border border-gray-700 bg-gray-800/40 p-4">
+      <div class="text-sm text-gray-300">New</div>
+      <div class="mt-1 text-2xl font-semibold text-green-300">{{ latest.members_new }}</div>
+    </div>
+    <div class="rounded border border-gray-700 bg-gray-800/40 p-4">
+      <div class="text-sm text-gray-300">Updated</div>
+      <div class="mt-1 text-2xl font-semibold text-yellow-400">{{ latest.members_updated }}</div>
+    </div>
+    <div class="rounded border border-gray-700 bg-gray-800/40 p-4">
+      <div class="text-sm text-gray-300">Documents</div>
+      <div class="mt-1 text-2xl font-semibold text-yellow-400">{{ latest.documents_received }}</div>
+    </div>
+  </div>
+{% endif %}
+
+<div class="overflow-x-auto rounded border border-gray-700">
+  <table class="min-w-full text-sm">
+    <thead class="bg-gray-800 text-gray-200">
+      <tr>
+        <th class="p-3 text-left">Started</th>
+        <th class="p-3 text-left">Completed</th>
+        <th class="p-3 text-left">Status</th>
+        <th class="p-3 text-left">Source</th>
+        <th class="p-3 text-left">Members</th>
+        <th class="p-3 text-left">Documents</th>
+        <th class="p-3 text-left">Error</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-800">
+      {% for run in runs %}
+        <tr class="bg-gray-900/40 align-top">
+          <td class="whitespace-nowrap p-3">{{ run.started_at|format_date('%d/%m/%Y %H:%M') }}</td>
+          <td class="whitespace-nowrap p-3">{{ run.completed_at|format_date('%d/%m/%Y %H:%M') or 'N/A' }}</td>
+          <td class="p-3">
+            <span class="rounded px-2 py-1 text-xs font-semibold {% if run.status == 'success' %}bg-green-500/20 text-green-200{% elif run.status == 'failed' %}bg-red-500/20 text-red-200{% else %}bg-yellow-500/20 text-yellow-200{% endif %}">{{ run.status }}</span>
+          </td>
+          <td class="max-w-xs break-words p-3 text-gray-300">{{ run.source or 'N/A' }}</td>
+          <td class="whitespace-nowrap p-3">{{ run.members_received }} received / {{ run.members_new }} new / {{ run.members_updated }} updated</td>
+          <td class="whitespace-nowrap p-3">{{ run.documents_received }}</td>
+          <td class="max-w-sm break-words p-3 text-red-200">{{ run.error or '' }}</td>
+        </tr>
+      {% else %}
+        <tr>
+          <td class="p-6 text-center text-gray-400" colspan="7">No sync runs received yet.</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}Staff Settings | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+  <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">Admin Dashboard</div>
+  <h2 class="text-2xl font-semibold">Staff Settings</h2>
+  <p class="text-sm text-gray-400">Manage internal users and cancellation notification routing.</p>
+</div>
+
+<form method="post" class="space-y-6">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <section class="rounded border border-gray-700 bg-gray-800/40 p-5">
+    <h3 class="mb-4 text-xl font-semibold text-yellow-400">Notification Emails</h3>
+    <div class="grid gap-4 md:grid-cols-2">
+      <label class="block">
+        <span class="mb-1 block text-sm font-semibold text-gray-200">Admin email</span>
+        <input name="admin_email" type="email" value="{{ settings.admin_email }}" class="w-full rounded border border-gray-700 bg-gray-900 p-2 text-white">
+      </label>
+      <label class="block">
+        <span class="mb-1 block text-sm font-semibold text-gray-200">Send requests to</span>
+        <input name="notification_to" value="{{ settings.notification_to }}" class="w-full rounded border border-gray-700 bg-gray-900 p-2 text-white">
+      </label>
+      <label class="block md:col-span-2">
+        <span class="mb-1 block text-sm font-semibold text-gray-200">Cc</span>
+        <input name="notification_cc" value="{{ settings.notification_cc }}" class="w-full rounded border border-gray-700 bg-gray-900 p-2 text-white">
+      </label>
+    </div>
+    <label class="mt-4 flex items-center gap-2 text-sm">
+      <input type="checkbox" name="always_cc_admin" value="1" {% if settings.always_cc_admin == '1' %}checked{% endif %}>
+      <span>Always cc the admin email on cancellation requests and status updates</span>
+    </label>
+  </section>
+
+  <section class="rounded border border-gray-700 bg-gray-800/40 p-5">
+    <h3 class="mb-4 text-xl font-semibold text-yellow-400">Staff Users</h3>
+    <div class="grid gap-4 md:grid-cols-2">
+      {% for user in staff_users %}
+        <div class="rounded border border-gray-700 bg-gray-900/60 p-4">
+          <div class="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-400">{{ user.role }}</div>
+          <label class="mb-3 block">
+            <span class="mb-1 block text-sm font-semibold text-gray-200">Username</span>
+            <input name="user_{{ user.id }}_username" value="{{ user.username }}" class="w-full rounded border border-gray-700 bg-gray-800 p-2 text-white">
+          </label>
+          <label class="mb-3 block">
+            <span class="mb-1 block text-sm font-semibold text-gray-200">Email</span>
+            <input name="user_{{ user.id }}_email" type="email" value="{{ user.email or '' }}" class="w-full rounded border border-gray-700 bg-gray-800 p-2 text-white">
+          </label>
+          <label class="mb-3 block">
+            <span class="mb-1 block text-sm font-semibold text-gray-200">New password</span>
+            <input name="user_{{ user.id }}_password" type="password" autocomplete="new-password" placeholder="Leave blank to keep current password" class="w-full rounded border border-gray-700 bg-gray-800 p-2 text-white placeholder-gray-500">
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" name="user_{{ user.id }}_is_active" value="1" {% if user.is_active %}checked{% endif %}>
+            <span>Active</span>
+          </label>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="mt-6 rounded border border-gray-700 bg-gray-900/60 p-4">
+      <div class="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-400">Add staff login</div>
+      <div class="grid gap-3 md:grid-cols-4">
+        <label class="block">
+          <span class="mb-1 block text-sm font-semibold text-gray-200">Username</span>
+          <input name="new_username" class="w-full rounded border border-gray-700 bg-gray-800 p-2 text-white">
+        </label>
+        <label class="block">
+          <span class="mb-1 block text-sm font-semibold text-gray-200">Role</span>
+          <select name="new_role" class="w-full rounded border border-gray-700 bg-gray-800 p-2 text-white">
+            <option value="manager">Manager</option>
+            <option value="admin">Admin</option>
+          </select>
+        </label>
+        <label class="block">
+          <span class="mb-1 block text-sm font-semibold text-gray-200">Email</span>
+          <input name="new_email" type="email" class="w-full rounded border border-gray-700 bg-gray-800 p-2 text-white">
+        </label>
+        <label class="block">
+          <span class="mb-1 block text-sm font-semibold text-gray-200">Password</span>
+          <input name="new_password" type="password" autocomplete="new-password" class="w-full rounded border border-gray-700 bg-gray-800 p-2 text-white">
+        </label>
+      </div>
+    </div>
+  </section>
+
+  <button type="submit" class="rounded bg-yellow-500 px-4 py-2 font-semibold text-black hover:bg-yellow-400">Save settings</button>
+</form>
+
+<section class="mt-6 rounded border border-gray-700 bg-gray-800/40 p-5">
+  <h3 class="mb-4 text-xl font-semibold text-yellow-400">Email Delivery</h3>
+  <dl class="grid gap-y-2 text-sm md:grid-cols-[12rem_minmax(0,1fr)]">
+    <dt class="font-semibold text-gray-200">Mode</dt>
+    <dd>
+      <span class="rounded px-2 py-1 text-xs font-semibold {% if mail_config.delivery_mode == 'smtp' %}bg-green-500/20 text-green-200{% else %}bg-yellow-500/20 text-yellow-200{% endif %}">
+        {{ mail_config.delivery_mode }}
+      </span>
+    </dd>
+    <dt class="font-semibold text-gray-200">SMTP host</dt>
+    <dd class="text-gray-300">{{ mail_config.host }}:{{ mail_config.port }}</dd>
+    <dt class="font-semibold text-gray-200">SMTP user</dt>
+    <dd class="text-gray-300">{{ mail_config.user }}</dd>
+    <dt class="font-semibold text-gray-200">From</dt>
+    <dd class="text-gray-300">{{ mail_config.from }}</dd>
+  </dl>
+
+  <form method="post" class="mt-5 flex flex-col gap-3 md:flex-row md:items-end">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="send_test_email">
+    <label class="block md:w-80">
+      <span class="mb-1 block text-sm font-semibold text-gray-200">Send test email to</span>
+      <input name="test_email" type="email" value="{{ settings.admin_email }}" class="w-full rounded border border-gray-700 bg-gray-900 p-2 text-white">
+    </label>
+    <button type="submit" class="rounded bg-gray-700 px-4 py-2 font-semibold text-white hover:bg-gray-600">Send test email</button>
+  </form>
+
+  {% if mail_config.delivery_mode != 'smtp' %}
+    <p class="mt-3 text-sm text-yellow-100">
+      Email is currently logged only. To send real email, set <span class="font-mono">EMAIL_DELIVERY_MODE=smtp</span> after SMTP has been verified.
+    </p>
+  {% endif %}
+</section>
+{% endblock %}

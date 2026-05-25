@@ -1,0 +1,34 @@
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+
+.env
+.env*
+!.env.example
+
+instance
+data
+backup
+Dreamz Formulieren
+nieuwe exports
+
+*.zip
+*.xls
+*.xlsx
+*.db
+*.db3
+*.log
+*.bat
+
+* - Copy*.py
+* - Copy*.html
+templates/dashboard_old.html
+error.txt
+
+static/contracts
+static/mandates
+static/forms
+
+tests/__pycache__

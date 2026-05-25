@@ -1,0 +1,2 @@
+FLASK_APP=dreamz_portal
+FLASK_ENV=development

@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block title %}Staff Data Audit | Dreamz Fitness{% endblock %}
+
+{% macro sort_link(label, key) %}
+  {% set next_dir = 'asc' if sort_key != key or sort_dir == 'desc' else 'desc' %}
+  <a class="inline-flex items-center gap-1 hover:text-yellow-300"
+     href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, sort=key, dir=next_dir, page=1) }}">
+    <span>{{ label }}</span>
+    {% if sort_key == key %}
+      <span class="text-yellow-400">{{ 'v' if sort_dir == 'desc' else '^' }}</span>
+    {% endif %}
+  </a>
+{% endmacro %}
+
+{% block content %}
+<div class="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+  <div>
+    <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ staff_role|title }} Dashboard</div>
+    <h2 class="text-2xl font-semibold">Data Audit</h2>
+    <p class="text-sm text-gray-400">
+      {{ total_members }} members checked.
+      Showing {{ start_member }}-{{ end_member }} of {{ total_filtered }}{% if selected_issue %} with {{ issue_labels.get(selected_issue, selected_issue.replace('_', ' ')|title) }}{% endif %}{% if selected_plan %} on {{ selected_plan }}{% endif %}.
+    </p>
+  </div>
+  <div class="flex flex-wrap gap-2 text-sm">
+    <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_data_audit') }}">All issues</a>
+    <a class="rounded bg-yellow-500 px-3 py-2 text-black hover:bg-yellow-400" href="{{ url_for('staff_data_audit_csv', issue=selected_issue, plan=selected_plan) }}">Export CSV</a>
+  </div>
+</div>
+
+<div class="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+  {% for issue, count in issue_counts.items() %}
+    <a href="{{ url_for('staff_data_audit', issue=issue, plan=selected_plan, sort=sort_key, dir=sort_dir, page=1) }}"
+       class="rounded border border-gray-700 bg-gray-800/60 p-4 hover:bg-gray-800 {% if selected_issue == issue %}ring-2 ring-yellow-400{% endif %}">
+      <div class="text-sm text-gray-300">{{ issue_labels.get(issue, issue.replace('_', ' ')|title) }}</div>
+      <div class="mt-1 text-2xl font-semibold text-yellow-400">{{ count }}</div>
+    </a>
+  {% endfor %}
+</div>
+
+{% if total_pages > 1 %}
+  <nav class="mb-4 flex flex-wrap items-center gap-2 text-sm" aria-label="Audit pages">
+    <span class="mr-2 text-gray-400">Page {{ page }} of {{ total_pages }}</span>
+    {% if page > 1 %}
+      <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, sort=sort_key, dir=sort_dir, page=page-1) }}">Previous</a>
+    {% endif %}
+    {% for page_number in range(1, total_pages + 1) %}
+      <a class="rounded px-3 py-2 {% if page_number == page %}bg-yellow-500 text-black{% else %}bg-gray-700 hover:bg-gray-600{% endif %}"
+         href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, sort=sort_key, dir=sort_dir, page=page_number) }}">{{ page_number }}</a>
+    {% endfor %}
+    {% if page < total_pages %}
+      <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, sort=sort_key, dir=sort_dir, page=page+1) }}">Next</a>
+    {% endif %}
+  </nav>
+{% endif %}
+
+<div class="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+  <div class="flex w-full flex-col gap-3 md:flex-row md:items-center">
+    <label class="block w-full md:max-w-md">
+      <span class="sr-only">Search members</span>
+      <input
+        id="member-search"
+        type="search"
+        placeholder="Search name, member ID, email, plan or issue"
+        class="w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white placeholder-gray-500"
+      >
+    </label>
+    <form method="get" action="{{ url_for('staff_data_audit') }}" class="flex w-full gap-2 md:max-w-lg">
+      <input type="hidden" name="issue" value="{{ selected_issue }}">
+      <input type="hidden" name="sort" value="{{ sort_key }}">
+      <input type="hidden" name="dir" value="{{ sort_dir }}">
+      <label class="sr-only" for="plan-filter">Plan</label>
+      <select id="plan-filter" name="plan" class="min-w-0 flex-1 rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white">
+        <option value="">All plans</option>
+        {% for plan in plan_options %}
+          <option value="{{ plan }}" {% if selected_plan == plan %}selected{% endif %}>{{ plan }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black hover:bg-yellow-400">Apply</button>
+      {% if selected_plan %}
+        <a class="rounded bg-gray-700 px-3 py-2 text-sm hover:bg-gray-600" href="{{ url_for('staff_data_audit', issue=selected_issue, sort=sort_key, dir=sort_dir, page=1) }}">Clear</a>
+      {% endif %}
+    </form>
+  </div>
+  <div class="text-sm text-gray-400">
+    Contract and direct debit checks are only required for applicable contract members.
+  </div>
+</div>
+
+<div class="overflow-x-auto rounded border border-gray-700">
+  <table id="audit-table" class="min-w-full text-sm">
+    <thead class="bg-gray-800 text-gray-200">
+      <tr>
+        <th class="p-3 text-left">{{ sort_link('Member', 'member') }}</th>
+        <th class="p-3 text-left">{{ sort_link('Payment', 'payment') }}</th>
+        <th class="p-3 text-left">{{ sort_link('Last', 'last_payment') }} / {{ sort_link('Next', 'next_payment') }}</th>
+        <th class="p-3 text-left">{{ sort_link('Balance', 'balance') }}</th>
+        <th class="p-3 text-left">{{ sort_link('Plan', 'plan') }}</th>
+        <th class="p-3 text-left">{{ sort_link('Issues', 'issues') }}</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-800">
+      {% for row in rows %}
+        <tr class="bg-gray-900/40" data-search="{{ (row.name ~ ' ' ~ row.raw_name ~ ' ' ~ row.member_id ~ ' ' ~ row.email ~ ' ' ~ row.plan_type ~ ' ' ~ row.contract_type ~ ' ' ~ row.issues|join(' '))|lower }}">
+          <td class="p-3 align-top">
+            {% if staff_role == 'admin' %}
+              <a class="font-semibold text-white underline decoration-gray-600 underline-offset-4 hover:text-yellow-300"
+                 href="{{ url_for('staff_member_detail', member_id=row.member_id) }}">{{ row.name or row.raw_name or 'Unknown' }}</a>
+            {% else %}
+              <div class="font-semibold">{{ row.name or row.raw_name or 'Unknown' }}</div>
+            {% endif %}
+            <div class="text-gray-400">{{ row.member_id }}{% if row.email %} / {{ row.email }}{% endif %}</div>
+          </td>
+          <td class="p-3 align-top">
+            <div class="font-semibold
+              {% if row.payment_status.severity == 'danger' %}text-red-300
+              {% elif row.payment_status.severity == 'warning' %}text-yellow-300
+              {% elif row.payment_status.severity == 'info' %}text-blue-300
+              {% else %}text-green-300{% endif %}">
+              {{ row.payment_status.label }}
+            </div>
+            <div class="max-w-xs text-xs text-gray-400">{{ row.payment_status.reason }}</div>
+          </td>
+          <td class="whitespace-nowrap p-3 align-top">
+            <div>Last: {{ row.last_payment|format_date('%d/%m/%Y') or 'N/A' }}</div>
+            <div>Next: {{ row.next_payment|format_date('%d/%m/%Y') or 'N/A' }}</div>
+          </td>
+          <td class="whitespace-nowrap p-3 align-top">${{ '%.2f'|format(row.balance) }}</td>
+          <td class="p-3 align-top">
+            <div>{{ row.plan_type or 'N/A' }}</div>
+            <div class="text-gray-400">{{ row.contract_type or '' }}</div>
+            {% if row.requires_direct_debit_mandate %}
+              <div class="mt-1 text-xs text-gray-500">Direct debit required</div>
+            {% endif %}
+          </td>
+          <td class="p-3 align-top">
+            <div class="flex flex-wrap gap-1">
+              {% for issue in row.issues %}
+                <span class="rounded bg-gray-700 px-2 py-1 text-xs text-gray-100">{{ issue_labels.get(issue, issue.replace('_', ' ')|title) }}</span>
+              {% endfor %}
+            </div>
+          </td>
+        </tr>
+      {% else %}
+        <tr>
+          <td class="p-6 text-center text-gray-400" colspan="6">No members found for this audit filter.</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if total_pages > 1 %}
+  <nav class="mt-4 flex flex-wrap items-center gap-2 text-sm" aria-label="Audit pages bottom">
+    <span class="mr-2 text-gray-400">Page {{ page }} of {{ total_pages }}</span>
+    {% if page > 1 %}
+      <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, sort=sort_key, dir=sort_dir, page=page-1) }}">Previous</a>
+    {% endif %}
+    {% for page_number in range(1, total_pages + 1) %}
+      <a class="rounded px-3 py-2 {% if page_number == page %}bg-yellow-500 text-black{% else %}bg-gray-700 hover:bg-gray-600{% endif %}"
+         href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, sort=sort_key, dir=sort_dir, page=page_number) }}">{{ page_number }}</a>
+    {% endfor %}
+    {% if page < total_pages %}
+      <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_data_audit', issue=selected_issue, plan=selected_plan, sort=sort_key, dir=sort_dir, page=page+1) }}">Next</a>
+    {% endif %}
+  </nav>
+{% endif %}
+
+<script>
+  const searchInput = document.getElementById("member-search");
+  const rows = Array.from(document.querySelectorAll("#audit-table tbody tr[data-search]"));
+
+  searchInput?.addEventListener("input", () => {
+    const value = searchInput.value.trim().toLowerCase();
+    rows.forEach((row) => {
+      row.hidden = value && !row.dataset.search.includes(value);
+    });
+  });
+</script>
+{% endblock %}

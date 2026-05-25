@@ -3,77 +3,78 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Login | Dreamz Fitness</title>
+  <title>{{ t('member_login') }} | Dreamz Fitness</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-black text-white min-h-screen flex items-center justify-center">
   <div class="w-full max-w-md p-6 bg-gray-900 rounded-xl shadow-lg">
     <div class="text-center mb-6">
       <img src="/static/logo.jpg" alt="Dreamz Fitness" class="mx-auto h-16">
-      <h2 class="text-2xl font-bold mt-4">Member Login</h2>
+      <h2 class="text-2xl font-bold mt-4">{{ t('member_login') }}</h2>
+      <div class="mt-3 flex justify-center gap-4 text-xs">
+        {% for code, label in available_languages.items() %}
+          <a
+            href="{{ url_for('set_language', lang=code, next=request.path) }}"
+            class="flex flex-col items-center leading-tight {% if current_language == code %}text-yellow-400 font-semibold{% else %}text-gray-300 hover:text-white{% endif %}"
+            title="{{ label }}"
+          >
+            <span class="text-xl">{{ language_flags[code] }}</span>
+            <span>{{ label }}</span>
+          </a>
+        {% endfor %}
+      </div>
     </div>
 
-    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% with messages = get_flashed_messages() %}
       {% if messages %}
-        {% for category, message in messages %}
-          <div class="mb-4 text-red-400 text-sm">{{ message }}</div>
-        {% endfor %}
+        <div class="mb-4 text-red-400 text-sm">{{ messages[0] }}</div>
       {% endif %}
     {% endwith %}
 
-    <div class="flex justify-center gap-4 mb-4">
-      <button onclick="toggleLogin('email')" id="emailBtn" class="py-1 px-3 rounded bg-white text-black font-semibold">Email Login</button>
-      <button onclick="toggleLogin('member')" id="memberBtn" class="py-1 px-3 rounded bg-gray-700">Member ID Login</button>
-    </div>
+    {% if step == 'code' %}
+      <div class="mb-4 rounded border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm text-yellow-100">
+        {{ t('login_code_sent') }} {{ masked_email }}.
+        {% if dev_code %}
+          <div class="mt-2 font-semibold text-yellow-300">{{ t('test_code') }}: {{ dev_code }}</div>
+        {% endif %}
+      </div>
+    {% endif %}
 
-    <form method="POST" id="emailForm">
-      <input type="hidden" name="login_type" value="email">
-      <div class="mb-4">
-        <label class="block mb-1">Email Address</label>
-        <input type="email" name="email" class="w-full p-2 rounded bg-gray-800 border border-gray-700" required>
-      </div>
-      <div class="mb-4">
-        <label class="block mb-1">Password</label>
-        <input type="password" name="password" class="w-full p-2 rounded bg-gray-800 border border-gray-700" required>
-      </div>
-      <button type="submit" class="w-full bg-gold-500 text-black font-bold py-2 rounded bg-yellow-500 hover:bg-yellow-400">Log In</button>
-    </form>
-
-    <form method="POST" id="memberForm" style="display: none;">
-      <input type="hidden" name="login_type" value="member_id">
-      <div class="mb-4">
-        <label class="block mb-1">Member ID</label>
-        <input type="text" name="member_id" class="w-full p-2 rounded bg-gray-800 border border-gray-700" required>
-      </div>
-      <div class="mb-4">
-        <label class="block mb-1">Birthdate (YYYY-MM-DD)</label>
-        <input type="text" name="birthdate" placeholder="1990-06-15" class="w-full p-2 rounded bg-gray-800 border border-gray-700">
-      </div>
-      <button type="submit" class="w-full bg-yellow-500 text-black font-bold py-2 rounded hover:bg-yellow-400">Log In</button>
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {% if step == 'code' %}
+        <input type="hidden" name="step" value="code">
+        <div class="mb-4">
+          <label class="block mb-1" for="code">{{ t('login_code') }}</label>
+          <input
+            id="code"
+            type="text"
+            name="code"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            maxlength="6"
+            class="w-full p-2 rounded bg-gray-800 border border-gray-700"
+            required
+          >
+        </div>
+      {% else %}
+        <input type="hidden" name="step" value="email">
+        <div class="mb-4">
+          <label class="block mb-1" for="email">{{ t('email_address') }}</label>
+          <input
+            id="email"
+            type="email"
+            name="email"
+            autocomplete="email"
+            class="w-full p-2 rounded bg-gray-800 border border-gray-700"
+            required
+          >
+        </div>
+      {% endif %}
+      <button type="submit" class="w-full bg-yellow-500 text-black font-bold py-2 rounded hover:bg-yellow-400">
+        {% if step == 'code' %}{{ t('verify_code') }}{% else %}{{ t('send_login_code') }}{% endif %}
+      </button>
     </form>
   </div>
-
-  <script>
-    function toggleLogin(type) {
-      const emailForm = document.getElementById('emailForm');
-      const memberForm = document.getElementById('memberForm');
-      const emailBtn = document.getElementById('emailBtn');
-      const memberBtn = document.getElementById('memberBtn');
-
-      if (type === 'email') {
-        emailForm.style.display = 'block';
-        memberForm.style.display = 'none';
-        emailBtn.classList.add('bg-white', 'text-black');
-        memberBtn.classList.remove('bg-white', 'text-black');
-        memberBtn.classList.add('bg-gray-700');
-      } else {
-        emailForm.style.display = 'none';
-        memberForm.style.display = 'block';
-        memberBtn.classList.add('bg-white', 'text-black');
-        emailBtn.classList.remove('bg-white', 'text-black');
-        emailBtn.classList.add('bg-gray-700');
-      }
-    }
-  </script>
 </body>
 </html>

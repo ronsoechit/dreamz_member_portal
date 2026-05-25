@@ -1,167 +1,224 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Member Dashboard | Dreamz Fitness</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"/>
-  <style>
-    body {
-      background-color: #f4f6f9;
-      padding-top: 20px;
-      font-family: 'Segoe UI', sans-serif;
-    }
-    .logo {
-      max-height: 80px;
-    }
-    .btn-logout {
-      margin-top: 10px;
-    }
-    .info-section {
-      background-color: white;
-      border-radius: 8px;
-      padding: 20px;
-      margin-bottom: 25px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-    }
-    .info-section h3 {
-      font-size: 1.25rem;
-      margin-bottom: 15px;
-      border-bottom: 1px solid #dee2e6;
-      padding-bottom: 5px;
-      color: #333;
-    }
-    .not-available {
-      color: #999;
-      font-style: italic;
-    }
-    .cancel-box .btn {
-      background-color: #dc3545;
-      color: white;
-    }
-    footer {
-      text-align: center;
-      padding: 15px;
-      color: #888;
-      font-size: 0.9rem;
-    }
-  </style>
-</head>
-<body class="bg-gray-950 text-white min-h-screen font-sans">
+{% extends "base.html" %}
+{% block title %}Dashboard - {{ member.name }}{% endblock %}
 
-    <!-- Header -->
-    <header class="bg-black py-4 shadow-md">
-        <div class="container mx-auto flex justify-between items-center px-6">
-            <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Fitness" class="h-10">
-            <form action="{{ url_for('logout') }}" method="post">
-                <button class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded font-semibold">Log Out</button>
-            </form>
+{% macro field_rows(rows) %}
+  <dl class="grid gap-y-2 text-sm" style="grid-template-columns: 10.5rem minmax(0, 1fr);">
+    {% for label, value in rows %}
+      <dt class="pr-4 font-semibold text-gray-200">{{ label }}:</dt>
+      <dd class="min-w-0 break-words text-white">{{ value if value is not none else t('not_available') }}</dd>
+    {% endfor %}
+  </dl>
+{% endmacro %}
+
+{% block content %}
+{% if staff_admin_view %}
+  <div class="mb-5 flex flex-col gap-3 rounded border border-yellow-500/40 bg-yellow-500/10 p-4 text-sm text-yellow-100 md:flex-row md:items-center md:justify-between">
+    <div>
+      <span class="font-semibold text-yellow-300">Admin member view</span>
+      <span class="ml-2 text-yellow-100">You are viewing this profile from the staff environment.</span>
+    </div>
+    <a class="rounded bg-gray-800 px-3 py-2 text-white hover:bg-gray-700" href="{{ url_for('staff_data_audit') }}">Back to audit</a>
+  </div>
+{% endif %}
+
+<h2 class="text-2xl font-semibold mb-4">{{ t('welcome') }}, {{ display_name }}</h2>
+
+<div class="mb-6">
+  <div class="h-36 w-36 overflow-hidden rounded-md border border-gray-600 bg-gray-900">
+    {% if member_photo_available %}
+      <img
+        src="{{ url_for('member_photo', member_id=member.member_id) }}"
+        alt=""
+        class="h-full w-full object-cover"
+      >
+    {% else %}
+      <div class="flex h-full w-full items-center justify-center bg-gray-900">
+        <div class="flex h-24 w-24 items-center justify-center rounded-full border border-gray-600 bg-gray-800">
+          <div class="h-12 w-12 rounded-full bg-gray-700"></div>
         </div>
-    </header>
+      </div>
+    {% endif %}
+  </div>
+</div>
 
-    <!-- Main Content -->
-    <main class="container mx-auto p-6">
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+  <!-- Member Information -->
+  <div class="bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">
+    <h3 class="text-xl font-semibold mb-4 text-yellow-400">{{ t('member_information') }}</h3>
+    {{ field_rows([
+      (t('member_id'), member.member_id),
+      (t('name'), display_name),
+      (t('email'), member.email or t('not_available')),
+      (t('phone'), member.phone or t('not_available')),
+      (t('mobile'), member.mobile or t('not_available')),
+      (t('visits'), member.visits or t('not_available'))
+    ]) }}
+  </div>
 
-        <h1 class="text-2xl font-bold text-gold mb-6">Welcome, {{ member.name }}!</h1>
-
-        <!-- Member Info Section -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-
-            <div class="bg-gray-900 p-6 rounded-lg shadow-md">
-                <h2 class="text-lg font-semibold mb-2 text-gold">👤 Member Information</h2>
-      <p><strong>Member ID:</strong> {{ member.member_id }}</p>
-      {% if member.email %}<p><strong>Email:</strong> {{ member.email }}</p>{% endif %}
-      <p><strong>Phone:</strong> {{ member.phone if member.phone else "Not available" }}</p>
-      {% if member.birthdate %}<p><strong>Birthdate:</strong> {{ member.birthdate }}</p>{% endif %}
-            </div>
-
-            <div class="bg-gray-900 p-6 rounded-lg shadow-md">
-                <h2 class="text-lg font-semibold mb-2 text-gold">🏋️ Subscription Details</h2>
-      {% if member.plan_type %}<p><strong>Plan Type:</strong> {{ member.plan_type }}</p>{% endif %}
-      <p><strong>Contract Type:</strong> {{ contract_type }}</p>
-      {% if member.start_date %}<p><strong>Start Date:</strong> {{ member.start_date }}</p>{% endif %}
-      {% if member.end_date %}
-        <p><strong>End Date:</strong> {{ member.end_date }}</p>
+  <!-- Subscription Details -->
+  <div class="bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">
+    <h3 class="text-xl font-semibold mb-4 text-yellow-400">{{ t('subscription_details') }}</h3>
+    {% set contract_end %}
+      {% if member.contract_type in ['6-months','12-months'] %}
+        {{ t('automatic_renewal') }}
       {% else %}
-        <p><strong>End Date:</strong> Automatic Renewal</p>
+             {{ member.end_date|format_date or t('not_available') }}
       {% endif %}
-      <p><strong>Time Remaining:</strong> {{ calculate_time_remaining(member.end_date) }}</p>
-            </div>
+    {% endset %}
+    {{ field_rows([
+      (t('membership_type'), member.plan_type),
+      (t('contract_type'), member.contract_type),
+      (t('signup_date'), member.signup_date|format_date),
+      (t('contract_begin'), member.start_date|format_date or t('not_available')),
+      (t('contract_end'), contract_end|trim)
+    ]) }}
+  </div>
+</div>
 
-            <div class="bg-gray-900 p-6 rounded-lg shadow-md">
-                <h2 class="text-lg font-semibold mb-2 text-gold">💳 Payment Information</h2>
-      {% if member.last_payment %}<p><strong>Last Payment:</strong> {{ member.last_payment }}</p>{% endif %}
-      {% if member.next_payment %}<p><strong>Next Payment:</strong> {{ member.next_payment }}</p>{% endif %}
-      <p><strong>Outstanding Balance:</strong> ${{ "%.2f"|format(member.balance or 0.00) }}</p>
-            </div>
-			
-			<div class="bg-gray-900 p-6 rounded-lg shadow-md">
-				<h2 class="text-lg font-semibold mb-2 text-gold">📎 Documents</h2>
-				<ul class="list-disc ml-5 text-sm space-y-1">
-        <li><strong>Signup Form:</strong>
-          {% if has_form %}
-            <a href="{{ url_for('static', filename='forms/' ~ member.member_id ~ '_form.pdf') }}">Available</a>
-          {% else %}
-            <span class="not-available">Not available</span>
-          {% endif %}
-        </li>
-        <li><strong>Contract:</strong>
-          {% if has_contract %}
-            <a href="{{ url_for('static', filename='contracts/' ~ member.member_id ~ '_contract.pdf') }}">Available</a>
-          {% else %}
-            <span class="not-available">Not available</span>
-          {% endif %}
-        </li>
-        <li><strong>Direct Debit Mandate:</strong>
-          {% if has_mandate %}
-            <a href="{{ url_for('static', filename='mandates/' ~ member.member_id ~ '_mandate.pdf') }}">Available</a>
-          {% else %}
-            <span class="not-available">Not available</span>
-          {% endif %}
-        </li>
-				</ul>
-			</div>
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+  <!-- Payment Information -->
+  <div class="bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">
+    <h3 class="text-xl font-semibold mb-4 text-yellow-400">{{ t('payment_information') }}</h3>
 
+    {% set bill = (member.billing_amount if member is defined and
+                   member.billing_amount is not none else 0) %}
+    {% set bal = member.balance or 0 %}
+    {{ field_rows([
+      (t('billing_amount'), '$%.2f'|format(bill)),
+      (t('last_payment'), member.last_payment|format_date),
+      (t('last_paid_amount'), '$%.2f'|format(member.last_payment_amount)),
+      (t('next_payment'), member.next_payment|format_date),
+      (t('outstanding_balance'), '$%.2f'|format(bal))
+    ]) }}
+    {% if payment_status.status != 'up_to_date' %}
+      <div class="mt-4 rounded border border-yellow-500/50 bg-yellow-500/10 p-3 text-sm text-yellow-200">
+        <div class="font-semibold">{{ payment_status.label }}</div>
+        <div class="mt-1 text-yellow-100">{{ payment_status.reason }}</div>
+      </div>
+    {% endif %}
+  </div>
 
+  <!-- Documents -->
+  <div class="bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">
+    <h3 class="text-xl font-semibold mb-4 text-yellow-400">{{ t('documents') }}</h3>
+    {% if documents %}
+      <dl class="grid gap-y-3 text-sm" style="grid-template-columns: 10.5rem minmax(0, 1fr);">
+        {% for document in documents %}
+          <dt class="pr-4 font-semibold text-gray-200">{{ t_document_title(document.document_type) }}:</dt>
+          <dd class="min-w-0">
+            <a class="text-green-400 underline" href="{{ url_for('view_member_document', document_id=document.id) }}" target="_blank" rel="noopener">{{ t('view') }}</a>
+            {% if document.source_filename %}
+              <span class="ml-2 text-xs text-gray-400 break-words">{{ document.source_filename }}</span>
+            {% endif %}
+            <p class="mt-1 text-xs leading-relaxed text-gray-400">{{ t_document_explanation(document.document_type) }}</p>
+          </dd>
+        {% endfor %}
+      </dl>
+    {% else %}
+      <dl class="grid gap-y-2 text-sm" style="grid-template-columns: 10.5rem minmax(0, 1fr);">
+        <dt class="pr-4 font-semibold text-gray-200">{{ t('signup_form') }}:</dt>
+        <dd>
+          {% if member.form_path %}
+            <a class="text-green-400 underline" href="{{ url_for('view_document', document_type='signup-form') }}" target="_blank" rel="noopener">{{ t('view') }}</a>
+          {% else %}{{ t('not_available') }}{% endif %}
+          <p class="mt-1 text-xs leading-relaxed text-gray-400">{{ t_document_explanation('signup_form') }}</p>
+        </dd>
 
-            <div class="bg-gray-900 p-6 rounded-lg shadow-md">
-                <h2 class="text-lg font-semibold mb-2 text-gold">📅 Cancellation Info</h2>
-                <div class="bg-gray-900 p-6 rounded-lg shadow-md">
-				
-				<div class="text-sm text-white leading-relaxed space-y-2">
-					{% if member.cancellation_policy and ("Contract detected" in member.cancellation_policy or "No contract" in member.cancellation_policy) %}
-						<ul class="list-none space-y-1 text-sm text-white leading-relaxed">
-							{% for line in member.cancellation_policy.split('\n') %}
-								{% if line.strip() %}
-									<li>{{ line.strip() }}</li>
-								{% endif %}
-							{% endfor %}
-						</ul>
+        <dt class="pr-4 font-semibold text-gray-200">{{ t('contract') }}:</dt>
+        <dd>
+          {% if member.contract_path %}
+            <a class="text-green-400 underline" href="{{ url_for('view_document', document_type='contract') }}" target="_blank" rel="noopener">{{ t('view') }}</a>
+          {% else %}{{ t('not_available') }}{% endif %}
+          <p class="mt-1 text-xs leading-relaxed text-gray-400">{{ t_document_explanation('contract') }}</p>
+        </dd>
 
-					{% else %}
-						{% set lines = (member.cancellation_policy or '').split('\n') %}
-						<ul class="list-disc ml-5 space-y-1">
-							{% for line in lines %}
-								{% if line.strip() %}
-									<li>{{ line.strip() }}</li>
-								{% endif %}
-							{% endfor %}
-						</ul>
-					{% endif %}
-				</div>
-			</div>
+        <dt class="pr-4 font-semibold text-gray-200">{{ t('direct_debit_mandate') }}:</dt>
+        <dd>
+          {% if member.mandate_path %}
+            <a class="text-green-400 underline" href="{{ url_for('view_document', document_type='mandate') }}" target="_blank" rel="noopener">{{ t('view') }}</a>
+          {% else %}{{ t('not_available') }}{% endif %}
+          <p class="mt-1 text-xs leading-relaxed text-gray-400">{{ t_document_explanation('direct_debit_mandate') }}</p>
+        </dd>
+      </dl>
+    {% endif %}
+  </div>
+</div>
 
-                <form action="/request-cancellation" method="post" class="mt-4">
-                    <button class="bg-yellow-600 hover:bg-yellow-500 text-black px-4 py-2 rounded font-semibold">Request Cancellation</button>
-                </form>
-            </div>
-        </div>
-    </main>
+<!-- Cancellation Policy -->
+<div class="bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">
+  <h3 class="text-xl font-semibold mb-4 text-yellow-400">{{ t('cancellation_policy') }}</h3>
 
-    <!-- Footer -->
-    <footer class="text-center text-sm text-gray-500 mt-12 mb-4">
-        &copy; 2025 Dreamz Fitness Bonaire
-    </footer>
+  <p class="text-yellow-400 font-semibold leading-relaxed">{{ cancellation_summary }}</p>
+  {% if cancellation_detail %}
+    <p class="mt-3 leading-relaxed">{{ cancellation_detail }}</p>
+  {% endif %}
 
-</body>
-</html>
+  {% if cancellation_request_message %}
+    <div class="mt-4 rounded border {% if cancellation_request_message.tone == 'confirmed' %}border-green-500/50 bg-green-500/10 text-green-100{% else %}border-yellow-500/50 bg-yellow-500/10 text-yellow-100{% endif %} p-4">
+      <div class="font-semibold">{{ cancellation_request_message.title }}</div>
+      <p class="mt-1 text-sm">{{ cancellation_request_message.body }}</p>
+      <dl class="mt-3 grid gap-y-1 text-sm" style="grid-template-columns: 9rem minmax(0, 1fr);">
+        <dt class="font-semibold">{{ t('submitted') }}:</dt>
+        <dd>{{ cancellation_request.requested_at|format_date('%d/%m/%Y %H:%M') }}</dd>
+        <dt class="font-semibold">{{ t('status') }}:</dt>
+        <dd>{{ cancellation_request.admin_status|title }}</dd>
+        <dt class="font-semibold">{{ t('reason') }}:</dt>
+        <dd>{{ cancellation_request.reason }}</dd>
+        {% if cancellation_request.admin_status == 'processed' %}
+          <dt class="font-semibold">{{ t('final_payment') }}:</dt>
+          <dd>{{ cancellation_request.last_paid_date|format_date or t('not_available') }}</dd>
+          <dt class="font-semibold">{{ t('access_until') }}:</dt>
+          <dd>{{ cancellation_request.access_until|format_date or t('not_available') }}</dd>
+        {% endif %}
+      </dl>
+    </div>
+  {% endif %}
+
+  {% if show_cancel %}
+    <form action="{{ url_for('cancel') }}" method="post" class="mt-4 space-y-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="member_id" value="{{ member.member_id }}">
+
+      <label class="block">
+        <span class="text-sm">{{ t('reason_for_cancellation') }}</span>
+        <select id="cancel-reason" name="reason" class="text-black mt-1 block w-full rounded p-1" required>
+          <option value="">{{ t('choose_reason') }}</option>
+          <option value="Moving away">{{ t('moving_away') }}</option>
+          <option value="Financial reasons">{{ t('financial_reasons') }}</option>
+          <option value="Not satisfied">{{ t('not_satisfied') }}</option>
+          <option value="Other">{{ t('other') }}</option>
+        </select>
+      </label>
+
+      <label id="other-reason-field" class="hidden block">
+        <span class="text-sm">{{ t('please_tell_reason') }}</span>
+        <textarea
+          name="other_reason"
+          rows="3"
+          class="mt-1 block w-full rounded bg-gray-900 border border-gray-700 p-2 text-white"
+          placeholder="{{ t('type_reason_here') }}"
+        ></textarea>
+      </label>
+
+      <button type="submit"
+              onclick="return confirm('{{ t('confirm_cancel') }}');"
+              class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-white">
+        {{ t('cancel_contract') }}
+      </button>
+    </form>
+    <script>
+      const cancelReason = document.getElementById("cancel-reason");
+      const otherReasonField = document.getElementById("other-reason-field");
+      const otherReasonInput = otherReasonField.querySelector("textarea");
+      const updateOtherReason = () => {
+        const isOther = cancelReason.value === "Other";
+        otherReasonField.classList.toggle("hidden", !isOther);
+        otherReasonInput.required = isOther;
+        otherReasonInput.disabled = !isOther;
+      };
+      cancelReason.addEventListener("change", updateOtherReason);
+      updateOtherReason();
+    </script>
+  {% endif %}
+</div>
+{% endblock %}

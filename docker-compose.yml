@@ -1,0 +1,35 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dreamz_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  web:
+    build: .
+    image: dreamz-portal:dev
+    ports:
+      - "8000:8000"
+    environment:
+      FLASK_ENV: development
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/dreamz_test
+      MAIL_DEFAULT_SENDER: dummy@example.com
+      MAIL_SERVER: localhost
+      MAIL_PORT: "8025"
+      MAIL_USE_TLS: "false"
+      STAFF_TOKEN: debug123
+    depends_on:
+      - db
+    volumes:
+      - .:/app                # hele projectmap in de container
+      - ./instance:/app/instance   # Report.txt live meegeven
+
+
+volumes:
+  pgdata:

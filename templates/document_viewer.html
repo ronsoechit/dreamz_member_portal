@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}{{ document_label }} - Dreamz Member Portal{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-4" style="min-height: 75vh;">
+  <div class="flex flex-col gap-3 border border-gray-700 bg-gray-800 rounded-lg p-4 sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <p class="text-sm text-gray-300">{{ t('document_label') }}</p>
+      <h2 class="text-2xl font-semibold">{{ document_label }}</h2>
+      {% if document_type %}
+        <p class="mt-2 max-w-3xl text-sm leading-relaxed text-gray-300">{{ t_document_explanation(document_type) }}</p>
+        <p class="mt-1 max-w-3xl text-xs leading-relaxed text-yellow-100">{{ t('document_original_notice') }}</p>
+      {% endif %}
+      {% if document_filename %}
+        <p class="mt-1 text-sm text-gray-400">{{ document_filename }}</p>
+      {% endif %}
+    </div>
+    <div class="flex gap-2">
+      <a href="{{ download_url }}"
+         class="inline-flex items-center rounded bg-yellow-500 px-4 py-2 font-semibold text-black hover:bg-yellow-400">
+        {{ t('download') }}
+      </a>
+      <a href="{{ close_url }}"
+         onclick="if (window.opener) { window.close(); return false; }"
+         class="inline-flex items-center rounded border border-gray-600 px-4 py-2 font-semibold text-white hover:bg-gray-700">
+        {{ t('close') }}
+      </a>
+    </div>
+  </div>
+
+  <div class="flex-grow overflow-hidden rounded-lg border border-gray-700 bg-black">
+    <iframe
+      src="{{ pdf_url }}#toolbar=0&navpanes=0"
+      title="{{ document_label }}"
+      class="w-full bg-white"
+      style="height: 78vh;"
+    ></iframe>
+  </div>
+</div>
+{% endblock %}

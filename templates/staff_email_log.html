@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Email Log | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+  <div>
+    <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">Admin Dashboard</div>
+    <h2 class="text-2xl font-semibold">Email Log</h2>
+    <p class="text-sm text-gray-400">Latest 100 generated portal emails.</p>
+  </div>
+  <div class="flex flex-wrap gap-2 text-sm">
+    <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_email_log') }}">All</a>
+    <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_email_log', review='open') }}">Needs review</a>
+    <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_email_log', status='failed') }}">Failed</a>
+    <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_email_log', status='sent') }}">Sent</a>
+    <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_email_log', status='logged') }}">Logged</a>
+    <a class="rounded bg-yellow-500 px-3 py-2 text-black hover:bg-yellow-400" href="{{ url_for('staff_settings') }}">Email settings</a>
+  </div>
+</div>
+
+<div class="mb-6 grid gap-3 md:grid-cols-4">
+  <a class="rounded border border-gray-700 bg-gray-800/40 p-4 hover:border-yellow-500" href="{{ url_for('staff_email_log', review='open') }}">
+    <div class="text-sm text-gray-300">Needs Review</div>
+    <div class="mt-1 text-3xl font-semibold text-yellow-400">{{ counts.open }}</div>
+  </a>
+  <a class="rounded border border-gray-700 bg-gray-800/40 p-4 hover:border-red-400" href="{{ url_for('staff_email_log', status='failed') }}">
+    <div class="text-sm text-gray-300">Failed</div>
+    <div class="mt-1 text-3xl font-semibold text-red-300">{{ counts.failed }}</div>
+  </a>
+  <a class="rounded border border-gray-700 bg-gray-800/40 p-4 hover:border-green-400" href="{{ url_for('staff_email_log', status='sent') }}">
+    <div class="text-sm text-gray-300">Sent</div>
+    <div class="mt-1 text-3xl font-semibold text-green-300">{{ counts.sent }}</div>
+  </a>
+  <a class="rounded border border-gray-700 bg-gray-800/40 p-4 hover:border-yellow-500" href="{{ url_for('staff_email_log', status='logged') }}">
+    <div class="text-sm text-gray-300">Logged</div>
+    <div class="mt-1 text-3xl font-semibold text-yellow-400">{{ counts.logged }}</div>
+  </a>
+</div>
+
+<div class="space-y-3">
+  {% for email in logs %}
+    <details class="rounded border {% if not email.reviewed_at %}border-yellow-500/50{% else %}border-gray-700{% endif %} bg-gray-800/40 p-4">
+      <summary class="cursor-pointer">
+        <div class="inline-flex flex-wrap items-center gap-3">
+          <span class="text-sm text-gray-400">{{ email.created_at|format_date('%d/%m/%Y %H:%M') }}</span>
+          {% if not email.reviewed_at %}
+            <span class="rounded bg-yellow-500 px-2 py-1 text-xs font-semibold text-black">new</span>
+          {% else %}
+            <span class="rounded bg-gray-700 px-2 py-1 text-xs text-gray-300">reviewed</span>
+          {% endif %}
+          <span class="rounded px-2 py-1 text-xs font-semibold {% if email.status == 'sent' %}bg-green-500/20 text-green-200{% elif email.status == 'failed' %}bg-red-500/20 text-red-200{% else %}bg-yellow-500/20 text-yellow-200{% endif %}">
+            {{ email.status }}
+          </span>
+          <span class="rounded bg-gray-700 px-2 py-1 text-xs text-gray-200">{{ email.delivery_mode }}</span>
+          <span class="font-semibold text-white">{{ email.subject }}</span>
+        </div>
+      </summary>
+      <div class="mt-4 grid gap-4 lg:grid-cols-2">
+        <div>
+          <dl class="grid gap-y-2 text-sm md:grid-cols-[5rem_minmax(0,1fr)]">
+            <dt class="font-semibold text-gray-200">To</dt>
+            <dd class="text-gray-300">{{ email.to_addresses or 'Not available' }}</dd>
+            <dt class="font-semibold text-gray-200">Cc</dt>
+            <dd class="text-gray-300">{{ email.cc_addresses or 'None' }}</dd>
+            {% if email.reviewed_at %}
+              <dt class="font-semibold text-gray-200">Reviewed</dt>
+              <dd class="text-gray-300">{{ email.reviewed_by or 'admin' }} / {{ email.reviewed_at|format_date('%d/%m/%Y %H:%M') }}</dd>
+            {% endif %}
+            {% if email.error %}
+              <dt class="font-semibold text-red-200">Error</dt>
+              <dd class="text-red-200">{{ email.error }}</dd>
+            {% endif %}
+          </dl>
+          {% if not email.reviewed_at %}
+            <form method="post" action="{{ url_for('staff_email_log_review', email_id=email.id, status=selected_status, review=review_filter) }}" class="mt-4">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black hover:bg-yellow-400">Mark reviewed</button>
+            </form>
+          {% endif %}
+          <pre class="mt-4 whitespace-pre-wrap rounded border border-gray-700 bg-gray-950 p-4 text-sm text-gray-100">{{ email.body }}</pre>
+        </div>
+        <div>
+          <div class="mb-2 text-sm font-semibold text-gray-200">HTML preview</div>
+          <div class="overflow-hidden rounded border border-gray-700 bg-white">
+            {% if email.html_body %}
+              <iframe title="Email preview {{ email.id }}" srcdoc="{{ email.html_body|e }}" class="h-96 w-full bg-white"></iframe>
+            {% else %}
+              <div class="p-4 text-sm text-gray-700">No HTML body stored for this email.</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </details>
+  {% else %}
+    <div class="rounded border border-gray-700 bg-gray-800/40 p-6 text-center text-gray-400">
+      No emails found.
+    </div>
+  {% endfor %}
+</div>
+{% endblock %}

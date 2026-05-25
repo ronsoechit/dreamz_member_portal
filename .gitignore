@@ -1,0 +1,31 @@
+.env*
+!.env.example
+
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+instance/
+data/
+Dreamz Formulieren/
+nieuwe exports/
+backup/
+*.zip
+*.log
+
+static/contracts/
+static/mandates/
+static/forms/
+
+.coverage
+
+* - Copy*.py
+* - Copy*.html
+templates/dashboard_old.html
+templates/dashboard niet correct.html
+error.txt
+*.bat
+config.py
+models.py
+rebuild_db.py
