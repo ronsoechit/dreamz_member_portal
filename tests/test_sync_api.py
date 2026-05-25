@@ -84,6 +84,34 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(summary["new_members"][0]["member_id"], "1206")
         self.assertEqual(summary["document_changes"][0]["new_count"], 1)
 
+    def test_sync_api_keeps_document_ids_stable_when_documents_are_unchanged(self):
+        payload = {
+            "source": "unit-test",
+            "members": [{"member_id": "1206", "name": "Example, Member"}],
+            "documents": {
+                "1206": [
+                    {
+                        "document_type": "signup_form",
+                        "title": "Signup Form",
+                        "path": "s3://bucket/signup.pdf",
+                        "source_filename": "signup.pdf",
+                    }
+                ]
+            },
+        }
+        headers = {"X-Sync-Token": "sync-test-token"}
+
+        first_response = self.client.post("/api/sync/members", json=payload, headers=headers)
+        first_document_id = MemberDocument.query.filter_by(member_id="1206").one().id
+        second_response = self.client.post("/api/sync/members", json=payload, headers=headers)
+        second_document = MemberDocument.query.filter_by(member_id="1206").one()
+        second_summary = json.loads(SyncRun.query.order_by(SyncRun.id.desc()).first().change_summary)
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(second_response.status_code, 200)
+        self.assertEqual(second_document.id, first_document_id)
+        self.assertEqual(second_summary["document_changes"], [])
+
     def test_sync_file_upload_requires_token(self):
         response = self.client.post("/api/sync/files", data=b"file", headers={"X-Storage-Key": "gymassistant/test.pdf"})
 

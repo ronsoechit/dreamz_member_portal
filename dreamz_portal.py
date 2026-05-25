@@ -775,16 +775,16 @@ def apply_sync_payload(payload):
                         "new_count": len(after_documents),
                         "documents": after_documents,
                     })
-                MemberDocument.query.filter_by(member_id=member_data["member_id"]).delete()
-                for display_order, record in enumerate(document_records):
-                    db.session.add(MemberDocument(
-                        member_id=member_data["member_id"],
-                        document_type=record.get("document_type") or "other",
-                        title=record.get("title") or "Other Document",
-                        path=record.get("path") or "",
-                        source_filename=record.get("source_filename"),
-                        display_order=display_order,
-                    ))
+                    MemberDocument.query.filter_by(member_id=member_data["member_id"]).delete()
+                    for display_order, record in enumerate(document_records):
+                        db.session.add(MemberDocument(
+                            member_id=member_data["member_id"],
+                            document_type=record.get("document_type") or "other",
+                            title=record.get("title") or "Other Document",
+                            path=record.get("path") or "",
+                            source_filename=record.get("source_filename"),
+                            display_order=display_order,
+                        ))
 
         sync_run.status = "success"
         sync_run.completed_at = datetime.now()
