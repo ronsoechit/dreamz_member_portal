@@ -1,5 +1,6 @@
 import calendar
 import html
+import json
 import os
 import platform
 
@@ -257,6 +258,7 @@ class SyncRun(db.Model):
     members_new = db.Column(db.Integer, default=0, nullable=False)
     members_updated = db.Column(db.Integer, default=0, nullable=False)
     documents_received = db.Column(db.Integer, default=0, nullable=False)
+    change_summary = db.Column(db.Text)
     error = db.Column(db.Text)
 
 
@@ -307,6 +309,19 @@ def ensure_sqlite_model_column(table_name, column_name, column_definition):
     db.session.commit()
 
 
+def ensure_model_column(table_name, column_name, column_definition):
+    from sqlalchemy import text
+
+    if db.engine.dialect.name == "sqlite":
+        ensure_sqlite_model_column(table_name, column_name, column_definition)
+        return
+    if db.engine.dialect.name == "postgresql":
+        db.session.execute(text(
+            f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {column_name} {column_definition}"
+        ))
+        db.session.commit()
+
+
 def ensure_runtime_schema():
     if app.config.get("_RUNTIME_SCHEMA_READY") and not app.config.get("TESTING"):
         return
@@ -326,6 +341,7 @@ def ensure_runtime_schema():
     ensure_sqlite_model_column("email_log", "html_body", "TEXT")
     ensure_sqlite_model_column("email_log", "reviewed_at", "DATETIME")
     ensure_sqlite_model_column("email_log", "reviewed_by", "VARCHAR")
+    ensure_model_column("sync_run", "change_summary", "TEXT")
     db.create_all()
     seed_default_settings()
     seed_default_staff_users()
@@ -566,6 +582,118 @@ def normalize_sync_member_data(raw_member):
     return normalized
 
 
+SYNC_CHANGE_FIELDS = [
+    "name",
+    "email",
+    "phone",
+    "mobile",
+    "plan_type",
+    "contract_type",
+    "billing_status",
+    "billing_option",
+    "billing_type",
+    "billing_amount",
+    "balance",
+    "last_payment",
+    "last_payment_amount",
+    "next_payment",
+    "due_date",
+    "start_date",
+    "end_date",
+    "signup_date",
+    "photo_path",
+    "is_active",
+]
+
+SYNC_CHANGE_LABELS = {
+    "name": "Name",
+    "email": "Email",
+    "phone": "Phone",
+    "mobile": "Mobile",
+    "plan_type": "Plan",
+    "contract_type": "Contract type",
+    "billing_status": "Billing status",
+    "billing_option": "Billing option",
+    "billing_type": "Billing type",
+    "billing_amount": "Billing amount",
+    "balance": "Balance",
+    "last_payment": "Last payment",
+    "last_payment_amount": "Last paid amount",
+    "next_payment": "Next payment",
+    "due_date": "Due date",
+    "start_date": "Contract begin",
+    "end_date": "Contract end",
+    "signup_date": "Signup date",
+    "photo_path": "Photo",
+    "is_active": "Active",
+}
+
+
+def change_value(value):
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, float):
+        return round(value, 2)
+    return value
+
+
+def member_change_summary(member_id, name=None, email=None, plan_type=None, changes=None):
+    return {
+        "member_id": str(member_id),
+        "name": name or "",
+        "email": email or "",
+        "plan_type": plan_type or "",
+        "changes": changes or [],
+    }
+
+
+def member_field_changes(existing, member_data):
+    changes = []
+    for field in SYNC_CHANGE_FIELDS:
+        if field not in member_data:
+            continue
+        before = change_value(getattr(existing, field, None))
+        after = change_value(member_data.get(field))
+        if before != after:
+            changes.append({
+                "field": field,
+                "label": SYNC_CHANGE_LABELS.get(field, field),
+                "old": before,
+                "new": after,
+            })
+    return changes
+
+
+def document_signature(record):
+    return {
+        "document_type": record.get("document_type") or "other",
+        "title": record.get("title") or "Other Document",
+        "path": record.get("path") or "",
+        "source_filename": record.get("source_filename") or "",
+    }
+
+
+def existing_document_signatures(member_id):
+    return [
+        document_signature({
+            "document_type": document.document_type,
+            "title": document.title,
+            "path": document.path,
+            "source_filename": document.source_filename,
+        })
+        for document in MemberDocument.query.filter_by(member_id=member_id).order_by(MemberDocument.display_order).all()
+    ]
+
+
+def sync_change_summary_for_template(sync_run):
+    if not sync_run.change_summary:
+        return {"new_members": [], "changed_members": [], "document_changes": []}
+    try:
+        return json.loads(sync_run.change_summary)
+    except (TypeError, json.JSONDecodeError):
+        return {"new_members": [], "changed_members": [], "document_changes": []}
+
+
 def apply_sync_payload(payload):
     members = payload.get("members") or []
     documents_by_member = payload.get("documents") or {}
@@ -580,20 +708,50 @@ def apply_sync_payload(payload):
     db.session.commit()
 
     new = updated = 0
+    change_summary = {
+        "new_members": [],
+        "changed_members": [],
+        "document_changes": [],
+    }
     try:
         for raw_member in members:
             member_data = normalize_sync_member_data(raw_member)
             existing = Member.query.filter_by(member_id=member_data["member_id"]).first()
             if existing:
+                changes = member_field_changes(existing, member_data)
+                if changes:
+                    updated += 1
+                    change_summary["changed_members"].append(member_change_summary(
+                        existing.member_id,
+                        name=member_data.get("name") or existing.name,
+                        email=member_data.get("email") or existing.email,
+                        plan_type=member_data.get("plan_type") or existing.plan_type,
+                        changes=changes,
+                    ))
                 for key, value in member_data.items():
                     setattr(existing, key, value)
-                updated += 1
             else:
                 db.session.add(Member(**member_data))
                 new += 1
+                change_summary["new_members"].append(member_change_summary(
+                    member_data["member_id"],
+                    name=member_data.get("name"),
+                    email=member_data.get("email"),
+                    plan_type=member_data.get("plan_type"),
+                ))
 
             document_records = documents_by_member.get(member_data["member_id"])
             if document_records is not None:
+                before_documents = existing_document_signatures(member_data["member_id"])
+                after_documents = [document_signature(record) for record in document_records]
+                if before_documents != after_documents:
+                    change_summary["document_changes"].append({
+                        "member_id": member_data["member_id"],
+                        "name": member_data.get("name") or "",
+                        "old_count": len(before_documents),
+                        "new_count": len(after_documents),
+                        "documents": after_documents,
+                    })
                 MemberDocument.query.filter_by(member_id=member_data["member_id"]).delete()
                 for display_order, record in enumerate(document_records):
                     db.session.add(MemberDocument(
@@ -609,6 +767,7 @@ def apply_sync_payload(payload):
         sync_run.completed_at = datetime.now()
         sync_run.members_new = new
         sync_run.members_updated = updated
+        sync_run.change_summary = json.dumps(change_summary)
         db.session.commit()
     except Exception as exc:
         db.session.rollback()
@@ -2177,7 +2336,11 @@ def staff_sync_status():
     ensure_runtime_schema()
     runs = SyncRun.query.order_by(SyncRun.started_at.desc()).limit(50).all()
     latest = runs[0] if runs else None
-    return render_template("staff_sync_status.html", runs=runs, latest=latest)
+    run_changes = {
+        run.id: sync_change_summary_for_template(run)
+        for run in runs
+    }
+    return render_template("staff_sync_status.html", runs=runs, latest=latest, run_changes=run_changes)
 
 
 @app.post("/staff/email-log/<int:email_id>/review")

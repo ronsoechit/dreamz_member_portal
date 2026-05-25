@@ -43,11 +43,16 @@
         <th class="p-3 text-left">Source</th>
         <th class="p-3 text-left">Members</th>
         <th class="p-3 text-left">Documents</th>
+        <th class="p-3 text-left">Changes</th>
         <th class="p-3 text-left">Error</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-800">
       {% for run in runs %}
+        {% set changes = run_changes.get(run.id, {}) %}
+        {% set new_members = changes.get('new_members', []) %}
+        {% set changed_members = changes.get('changed_members', []) %}
+        {% set document_changes = changes.get('document_changes', []) %}
         <tr class="bg-gray-900/40 align-top">
           <td class="whitespace-nowrap p-3">{{ run.started_at|format_date('%d/%m/%Y %H:%M') }}</td>
           <td class="whitespace-nowrap p-3">{{ run.completed_at|format_date('%d/%m/%Y %H:%M') or 'N/A' }}</td>
@@ -57,11 +62,74 @@
           <td class="max-w-xs break-words p-3 text-gray-300">{{ run.source or 'N/A' }}</td>
           <td class="whitespace-nowrap p-3">{{ run.members_received }} received / {{ run.members_new }} new / {{ run.members_updated }} updated</td>
           <td class="whitespace-nowrap p-3">{{ run.documents_received }}</td>
+          <td class="min-w-[18rem] p-3">
+            {% if new_members or changed_members or document_changes %}
+              <details>
+                <summary class="cursor-pointer text-yellow-300">
+                  {{ new_members|length }} new,
+                  {{ changed_members|length }} changed,
+                  {{ document_changes|length }} document updates
+                </summary>
+                <div class="mt-3 space-y-3 text-xs text-gray-300">
+                  {% if new_members %}
+                    <div>
+                      <div class="font-semibold text-green-300">New members</div>
+                      <ul class="mt-1 space-y-1">
+                        {% for item in new_members[:10] %}
+                          <li>
+                            <a class="text-green-300 underline" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">{{ item.name or 'Unknown' }}</a>
+                            <span class="text-gray-500">#{{ item.member_id }}</span>
+                            {% if item.plan_type %}<span class="text-gray-400">- {{ item.plan_type }}</span>{% endif %}
+                          </li>
+                        {% endfor %}
+                      </ul>
+                    </div>
+                  {% endif %}
+
+                  {% if changed_members %}
+                    <div>
+                      <div class="font-semibold text-yellow-300">Member changes</div>
+                      <ul class="mt-1 space-y-2">
+                        {% for item in changed_members[:10] %}
+                          <li>
+                            <a class="text-green-300 underline" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">{{ item.name or 'Unknown' }}</a>
+                            <span class="text-gray-500">#{{ item.member_id }}</span>
+                            <ul class="mt-1 space-y-1 text-gray-400">
+                              {% for change in item.changes[:4] %}
+                                <li>{{ change.label }}: {{ change.old or 'empty' }} -> {{ change.new or 'empty' }}</li>
+                              {% endfor %}
+                            </ul>
+                          </li>
+                        {% endfor %}
+                      </ul>
+                    </div>
+                  {% endif %}
+
+                  {% if document_changes %}
+                    <div>
+                      <div class="font-semibold text-blue-300">Document changes</div>
+                      <ul class="mt-1 space-y-1">
+                        {% for item in document_changes[:10] %}
+                          <li>
+                            <a class="text-green-300 underline" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">{{ item.name or 'Unknown' }}</a>
+                            <span class="text-gray-500">#{{ item.member_id }}</span>
+                            <span class="text-gray-400">{{ item.old_count }} -> {{ item.new_count }} docs</span>
+                          </li>
+                        {% endfor %}
+                      </ul>
+                    </div>
+                  {% endif %}
+                </div>
+              </details>
+            {% else %}
+              <span class="text-gray-500">No tracked changes</span>
+            {% endif %}
+          </td>
           <td class="max-w-sm break-words p-3 text-red-200">{{ run.error or '' }}</td>
         </tr>
       {% else %}
         <tr>
-          <td class="p-6 text-center text-gray-400" colspan="7">No sync runs received yet.</td>
+          <td class="p-6 text-center text-gray-400" colspan="8">No sync runs received yet.</td>
         </tr>
       {% endfor %}
     </tbody>

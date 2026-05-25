@@ -1,5 +1,6 @@
 from datetime import date, datetime
 import importlib.util
+import json
 import os
 import unittest
 from unittest.mock import patch
@@ -79,6 +80,9 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(document.document_type, "contract")
         sync_run = SyncRun.query.one()
         self.assertEqual(sync_run.status, "success")
+        summary = json.loads(sync_run.change_summary)
+        self.assertEqual(summary["new_members"][0]["member_id"], "1206")
+        self.assertEqual(summary["document_changes"][0]["new_count"], 1)
 
     def test_sync_file_upload_requires_token(self):
         response = self.client.post("/api/sync/files", data=b"file", headers={"X-Storage-Key": "gymassistant/test.pdf"})
@@ -114,6 +118,25 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["members_updated"], 1)
         self.assertEqual(Member.query.filter_by(member_id="1206").one().name, "New Name")
+        summary = json.loads(SyncRun.query.one().change_summary)
+        self.assertEqual(summary["changed_members"][0]["changes"][0]["label"], "Name")
+        self.assertEqual(summary["changed_members"][0]["changes"][0]["old"], "Old Name")
+        self.assertEqual(summary["changed_members"][0]["changes"][0]["new"], "New Name")
+
+    def test_sync_api_does_not_count_unchanged_member_as_updated(self):
+        db.session.add(Member(member_id="1206", name="Same Name", email="same@example.com"))
+        db.session.commit()
+
+        response = self.client.post(
+            "/api/sync/members",
+            json={"members": [{"member_id": "1206", "name": "Same Name", "email": "same@example.com"}]},
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["members_updated"], 0)
+        summary = json.loads(SyncRun.query.one().change_summary)
+        self.assertEqual(summary["changed_members"], [])
 
     def test_staff_sync_status_lists_runs(self):
         db.session.add(SyncRun(
@@ -124,6 +147,15 @@ class SyncApiTests(unittest.TestCase):
             members_received=2,
             members_updated=2,
             documents_received=3,
+            change_summary=json.dumps({
+                "new_members": [
+                    {"member_id": "34836", "name": "Week Pass Member", "plan_type": "Weekpas"}
+                ],
+                "changed_members": [],
+                "document_changes": [
+                    {"member_id": "34836", "name": "Week Pass Member", "old_count": 0, "new_count": 1}
+                ],
+            }),
         ))
         db.session.commit()
         with self.client.session_transaction() as sess:
@@ -138,6 +170,8 @@ class SyncApiTests(unittest.TestCase):
         self.assertIn("unit-test", body)
         self.assertIn("2 received", body)
         self.assertIn("25/05/2026 14:05", body)
+        self.assertIn("Week Pass Member", body)
+        self.assertIn("0 -> 1 docs", body)
 
 
 if __name__ == "__main__":
