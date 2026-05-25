@@ -5,9 +5,13 @@
 <div class="mb-6">
   <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">Admin Dashboard</div>
   <h2 class="text-2xl font-semibold">Sync Status</h2>
-  <p class="text-sm text-gray-400">Latest GymAssistant sync activity received by the portal.</p>
+  <p class="text-sm text-gray-400">
+    Latest GymAssistant sync activity received by the portal.
+    <span id="sync-refresh-status" class="ml-2 text-xs text-gray-500">Auto-refreshing every 20 seconds.</span>
+  </p>
 </div>
 
+<section id="sync-status-panel">
 {% if latest %}
   <div class="mb-6 grid gap-3 md:grid-cols-5">
     <div class="rounded border border-gray-700 bg-gray-800/40 p-4">
@@ -135,4 +139,34 @@
     </tbody>
   </table>
 </div>
+</section>
+
+<script>
+  (() => {
+    const panel = document.getElementById("sync-status-panel");
+    const status = document.getElementById("sync-refresh-status");
+    if (!panel || !status) return;
+
+    const refreshSyncStatus = async () => {
+      try {
+        status.textContent = "Checking for new sync activity...";
+        const response = await fetch(window.location.href, {
+          headers: { "X-Requested-With": "fetch" },
+          cache: "no-store",
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const html = await response.text();
+        const doc = new DOMParser().parseFromString(html, "text/html");
+        const nextPanel = doc.getElementById("sync-status-panel");
+        if (!nextPanel) throw new Error("Sync panel not found");
+        panel.innerHTML = nextPanel.innerHTML;
+        status.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+      } catch (error) {
+        status.textContent = "Auto-refresh paused; refresh the page if needed.";
+      }
+    };
+
+    window.setInterval(refreshSyncStatus, 20000);
+  })();
+</script>
 {% endblock %}

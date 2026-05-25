@@ -172,6 +172,9 @@ class SyncApiTests(unittest.TestCase):
         self.assertIn("25/05/2026 14:05", body)
         self.assertIn("Week Pass Member", body)
         self.assertIn("0 -> 1 docs", body)
+        self.assertIn("sync-status-panel", body)
+        self.assertIn("Auto-refreshing every 20 seconds.", body)
+        self.assertIn("setInterval(refreshSyncStatus, 20000)", body)
 
     def test_staff_sync_status_marks_stale_running_runs_interrupted(self):
         db.session.add(SyncRun(
