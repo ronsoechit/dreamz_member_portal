@@ -133,6 +133,27 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(response.json["uri"], "s3://bucket/gymassistant/test.pdf")
         upload.assert_called_once_with(b"%PDF", "gymassistant/test.pdf", content_type="application/pdf")
 
+    def test_member_document_file_returns_404_when_storage_object_is_missing(self):
+        db.session.add(Member(member_id="1206", name="Example, Member"))
+        db.session.add(MemberDocument(
+            member_id="1206",
+            document_type="signup_form",
+            title="Signup Form",
+            path="s3://bucket/missing.pdf",
+            source_filename="missing.pdf",
+        ))
+        db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+        document = MemberDocument.query.one()
+
+        with patch("dreamz_portal.open_s3_object", side_effect=FileNotFoundError("missing")):
+            response = self.client.get(f"/documents/item/{document.id}/file")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("Stored file not found or unavailable", response.get_data(as_text=True))
+
     def test_sync_api_updates_existing_member(self):
         db.session.add(Member(member_id="1206", name="Old Name"))
         db.session.commit()

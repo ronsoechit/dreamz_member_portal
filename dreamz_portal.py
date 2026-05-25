@@ -2572,7 +2572,11 @@ def mask_email(email):
 
 
 def storage_file_response(uri, download_name=None, mimetype=None, as_attachment=False):
-    body = open_s3_object(uri)
+    try:
+        body = open_s3_object(uri)
+    except Exception as exc:
+        app.logger.exception("Could not open storage object %s", uri)
+        abort(404, f"Stored file not found or unavailable: {exc}")
     filename = download_name or s3_download_name(uri)
     disposition = "attachment" if as_attachment else "inline"
     headers = {"Content-Disposition": f'{disposition}; filename="{filename}"'}

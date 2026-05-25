@@ -100,11 +100,19 @@ def upload_bytes_to_s3(data: bytes, key: str, content_type: str | None = None, b
 
 
 def open_s3_object(uri: str):
+    from botocore.exceptions import ClientError
+
     parsed = parse_s3_uri(uri)
     if not parsed:
         raise ValueError(f"Not an S3 URI: {uri}")
     bucket, key = parsed
-    response = s3_client().get_object(Bucket=bucket, Key=key)
+    try:
+        response = s3_client().get_object(Bucket=bucket, Key=key)
+    except ClientError as exc:
+        error = exc.response.get("Error", {})
+        code = error.get("Code") or "ClientError"
+        message = error.get("Message") or str(exc)
+        raise FileNotFoundError(f"{code}: {bucket}/{key} ({message})") from exc
     return response["Body"]
 
 
