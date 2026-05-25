@@ -21,6 +21,18 @@ def write_backup(path: Path, member_id: str = "100") -> None:
         backup.writestr("Members.btx", members_text)
 
 
+def write_members_btx(path: Path, member_id: str = "100") -> None:
+    path.write_text("\n".join([
+        f"MN={member_id}",
+        "LN=Tester",
+        "FN=Live",
+        "MTN=week pass",
+        "EM=live@example.com",
+        "-",
+        "",
+    ]), encoding="latin-1")
+
+
 class SyncAgentTests(unittest.TestCase):
     def test_scan_source_summarizes_relevant_gymassistant_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -40,6 +52,25 @@ class SyncAgentTests(unittest.TestCase):
             self.assertEqual(scan.member_count, 1)
             self.assertEqual(scan.relevant_file_count, 3)
             self.assertEqual({item.kind for item in scan.files}, {"backup", "attachment_pdf", "photo"})
+
+    def test_scan_source_prefers_live_members_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            backup_dir = data_dir / "Backup"
+            backup_dir.mkdir(parents=True)
+            write_backup(backup_dir / "GABackup-test.gbu", member_id="100")
+            live_members = data_dir / "Members.btx"
+            write_members_btx(live_members, member_id="101")
+
+            scan = scan_source(root)
+            payload = build_sync_payload(root)
+
+        self.assertTrue(scan.member_source.endswith("Members.btx"))
+        self.assertEqual(scan.member_count, 1)
+        self.assertIn("Data/Members.btx", [item.path for item in scan.files])
+        self.assertEqual(payload["members"][0]["member_id"], "101")
+        self.assertEqual(payload["members"][0]["name"], "Tester, Live")
 
     def test_manifest_diff_detects_added_changed_and_removed_files(self):
         with tempfile.TemporaryDirectory() as tmp:

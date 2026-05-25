@@ -34,6 +34,7 @@ class FileSignature:
 class SyncScan:
     source_root: str
     scanned_at: str
+    member_source: str | None
     latest_backup: str | None
     member_count: int
     relevant_file_count: int
@@ -66,6 +67,10 @@ def photos_root(source_root: Path) -> Path:
 
 def backup_root(source_root: Path) -> Path:
     return data_root(source_root) / "Backup"
+
+
+def live_members_path(source_root: Path) -> Path:
+    return data_root(source_root) / "Members.btx"
 
 
 def latest_backup_path(source_root: Path) -> Path | None:
@@ -114,12 +119,21 @@ def scan_source(source_root: Path) -> SyncScan:
         raise FileNotFoundError(f"GymAssistant source root not found: {source_root}")
 
     backup = latest_backup_path(source_root)
+    live_members = live_members_path(source_root)
     files: list[FileSignature] = []
     member_count = 0
+    member_source: Path | None = None
+
+    if live_members.exists():
+        files.append(file_signature(live_members, source_root, "member_data"))
+        member_source = live_members
+        member_count = len(parse_gymassistant_export(live_members).members)
+    elif backup:
+        member_source = backup
+        member_count = len(parse_gymassistant_export(backup).members)
 
     if backup:
         files.append(file_signature(backup, source_root, "backup"))
-        member_count = len(parse_gymassistant_export(backup).members)
 
     files.extend(iter_attachment_files(source_root) or [])
     files.extend(iter_photo_files(source_root) or [])
@@ -128,6 +142,7 @@ def scan_source(source_root: Path) -> SyncScan:
     return SyncScan(
         source_root=str(source_root),
         scanned_at=utc_now_iso(),
+        member_source=str(member_source) if member_source else None,
         latest_backup=str(backup) if backup else None,
         member_count=member_count,
         relevant_file_count=len(files),
@@ -140,6 +155,7 @@ def manifest_payload(scan: SyncScan) -> dict:
     return {
         "source_root": scan.source_root,
         "scanned_at": scan.scanned_at,
+        "member_source": scan.member_source,
         "latest_backup": scan.latest_backup,
         "member_count": scan.member_count,
         "files": [asdict(item) for item in scan.files],
@@ -302,10 +318,15 @@ def build_sync_payload(
 ) -> dict:
     source_root = source_root.resolve()
     backup = latest_backup_path(source_root)
-    if not backup:
-        raise FileNotFoundError(f"No GymAssistant .gbu backup found under {backup_root(source_root)}")
+    member_source = live_members_path(source_root)
+    if not member_source.exists():
+        member_source = backup
+    if not member_source:
+        raise FileNotFoundError(
+            f"No live Members.btx or GymAssistant .gbu backup found under {data_root(source_root)}"
+        )
 
-    import_result = parse_gymassistant_export(backup)
+    import_result = parse_gymassistant_export(member_source)
     source_members = import_result.members[:member_limit] if member_limit else import_result.members
     members = [dict(member) for member in source_members]
     attachment_root = attachments_root(source_root)
@@ -387,6 +408,7 @@ def build_sync_payload(
     return {
         "source": str(source_root),
         "backup": str(backup),
+        "member_source": str(member_source),
         "generated_at": utc_now_iso(),
         "members": [json_safe_member(member) for member in members],
         "documents": documents,
@@ -461,6 +483,7 @@ def summarize_by_kind(files: list[FileSignature]) -> dict[str, dict[str, float |
 def print_scan_report(scan: SyncScan, diff: SyncDiff | None = None) -> None:
     print(f"Source root: {scan.source_root}")
     print(f"Scanned at: {scan.scanned_at}")
+    print(f"Member source: {scan.member_source or 'not found'}")
     print(f"Latest backup: {scan.latest_backup or 'not found'}")
     print(f"Parsed members: {scan.member_count}")
     print(f"Relevant files: {scan.relevant_file_count}")
