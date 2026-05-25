@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import importlib.util
 import json
 import os
@@ -172,6 +172,28 @@ class SyncApiTests(unittest.TestCase):
         self.assertIn("25/05/2026 14:05", body)
         self.assertIn("Week Pass Member", body)
         self.assertIn("0 -> 1 docs", body)
+
+    def test_staff_sync_status_marks_stale_running_runs_interrupted(self):
+        db.session.add(SyncRun(
+            source="unit-test",
+            status="running",
+            started_at=datetime.now() - timedelta(minutes=30),
+            members_received=5,
+        ))
+        db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+
+        response = self.client.get("/staff/sync")
+
+        self.assertEqual(response.status_code, 200)
+        sync_run = SyncRun.query.one()
+        self.assertEqual(sync_run.status, "interrupted")
+        self.assertIsNotNone(sync_run.completed_at)
+        body = response.get_data(as_text=True)
+        self.assertIn("interrupted", body)
+        self.assertIn("The next scheduled run can continue normally.", body)
 
 
 if __name__ == "__main__":

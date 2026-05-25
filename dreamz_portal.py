@@ -281,6 +281,7 @@ DEFAULT_SETTINGS = {
 }
 
 DEFAULT_PORTAL_TIMEZONE_OFFSET_HOURS = -4
+STALE_SYNC_RUN_MINUTES = 15
 
 
 def portal_timezone():
@@ -692,6 +693,26 @@ def sync_change_summary_for_template(sync_run):
         return json.loads(sync_run.change_summary)
     except (TypeError, json.JSONDecodeError):
         return {"new_members": [], "changed_members": [], "document_changes": []}
+
+
+def mark_stale_sync_runs(now=None):
+    now = now or datetime.now()
+    cutoff = now - timedelta(minutes=STALE_SYNC_RUN_MINUTES)
+    stale_runs = SyncRun.query.filter(
+        SyncRun.status == "running",
+        SyncRun.completed_at.is_(None),
+        SyncRun.started_at < cutoff,
+    ).all()
+    for sync_run in stale_runs:
+        sync_run.status = "interrupted"
+        sync_run.completed_at = now
+        sync_run.error = (
+            f"Sync did not complete within {STALE_SYNC_RUN_MINUTES} minutes. "
+            "The next scheduled run can continue normally."
+        )
+    if stale_runs:
+        db.session.commit()
+    return stale_runs
 
 
 def apply_sync_payload(payload):
@@ -2334,6 +2355,7 @@ def staff_email_log():
 def staff_sync_status():
     require_staff_access(required_role="admin")
     ensure_runtime_schema()
+    mark_stale_sync_runs()
     runs = SyncRun.query.order_by(SyncRun.started_at.desc()).limit(50).all()
     latest = runs[0] if runs else None
     run_changes = {

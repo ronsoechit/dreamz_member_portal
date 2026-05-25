@@ -12,7 +12,7 @@
   <div class="mb-6 grid gap-3 md:grid-cols-5">
     <div class="rounded border border-gray-700 bg-gray-800/40 p-4">
       <div class="text-sm text-gray-300">Latest Status</div>
-      <div class="mt-1 text-2xl font-semibold {% if latest.status == 'success' %}text-green-300{% elif latest.status == 'failed' %}text-red-300{% else %}text-yellow-400{% endif %}">{{ latest.status|title }}</div>
+      <div class="mt-1 text-2xl font-semibold {% if latest.status == 'success' %}text-green-300{% elif latest.status in ['failed', 'interrupted'] %}text-red-300{% else %}text-yellow-400{% endif %}">{{ latest.status|title }}</div>
     </div>
     <div class="rounded border border-gray-700 bg-gray-800/40 p-4">
       <div class="text-sm text-gray-300">Members Received</div>
@@ -57,7 +57,7 @@
           <td class="whitespace-nowrap p-3">{{ run.started_at|format_date('%d/%m/%Y %H:%M') }}</td>
           <td class="whitespace-nowrap p-3">{{ run.completed_at|format_date('%d/%m/%Y %H:%M') or 'N/A' }}</td>
           <td class="p-3">
-            <span class="rounded px-2 py-1 text-xs font-semibold {% if run.status == 'success' %}bg-green-500/20 text-green-200{% elif run.status == 'failed' %}bg-red-500/20 text-red-200{% else %}bg-yellow-500/20 text-yellow-200{% endif %}">{{ run.status }}</span>
+            <span class="rounded px-2 py-1 text-xs font-semibold {% if run.status == 'success' %}bg-green-500/20 text-green-200{% elif run.status in ['failed', 'interrupted'] %}bg-red-500/20 text-red-200{% else %}bg-yellow-500/20 text-yellow-200{% endif %}">{{ run.status }}</span>
           </td>
           <td class="max-w-xs break-words p-3 text-gray-300">{{ run.source or 'N/A' }}</td>
           <td class="whitespace-nowrap p-3">{{ run.members_received }} received / {{ run.members_new }} new / {{ run.members_updated }} updated</td>
