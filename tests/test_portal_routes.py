@@ -549,6 +549,55 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("final only after you receive confirmation by email", body)
         self.assertNotIn("I want to cancel my contract", body)
 
+    def test_staff_membership_hides_cancellation_policy(self):
+        self.add_member(
+            member_id="13659",
+            name="Ron Soechit",
+            plan_type="Medewerker",
+            contract_type="No-Contract",
+            signup_date=date(2022, 10, 19),
+        )
+        self.login_as("13659")
+
+        response = self.client.get("/dashboard?id=13659")
+
+        body = response.get_data(as_text=True)
+        self.assertNotIn("Cancellation Policy", body)
+        self.assertNotIn("I want to cancel my contract", body)
+
+    def test_staff_membership_cannot_submit_cancellation(self):
+        self.add_member(
+            member_id="13659",
+            plan_type="Medewerker",
+            contract_type="No-Contract",
+        )
+        self.login_as("13659")
+
+        response = self.client.post(
+            "/cancel",
+            data=self.csrf_form_data(member_id="13659", reason="Moving away"),
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(CancellationRequest.query.filter_by(member_id="13659").count(), 0)
+
+    def test_dashboard_open_balance_message_is_explicit(self):
+        self.add_member(
+            member_id="13659",
+            plan_type="Medewerker",
+            contract_type="No-Contract",
+            balance=63.50,
+            next_payment=date.today() + timedelta(days=7),
+        )
+        self.login_as("13659")
+
+        response = self.client.get("/dashboard?id=13659")
+
+        body = response.get_data(as_text=True)
+        self.assertIn("Outstanding balance due", body)
+        self.assertIn("$63.50", body)
+        self.assertIn("Please pay this before", body)
+
     def test_cancel_before_fixed_term_window_notifies_admin(self):
         today = date.today()
         self.add_member(

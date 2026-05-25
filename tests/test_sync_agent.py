@@ -143,6 +143,42 @@ class SyncAgentTests(unittest.TestCase):
         self.assertIn(("https://portal.example/api/sync/files", "sync-token", "0000100.jpg", "portal/Data/Pictures/0000100.jpg"), uploaded)
         self.assertEqual(payload["documents"]["100"][0]["path"], "s3://dreamz-test/portal/Data/Attachments/0000100/contract.pdf")
 
+    def test_build_sync_payload_can_upload_only_changed_files_through_portal(self):
+        uploaded = []
+
+        def fake_post_file(url, token, path, key):
+            uploaded.append((Path(path).name, key))
+            return {"uri": f"s3://dreamz-test/{key}"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            backup_dir = root / "Data" / "Backup"
+            attachment_dir = root / "Data" / "Attachments" / "0000100"
+            photo_dir = root / "Data" / "Pictures"
+            backup_dir.mkdir(parents=True)
+            attachment_dir.mkdir(parents=True)
+            photo_dir.mkdir(parents=True)
+            write_backup(backup_dir / "GABackup-test.gbu")
+            (attachment_dir / "contract.pdf").write_bytes(b"%PDF contract")
+            (photo_dir / "0000100.jpg").write_bytes(b"photo")
+
+            with patch("sync_agent.post_file", side_effect=fake_post_file):
+                payload = build_sync_payload(
+                    root,
+                    upload_files=True,
+                    upload_via_portal=True,
+                    upload_changed_only=True,
+                    changed_file_paths={"Data/Pictures/0000100.jpg"},
+                    storage_bucket="dreamz-test",
+                    portal_url="https://portal.example",
+                    sync_token="sync-token",
+                    storage_prefix="portal",
+                )
+
+        self.assertEqual(uploaded, [("0000100.jpg", "portal/Data/Pictures/0000100.jpg")])
+        self.assertEqual(payload["documents"]["100"][0]["path"], "s3://dreamz-test/portal/Data/Attachments/0000100/contract.pdf")
+        self.assertEqual(payload["members"][0]["photo_path"], "s3://dreamz-test/portal/Data/Pictures/0000100.jpg")
+
 
 if __name__ == "__main__":
     unittest.main()

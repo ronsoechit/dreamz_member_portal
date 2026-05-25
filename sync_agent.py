@@ -165,6 +165,10 @@ def storage_key(prefix: str, relative_file_path: str) -> str:
     return f"{prefix}/{relative_file_path}" if prefix else relative_file_path
 
 
+def stored_s3_uri(bucket: str, key: str) -> str:
+    return f"s3://{bucket}/{key}"
+
+
 def member_photo_path(member_id: str, source_root: Path) -> Path | None:
     root = photos_root(source_root)
     if not root.exists():
@@ -292,6 +296,9 @@ def build_sync_payload(
     portal_url: str | None = None,
     sync_token: str | None = None,
     upload_workers: int = 4,
+    upload_changed_only: bool = False,
+    changed_file_paths: set[str] | None = None,
+    storage_bucket: str | None = None,
 ) -> dict:
     source_root = source_root.resolve()
     backup = latest_backup_path(source_root)
@@ -305,8 +312,22 @@ def build_sync_payload(
     documents = {}
     if upload_files and upload_via_portal and (not portal_url or not sync_token):
         raise ValueError("portal_url and sync_token are required when upload_via_portal is enabled.")
+    if upload_files and upload_via_portal and upload_changed_only and not storage_bucket:
+        raise ValueError("storage_bucket is required when upload_changed_only is enabled with upload_via_portal.")
     client = None if upload_via_portal else (s3_client() if upload_files else None)
     portal_upload_uris = {}
+    changed_file_paths = changed_file_paths or set()
+
+    def file_storage_key(path: Path) -> str:
+        return storage_key(storage_prefix, relative_path(path.resolve(), source_root))
+
+    def should_upload(path: Path) -> bool:
+        if not upload_changed_only:
+            return True
+        return relative_path(path.resolve(), source_root) in changed_file_paths
+
+    def portal_uri_for_key(key: str) -> str:
+        return portal_upload_uris.get(key) or stored_s3_uri(storage_bucket or "", key)
 
     if upload_files and upload_via_portal:
         upload_task_map: dict[str, Path] = {}
@@ -316,12 +337,14 @@ def build_sync_payload(
             for record in records:
                 path = Path(record.get("path") or "")
                 if path.exists() and path.is_file():
-                    key = storage_key(storage_prefix, relative_path(path.resolve(), source_root))
-                    upload_task_map[key] = path
+                    key = file_storage_key(path)
+                    if should_upload(path):
+                        upload_task_map[key] = path
             photo = member_photo_path(member_id, source_root)
             if photo:
-                key = storage_key(storage_prefix, relative_path(photo.resolve(), source_root))
-                upload_task_map[key] = photo
+                key = file_storage_key(photo)
+                if should_upload(photo):
+                    upload_task_map[key] = photo
 
         print(f"Uploading {len(upload_task_map)} files through portal API...")
         portal_upload_uris = upload_files_parallel(
@@ -342,8 +365,8 @@ def build_sync_payload(
                         updated = dict(record)
                         path = Path(updated.get("path") or "")
                         if path.exists() and path.is_file():
-                            key = storage_key(storage_prefix, relative_path(path.resolve(), source_root))
-                            updated["path"] = portal_upload_uris[key]
+                            key = file_storage_key(path)
+                            updated["path"] = portal_uri_for_key(key)
                         uploaded_records.append(updated)
                     documents[member_id] = uploaded_records
                 else:
@@ -356,8 +379,8 @@ def build_sync_payload(
                 photo = member_photo_path(member_id, source_root)
                 if photo:
                     if upload_via_portal:
-                        key = storage_key(storage_prefix, relative_path(photo.resolve(), source_root))
-                        member["photo_path"] = portal_upload_uris[key]
+                        key = file_storage_key(photo)
+                        member["photo_path"] = portal_uri_for_key(key)
                     else:
                         member["photo_path"] = upload_source_file(source_root, photo, storage_prefix, client=client)
 
@@ -468,6 +491,8 @@ def main() -> None:
     parser.add_argument("--upload-files", action="store_true", help="Upload pushed member PDFs and photos to S3-compatible storage.")
     parser.add_argument("--upload-via-portal", action="store_true", help="Upload files through the portal API so S3 credentials stay on Railway.")
     parser.add_argument("--upload-workers", type=int, default=4, help="Concurrent file uploads when using --upload-via-portal.")
+    parser.add_argument("--upload-changed-only", action="store_true", help="Upload only files added or changed since the local manifest.")
+    parser.add_argument("--storage-bucket", default=os.getenv("AWS_S3_BUCKET_NAME"), help="S3 bucket name used to build URIs for unchanged uploaded files.")
     parser.add_argument("--storage-prefix", default=os.getenv("S3_PREFIX", DEFAULT_STORAGE_PREFIX), help="Object key prefix for uploaded files.")
     args = parser.parse_args()
 
@@ -478,7 +503,7 @@ def main() -> None:
     diff = diff_manifest(scan, previous)
     print_scan_report(scan, diff=diff)
 
-    if args.write_manifest:
+    if args.write_manifest and not args.push_members:
         save_manifest(scan, manifest_path)
         print(f"Manifest written: {manifest_path}")
 
@@ -496,11 +521,17 @@ def main() -> None:
             portal_url=args.portal_url,
             sync_token=args.sync_token,
             upload_workers=args.upload_workers,
+            upload_changed_only=args.upload_changed_only,
+            changed_file_paths=set(diff.added + diff.changed),
+            storage_bucket=args.storage_bucket,
         )
         endpoint = args.portal_url.rstrip("/") + "/api/sync/members"
         result = post_json(endpoint, args.sync_token, payload)
         print("Sync API response:")
         print(json.dumps(result, indent=2))
+        if args.write_manifest:
+            save_manifest(scan, manifest_path)
+            print(f"Manifest written: {manifest_path}")
 
 
 if __name__ == "__main__":

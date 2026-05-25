@@ -1220,6 +1220,22 @@ def is_contract_member(member):
     return "contract" in plan_type
 
 
+def is_staff_membership(member):
+    membership_text = " ".join(
+        value for value in [
+            member.plan_type,
+            member.contract_type,
+            member.billing_type,
+            member.billing_option,
+        ] if value
+    ).lower()
+    return any(term in membership_text for term in ["medewerker", "employee", "staff"])
+
+
+def cancellation_portal_available_for_member(member):
+    return not is_staff_membership(member)
+
+
 def requires_direct_debit_mandate(member):
     if not is_contract_member(member):
         return False
@@ -1276,6 +1292,7 @@ def payment_status_for_member(member, today=None):
             "label": "Open balance",
             "severity": "warning",
             "reason": f"Outstanding balance is ${balance:.2f}.",
+            "balance": balance,
         }
 
     return {
@@ -1293,8 +1310,12 @@ def localized_payment_status(payment_status, language=DEFAULT_LANGUAGE):
     reason_template = translate(f"payment_status_{status_key}_reason", language)
     if reason_template == f"payment_status_{status_key}_reason":
         return localized
+    today = date.today()
+    end_of_month = date(today.year, today.month, calendar.monthrange(today.year, today.month)[1])
     localized["reason"] = reason_template.format(
         reason=payment_status.get("reason", ""),
+        amount=f"${payment_status.get('balance', 0):,.2f}",
+        end_of_month=fmt_policy_date(end_of_month, language),
     )
     return localized
 
@@ -1860,7 +1881,13 @@ def member_dashboard_context(member, staff_admin_view=False):
     payment_status = localized_payment_status(payment_status_for_member(member), language)
     cancellation_request = active_cancellation_request_for_member(member)
     cancellation_request_message = cancellation_request_member_message(cancellation_request, language=language)
-    show_cancel = policy.can_request and not staff_admin_view and not cancellation_request
+    show_cancellation_section = cancellation_portal_available_for_member(member) or bool(cancellation_request)
+    show_cancel = (
+        show_cancellation_section
+        and policy.can_request
+        and not staff_admin_view
+        and not cancellation_request
+    )
 
     def fmt_value(val, typ):
         if val in (None, "", 0, 0.0):
@@ -1901,6 +1928,7 @@ def member_dashboard_context(member, staff_admin_view=False):
         "cancellation_policy": policy,
         "cancellation_request": cancellation_request,
         "cancellation_request_message": cancellation_request_message,
+        "show_cancellation_section": show_cancellation_section,
         "show_cancel": show_cancel,
         "cancel_window_open": fmt_policy_date(policy.window_open, language),
         "cancel_window_close": fmt_policy_date(policy.last_request_date, language),
@@ -2570,6 +2598,10 @@ def cancel():
     member = Member.query.filter_by(member_id=member_id).first_or_404()
     policy = cancellation_policy_for_member(member)
     existing_request = active_cancellation_request_for_member(member)
+    if not cancellation_portal_available_for_member(member):
+        flash(translated_text("cancel_not_available_for_membership", current_language()))
+        return redirect(url_for("dashboard", id=member_id))
+
     if existing_request:
         flash(translated_text("cancel_already_reviewing", current_language()))
         return redirect(url_for("dashboard", id=member_id))
