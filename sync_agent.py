@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 import json
@@ -204,6 +205,35 @@ def post_file(url: str, token: str, path: Path, key: str, timeout: int = 180) ->
         raise RuntimeError(f"Could not reach file upload API: {exc}") from exc
 
 
+def upload_files_parallel(upload_tasks: list[tuple[str, Path]], portal_url: str, token: str, workers: int = 4) -> dict[str, str]:
+    if not upload_tasks:
+        return {}
+
+    endpoint = portal_url.rstrip("/") + "/api/sync/files"
+    completed = 0
+    total = len(upload_tasks)
+    results: dict[str, str] = {}
+
+    def upload_one(task):
+        key, path = task
+        result = post_file(endpoint, token, path, key)
+        uri = result.get("uri")
+        if not uri:
+            raise RuntimeError(f"File upload API did not return a URI for {path}")
+        return key, uri
+
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+        futures = [executor.submit(upload_one, task) for task in upload_tasks]
+        for future in as_completed(futures):
+            key, uri = future.result()
+            results[key] = uri
+            completed += 1
+            if completed == 1 or completed % 50 == 0 or completed == total:
+                print(f"Uploaded {completed}/{total} files")
+
+    return results
+
+
 def upload_file_to_portal(source_root: Path, path: Path, prefix: str, portal_url: str, token: str) -> str:
     relative = relative_path(path.resolve(), source_root.resolve())
     key = storage_key(prefix, relative)
@@ -261,6 +291,7 @@ def build_sync_payload(
     upload_via_portal: bool = False,
     portal_url: str | None = None,
     sync_token: str | None = None,
+    upload_workers: int = 4,
 ) -> dict:
     source_root = source_root.resolve()
     backup = latest_backup_path(source_root)
@@ -275,35 +306,60 @@ def build_sync_payload(
     if upload_files and upload_via_portal and (not portal_url or not sync_token):
         raise ValueError("portal_url and sync_token are required when upload_via_portal is enabled.")
     client = None if upload_via_portal else (s3_client() if upload_files else None)
+    portal_upload_uris = {}
+
+    if upload_files and upload_via_portal:
+        upload_task_map: dict[str, Path] = {}
+        for member in members:
+            member_id = str(member["member_id"])
+            records = infer_member_document_records(member_id, attachment_root)
+            for record in records:
+                path = Path(record.get("path") or "")
+                if path.exists() and path.is_file():
+                    key = storage_key(storage_prefix, relative_path(path.resolve(), source_root))
+                    upload_task_map[key] = path
+            photo = member_photo_path(member_id, source_root)
+            if photo:
+                key = storage_key(storage_prefix, relative_path(photo.resolve(), source_root))
+                upload_task_map[key] = photo
+
+        print(f"Uploading {len(upload_task_map)} files through portal API...")
+        portal_upload_uris = upload_files_parallel(
+            sorted(upload_task_map.items()),
+            portal_url=portal_url,
+            token=sync_token,
+            workers=upload_workers,
+        )
 
     if attachment_root.exists():
         for member in members:
             member_id = str(member["member_id"])
             records = infer_member_document_records(member_id, attachment_root)
             if records:
-                documents[member_id] = (
-                    uploaded_document_records(
-                        source_root,
-                        records,
-                        storage_prefix,
-                        client=client,
-                        portal_url=portal_url if upload_via_portal else None,
-                        sync_token=sync_token if upload_via_portal else None,
+                if upload_files and upload_via_portal:
+                    uploaded_records = []
+                    for record in records:
+                        updated = dict(record)
+                        path = Path(updated.get("path") or "")
+                        if path.exists() and path.is_file():
+                            key = storage_key(storage_prefix, relative_path(path.resolve(), source_root))
+                            updated["path"] = portal_upload_uris[key]
+                        uploaded_records.append(updated)
+                    documents[member_id] = uploaded_records
+                else:
+                    documents[member_id] = (
+                        uploaded_document_records(source_root, records, storage_prefix, client=client)
+                        if upload_files else records
                     )
-                    if upload_files else records
-                )
 
             if upload_files:
                 photo = member_photo_path(member_id, source_root)
                 if photo:
-                    member["photo_path"] = uploaded_source_file(
-                        source_root,
-                        photo,
-                        storage_prefix,
-                        client=client,
-                        portal_url=portal_url if upload_via_portal else None,
-                        sync_token=sync_token if upload_via_portal else None,
-                    )
+                    if upload_via_portal:
+                        key = storage_key(storage_prefix, relative_path(photo.resolve(), source_root))
+                        member["photo_path"] = portal_upload_uris[key]
+                    else:
+                        member["photo_path"] = upload_source_file(source_root, photo, storage_prefix, client=client)
 
     return {
         "source": str(source_root),
@@ -411,6 +467,7 @@ def main() -> None:
     parser.add_argument("--member-limit", type=int, help="Limit pushed members for testing.")
     parser.add_argument("--upload-files", action="store_true", help="Upload pushed member PDFs and photos to S3-compatible storage.")
     parser.add_argument("--upload-via-portal", action="store_true", help="Upload files through the portal API so S3 credentials stay on Railway.")
+    parser.add_argument("--upload-workers", type=int, default=4, help="Concurrent file uploads when using --upload-via-portal.")
     parser.add_argument("--storage-prefix", default=os.getenv("S3_PREFIX", DEFAULT_STORAGE_PREFIX), help="Object key prefix for uploaded files.")
     args = parser.parse_args()
 
@@ -438,6 +495,7 @@ def main() -> None:
             upload_via_portal=args.upload_via_portal,
             portal_url=args.portal_url,
             sync_token=args.sync_token,
+            upload_workers=args.upload_workers,
         )
         endpoint = args.portal_url.rstrip("/") + "/api/sync/members"
         result = post_json(endpoint, args.sync_token, payload)
