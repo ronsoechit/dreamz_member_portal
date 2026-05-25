@@ -152,7 +152,7 @@ def normalize_member_row(row: list[str], row_number: int) -> tuple[dict | None, 
     values.extend([""] * (len(GA_COLUMNS) - len(values)))
 
     member_id = values[0].strip()
-    if not member_id.isdigit():
+    if not member_id.isdigit() or int(member_id) <= 0:
         return None, [
             ImportIssue(row_number, "member_id", values[0], "Skipped row without numeric member id")
         ]
@@ -183,7 +183,7 @@ def normalize_member_row(row: list[str], row_number: int) -> tuple[dict | None, 
 def normalize_backup_record(fields: dict[str, str], record_number: int) -> tuple[dict | None, list[ImportIssue]]:
     issues: list[ImportIssue] = []
     member_id = (fields.get("MN") or "").strip()
-    if not member_id.isdigit():
+    if not member_id.isdigit() or int(member_id) <= 0:
         return None, [
             ImportIssue(record_number, "member_id", member_id, "Skipped record without numeric member id")
         ]
@@ -343,6 +343,51 @@ def _parse_backup_text(text: str) -> ImportResult:
 def parse_members_btx(path: str | Path) -> ImportResult:
     text = Path(path).read_text(encoding="latin-1")
     return _parse_backup_text(text)
+
+
+def _parse_member_log_text(text: str) -> ImportResult:
+    issues: list[ImportIssue] = []
+    members: list[dict] = []
+
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        line = line.strip()
+        if not line:
+            continue
+
+        payload = line
+        if "|" in line:
+            parts = line.split("|", 3)
+            if len(parts) < 4:
+                continue
+            payload = parts[3]
+
+        if "MN=" not in payload:
+            continue
+
+        fields: dict[str, str] = {}
+        for item in payload.replace("\t", "\n").splitlines():
+            item = item.strip()
+            if not item or item == "-" or "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            fields[key] = value
+
+        if not fields:
+            continue
+
+        member, row_issues = normalize_backup_record(fields, line_number)
+        issues.extend(row_issues)
+        if member:
+            members.append(member)
+
+    return ImportResult(members, issues)
+
+
+def parse_member_log(path: str | Path) -> ImportResult:
+    text = Path(path).read_text(encoding="latin-1", errors="replace")
+    if "\t" not in text and "|" not in text and re.search(r"(?m)^MN=", text):
+        return parse_members_btx(path)
+    return _parse_member_log_text(text)
 
 
 def parse_gymassistant_backup(path: str | Path) -> ImportResult:

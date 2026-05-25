@@ -34,6 +34,19 @@ def write_members_btx(path: Path, member_id: str = "100") -> None:
     ]), encoding="latin-1")
 
 
+def write_member_log(path: Path, member_id: str = "101") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        (
+            "2026/05/25 15:30:00|FRONTDESK|Gym Assistant|"
+            f"MN={member_id}\tLN=Live\tFN=Added\tMTN=week pass\t"
+            "EM=added@example.com\tCB=20260525\tSU=20260525\t"
+            "LP=20260525\tPU=20260625\tR$=4500\tN$=4500\t$B=0\tBT=1 MONTHS INV\tST=0\t-\t\n"
+        ),
+        encoding="latin-1",
+    )
+
+
 class SyncAgentTests(unittest.TestCase):
     def test_scan_source_summarizes_relevant_gymassistant_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -93,6 +106,31 @@ class SyncAgentTests(unittest.TestCase):
         self.assertIn("Members.dat is newer", scan.warning)
         self.assertIn("Members.dat is newer", payload["warning"])
         self.assertIn("Data/Members.dat", [item.path for item in scan.files])
+
+    def test_build_sync_payload_applies_live_member_logs_newer_than_backup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            backup_dir = data_dir / "Backup"
+            backup_dir.mkdir(parents=True)
+            backup = backup_dir / "GABackup-test.gbu"
+            write_backup(backup, member_id="100")
+            live_dat = data_dir / "Members.dat"
+            live_dat.write_bytes(b"live binary member data")
+            log_file = data_dir / "Temp Files" / "Member Updates" / "EditMembers 2026-05-25.txt"
+            write_member_log(log_file, member_id="101")
+            os.utime(backup, (1000, 1000))
+            os.utime(live_dat, (2000, 2000))
+            os.utime(log_file, (2000, 2000))
+
+            scan = scan_source(root)
+            payload = build_sync_payload(root)
+
+        member_ids = {member["member_id"] for member in payload["members"]}
+        self.assertEqual(scan.warning, None)
+        self.assertEqual(scan.member_count, 2)
+        self.assertIn("101", member_ids)
+        self.assertIn("Data/Temp Files/Member Updates/EditMembers 2026-05-25.txt", [item.path for item in scan.files])
 
     def test_manifest_diff_detects_added_changed_and_removed_files(self):
         with tempfile.TemporaryDirectory() as tmp:

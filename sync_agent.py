@@ -11,7 +11,7 @@ from typing import Iterable
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
 
-from ga_import import parse_gymassistant_export
+from ga_import import ImportIssue, ImportResult, parse_gymassistant_export, parse_member_log
 from ga_documents import infer_member_document_records
 from storage_backend import s3_client, upload_file_to_s3
 
@@ -70,6 +70,10 @@ def backup_root(source_root: Path) -> Path:
     return data_root(source_root) / "Backup"
 
 
+def temp_files_root(source_root: Path) -> Path:
+    return data_root(source_root) / "Temp Files"
+
+
 def live_members_path(source_root: Path) -> Path:
     return data_root(source_root) / "Members.btx"
 
@@ -86,16 +90,55 @@ def latest_backup_path(source_root: Path) -> Path | None:
     return max(backups, key=lambda path: path.stat().st_mtime) if backups else None
 
 
+def iter_member_log_files(source_root: Path, backup: Path | None = None) -> Iterable[Path]:
+    root = temp_files_root(source_root)
+    if not root.exists():
+        return
+
+    candidates = [
+        root / "AddedMembers.btx",
+        root / "Added Members.txt",
+    ]
+    update_root = root / "Member Updates"
+    if update_root.exists():
+        candidates.extend(sorted(update_root.glob("EditMembers*.txt"), key=lambda path: path.stat().st_mtime))
+
+    backup_mtime = backup.stat().st_mtime if backup else None
+    seen: set[Path] = set()
+    for path in candidates:
+        if not path.exists() or not path.is_file() or path in seen:
+            continue
+        seen.add(path)
+        if backup_mtime is not None and path.stat().st_mtime <= backup_mtime:
+            continue
+        yield path
+
+
 def live_member_data_warning(source_root: Path, backup: Path | None) -> str | None:
     live_dat = live_members_dat_path(source_root)
     if not backup or not live_dat.exists():
         return None
-    if live_dat.stat().st_mtime > backup.stat().st_mtime:
+    if live_dat.stat().st_mtime > backup.stat().st_mtime and not any(iter_member_log_files(source_root, backup)):
         return (
             "GymAssistant Members.dat is newer than the latest .gbu backup. "
             "The portal imported the latest backup, so recently added or edited members may not appear until a new GymAssistant backup is created."
         )
     return None
+
+
+def parse_members_with_live_logs(member_source: Path) -> ImportResult:
+    result = parse_gymassistant_export(member_source)
+    member_map = {str(member["member_id"]): dict(member) for member in result.members}
+    issues: list[ImportIssue] = list(result.issues)
+    backup = member_source if member_source.suffix.lower() == ".gbu" else None
+    source_root = member_source.parents[2] if len(member_source.parents) >= 3 and member_source.parent.name == "Backup" else None
+    if source_root:
+        for log_file in iter_member_log_files(source_root, backup):
+            log_result = parse_member_log(log_file)
+            issues.extend(log_result.issues)
+            for member in log_result.members:
+                member_map[str(member["member_id"])] = dict(member)
+    return ImportResult(list(member_map.values()), issues)
 
 
 def relative_path(path: Path, source_root: Path) -> str:
@@ -148,12 +191,14 @@ def scan_source(source_root: Path) -> SyncScan:
         member_count = len(parse_gymassistant_export(live_members).members)
     elif backup:
         member_source = backup
-        member_count = len(parse_gymassistant_export(backup).members)
+        member_count = len(parse_members_with_live_logs(backup).members)
 
     if backup:
         files.append(file_signature(backup, source_root, "backup"))
     if live_dat.exists():
         files.append(file_signature(live_dat, source_root, "live_member_data"))
+    for log_file in iter_member_log_files(source_root, backup):
+        files.append(file_signature(log_file, source_root, "member_log"))
 
     files.extend(iter_attachment_files(source_root) or [])
     files.extend(iter_photo_files(source_root) or [])
@@ -348,7 +393,7 @@ def build_sync_payload(
             f"No live Members.btx or GymAssistant .gbu backup found under {data_root(source_root)}"
         )
 
-    import_result = parse_gymassistant_export(member_source)
+    import_result = parse_members_with_live_logs(member_source) if member_source.suffix.lower() == ".gbu" else parse_gymassistant_export(member_source)
     source_members = import_result.members[:member_limit] if member_limit else import_result.members
     members = [dict(member) for member in source_members]
     attachment_root = attachments_root(source_root)
