@@ -40,6 +40,7 @@ S3_REGION=<region, or auto>
 S3_ACCESS_KEY_ID=<storage access key>
 S3_SECRET_ACCESS_KEY=<storage secret key>
 S3_PREFIX=gymassistant
+S3_ADDRESSING_STYLE=virtual
 ```
 
 ### First staging test
@@ -79,6 +80,7 @@ $env:S3_REGION="<region or auto>"
 $env:S3_ACCESS_KEY_ID="<storage access key>"
 $env:S3_SECRET_ACCESS_KEY="<storage secret key>"
 $env:S3_PREFIX="gymassistant"
+$env:S3_ADDRESSING_STYLE="virtual"
 
 .\.venv\Scripts\python.exe sync_agent.py `
   --source-root "D:\Dreamz Fitness\Gym Assistant 2.6" `
