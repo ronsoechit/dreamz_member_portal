@@ -18,6 +18,14 @@ from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
 from dreamz_portal import CancellationRequest, Member, MemberDocument, MemberLoginCode, app, cancellation_message, db  # noqa: E402
 
 
+class FakeS3Body:
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def iter_chunks(self):
+        return iter(self._chunks)
+
+
 class PortalRouteTests(unittest.TestCase):
     def setUp(self):
         app.config["TESTING"] = True
@@ -241,6 +249,18 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.mimetype, "application/pdf")
 
+    def test_member_document_file_serves_s3_pdf_for_logged_in_owner(self):
+        self.add_member(member_id="1206")
+        document = self.add_document(member_id="1206", path="s3://dreamz-test/portal/Data/Attachments/0001206/contract.pdf")
+        self.login_as("1206")
+
+        with patch("dreamz_portal.open_s3_object", return_value=FakeS3Body([b"%PDF s3"])):
+            response = self.client.get(f"/documents/item/{document.id}/file")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "application/pdf")
+        self.assertEqual(response.get_data(), b"%PDF s3")
+
     def test_member_document_file_rejects_other_member(self):
         self.add_member(member_id="1206")
         self.add_member(member_id="2204")
@@ -278,6 +298,16 @@ class PortalRouteTests(unittest.TestCase):
             response.close()
 
         self.assertEqual(response.status_code, 200)
+
+    def test_member_photo_serves_s3_image_for_logged_in_owner(self):
+        self.add_member(member_id="1206", photo_path="s3://dreamz-test/portal/Data/Pictures/0001206.jpg")
+        self.login_as("1206")
+
+        with patch("dreamz_portal.open_s3_object", return_value=FakeS3Body([b"photo"])):
+            response = self.client.get("/member-photo/1206")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_data(), b"photo")
 
     def test_member_photo_rejects_other_member(self):
         self.add_member(member_id="1206")

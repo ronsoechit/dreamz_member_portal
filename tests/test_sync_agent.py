@@ -2,6 +2,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 
 from sync_agent import build_sync_payload, diff_manifest, load_manifest, save_manifest, scan_source
 
@@ -81,6 +82,33 @@ class SyncAgentTests(unittest.TestCase):
             self.assertIn("generated_at", payload)
             self.assertIn("100", payload["documents"])
             self.assertEqual(payload["documents"]["100"][0]["document_type"], "contract")
+
+    def test_build_sync_payload_can_upload_documents_and_photos(self):
+        uploaded = []
+
+        def fake_upload(path, key, bucket=None, client=None):
+            uploaded.append((Path(path).name, key))
+            return f"s3://dreamz-test/{key}"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            backup_dir = root / "Data" / "Backup"
+            attachment_dir = root / "Data" / "Attachments" / "0000100"
+            photo_dir = root / "Data" / "Pictures"
+            backup_dir.mkdir(parents=True)
+            attachment_dir.mkdir(parents=True)
+            photo_dir.mkdir(parents=True)
+            write_backup(backup_dir / "GABackup-test.gbu")
+            (attachment_dir / "contract.pdf").write_bytes(b"%PDF contract")
+            (photo_dir / "0000100.jpg").write_bytes(b"photo")
+
+            with patch("sync_agent.s3_client", return_value=object()), patch("sync_agent.upload_file_to_s3", side_effect=fake_upload):
+                payload = build_sync_payload(root, upload_files=True, storage_prefix="portal")
+
+        self.assertIn(("contract.pdf", "portal/Data/Attachments/0000100/contract.pdf"), uploaded)
+        self.assertIn(("0000100.jpg", "portal/Data/Pictures/0000100.jpg"), uploaded)
+        self.assertEqual(payload["documents"]["100"][0]["path"], "s3://dreamz-test/portal/Data/Attachments/0000100/contract.pdf")
+        self.assertEqual(payload["members"][0]["photo_path"], "s3://dreamz-test/portal/Data/Pictures/0000100.jpg")
 
 
 if __name__ == "__main__":

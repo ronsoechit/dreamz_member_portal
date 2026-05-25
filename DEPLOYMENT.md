@@ -33,6 +33,13 @@ SMTP_PASS=<smtp password>
 SMTP_FROM=<sender email>
 SMTP_FROM_NAME=Dreamz Fitness
 DIRECT_DEBIT_DAY=28
+STORAGE_BACKEND=s3
+S3_BUCKET=<bucket name>
+S3_ENDPOINT_URL=<S3-compatible endpoint URL>
+S3_REGION=<region, or auto>
+S3_ACCESS_KEY_ID=<storage access key>
+S3_SECRET_ACCESS_KEY=<storage secret key>
+S3_PREFIX=gymassistant
 ```
 
 ### First staging test
@@ -56,3 +63,26 @@ $env:SYNC_API_TOKEN="<same token as Railway>"
 ### Storage note
 
 The full GymAssistant folder is not uploaded to Railway. The portal database stores structured member data and document metadata. PDFs/photos should be uploaded to object storage once the storage adapter is enabled.
+
+### File storage sync
+
+Use an S3-compatible bucket for PDFs and member photos. Keep the bucket private; the portal proxies authenticated document/photo requests.
+
+After setting the same S3 variables locally, run:
+
+```powershell
+$env:SYNC_API_TOKEN="<same token as Railway>"
+$env:STORAGE_BACKEND="s3"
+$env:S3_BUCKET="<bucket name>"
+$env:S3_ENDPOINT_URL="<S3-compatible endpoint URL>"
+$env:S3_REGION="<region or auto>"
+$env:S3_ACCESS_KEY_ID="<storage access key>"
+$env:S3_SECRET_ACCESS_KEY="<storage secret key>"
+$env:S3_PREFIX="gymassistant"
+
+.\.venv\Scripts\python.exe sync_agent.py `
+  --source-root "D:\Dreamz Fitness\Gym Assistant 2.6" `
+  --portal-url "https://<railway-app-url>" `
+  --push-members `
+  --upload-files
+```

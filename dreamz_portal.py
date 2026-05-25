@@ -28,6 +28,7 @@ from translations import (
     normalize_language,
     translate,
 )
+from storage_backend import is_s3_uri, open_s3_object, s3_download_name
 
 import csv
 import secrets
@@ -927,6 +928,9 @@ def is_path_under_root(path, root):
 
 
 def resolved_document_path(document_path):
+    if is_s3_uri(document_path):
+        return None
+
     path = Path(document_path)
     candidates = [path] if path.is_absolute() else [
         Path(app.static_folder) / path,
@@ -946,6 +950,8 @@ def resolved_document_path(document_path):
 
 def resolved_photo_path(photo_path):
     if not photo_path:
+        return None
+    if is_s3_uri(photo_path):
         return None
 
     path = Path(photo_path)
@@ -1173,6 +1179,8 @@ def member_has_document_type(member, document_type, legacy_field=None):
 def path_exists(path_value):
     if not path_value:
         return False
+    if is_s3_uri(path_value):
+        return True
     try:
         return Path(path_value).exists()
     except OSError:
@@ -2253,6 +2261,14 @@ def mask_email(email):
     return f"{masked_local}@{domain}"
 
 
+def storage_file_response(uri, download_name=None, mimetype=None, as_attachment=False):
+    body = open_s3_object(uri)
+    filename = download_name or s3_download_name(uri)
+    disposition = "attachment" if as_attachment else "inline"
+    headers = {"Content-Disposition": f'{disposition}; filename="{filename}"'}
+    return Response(body.iter_chunks(), mimetype=mimetype, headers=headers)
+
+
 @app.get("/documents/<document_type>")
 def view_document(document_type):
     member, redirect_response = current_member_or_redirect()
@@ -2278,6 +2294,14 @@ def document_file(document_type):
         return redirect_response
 
     config, document_path = member_document_path_or_404(member, document_type)
+    if is_s3_uri(document_path):
+        return storage_file_response(
+            document_path,
+            as_attachment=request.args.get("download") == "1",
+            download_name=f"{member.member_id}-{config['filename']}",
+            mimetype="application/pdf",
+        )
+
     resolved_path = resolved_document_path(document_path)
     if resolved_path:
         return send_file(
@@ -2324,6 +2348,14 @@ def member_document_file(document_id):
         return redirect_response
     member, document = result
 
+    if is_s3_uri(document.path):
+        return storage_file_response(
+            document.path,
+            as_attachment=request.args.get("download") == "1",
+            download_name=f"{member.member_id}-{document.document_type}-{document.id}.pdf",
+            mimetype="application/pdf",
+        )
+
     resolved_path = resolved_document_path(document.path)
     if not resolved_path:
         abort(404, "Document file not found.")
@@ -2342,6 +2374,9 @@ def member_photo(member_id):
         abort(404)
 
     member = Member.query.filter_by(member_id=member_id).first_or_404()
+    if is_s3_uri(member.photo_path):
+        return storage_file_response(member.photo_path, mimetype="image/jpeg")
+
     resolved_path = resolved_photo_path(member.photo_path)
     if not resolved_path:
         abort(404, "Photo not found.")

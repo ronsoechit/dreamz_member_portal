@@ -12,10 +12,12 @@ from urllib.error import HTTPError, URLError
 
 from ga_import import parse_gymassistant_export
 from ga_documents import infer_member_document_records
+from storage_backend import s3_client, upload_file_to_s3
 
 
 DEFAULT_GYM_ASSISTANT_ROOT = Path(r"D:\Dreamz Fitness\Gym Assistant 2.6")
 DEFAULT_MANIFEST_PATH = Path("instance/sync_manifest.json")
+DEFAULT_STORAGE_PREFIX = "gymassistant"
 PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
 
 
@@ -156,22 +158,73 @@ def json_safe_member(member: dict) -> dict:
     }
 
 
-def build_sync_payload(source_root: Path, member_limit: int | None = None) -> dict:
+def storage_key(prefix: str, relative_file_path: str) -> str:
+    prefix = prefix.strip("/")
+    relative_file_path = relative_file_path.replace("\\", "/").lstrip("/")
+    return f"{prefix}/{relative_file_path}" if prefix else relative_file_path
+
+
+def member_photo_path(member_id: str, source_root: Path) -> Path | None:
+    root = photos_root(source_root)
+    if not root.exists():
+        return None
+
+    stem = str(member_id).strip().zfill(7)
+    for extension in sorted(PHOTO_EXTENSIONS):
+        candidate = root / f"{stem}{extension}"
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def upload_source_file(source_root: Path, path: Path, prefix: str, client=None) -> str:
+    relative = relative_path(path.resolve(), source_root.resolve())
+    return upload_file_to_s3(path, storage_key(prefix, relative), client=client)
+
+
+def uploaded_document_records(source_root: Path, records: list[dict[str, str]], prefix: str, client=None) -> list[dict[str, str]]:
+    uploaded = []
+    for record in records:
+        updated = dict(record)
+        path = Path(updated.get("path") or "")
+        if path.exists() and path.is_file():
+            updated["path"] = upload_source_file(source_root, path, prefix, client=client)
+        uploaded.append(updated)
+    return uploaded
+
+
+def build_sync_payload(
+    source_root: Path,
+    member_limit: int | None = None,
+    upload_files: bool = False,
+    storage_prefix: str = DEFAULT_STORAGE_PREFIX,
+) -> dict:
     source_root = source_root.resolve()
     backup = latest_backup_path(source_root)
     if not backup:
         raise FileNotFoundError(f"No GymAssistant .gbu backup found under {backup_root(source_root)}")
 
     import_result = parse_gymassistant_export(backup)
-    members = import_result.members[:member_limit] if member_limit else import_result.members
+    source_members = import_result.members[:member_limit] if member_limit else import_result.members
+    members = [dict(member) for member in source_members]
     attachment_root = attachments_root(source_root)
     documents = {}
+    client = s3_client() if upload_files else None
+
     if attachment_root.exists():
         for member in members:
             member_id = str(member["member_id"])
             records = infer_member_document_records(member_id, attachment_root)
             if records:
-                documents[member_id] = records
+                documents[member_id] = (
+                    uploaded_document_records(source_root, records, storage_prefix, client=client)
+                    if upload_files else records
+                )
+
+            if upload_files:
+                photo = member_photo_path(member_id, source_root)
+                if photo:
+                    member["photo_path"] = upload_source_file(source_root, photo, storage_prefix, client=client)
 
     return {
         "source": str(source_root),
@@ -277,6 +330,8 @@ def main() -> None:
     parser.add_argument("--sync-token", default=os.getenv("SYNC_API_TOKEN"), help="Sync API token. Defaults to SYNC_API_TOKEN.")
     parser.add_argument("--push-members", action="store_true", help="Push member and document metadata to the portal sync API.")
     parser.add_argument("--member-limit", type=int, help="Limit pushed members for testing.")
+    parser.add_argument("--upload-files", action="store_true", help="Upload pushed member PDFs and photos to S3-compatible storage.")
+    parser.add_argument("--storage-prefix", default=os.getenv("S3_PREFIX", DEFAULT_STORAGE_PREFIX), help="Object key prefix for uploaded files.")
     args = parser.parse_args()
 
     source_root = Path(args.source_root)
@@ -295,7 +350,12 @@ def main() -> None:
             raise SystemExit("--portal-url is required with --push-members")
         if not args.sync_token:
             raise SystemExit("--sync-token or SYNC_API_TOKEN is required with --push-members")
-        payload = build_sync_payload(source_root, member_limit=args.member_limit)
+        payload = build_sync_payload(
+            source_root,
+            member_limit=args.member_limit,
+            upload_files=args.upload_files,
+            storage_prefix=args.storage_prefix,
+        )
         endpoint = args.portal_url.rstrip("/") + "/api/sync/members"
         result = post_json(endpoint, args.sync_token, payload)
         print("Sync API response:")
