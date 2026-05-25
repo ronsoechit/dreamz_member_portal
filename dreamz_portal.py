@@ -1941,7 +1941,11 @@ def api_sync_file_upload():
     if not data:
         abort(400, "No file data received.")
 
-    uri = upload_bytes_to_s3(data, key, content_type=content_type)
+    try:
+        uri = upload_bytes_to_s3(data, key, content_type=content_type)
+    except Exception as exc:
+        app.logger.exception("Sync file upload failed for key %s", key)
+        return {"status": "failed", "error": str(exc), "key": key}, 500
     return {"status": "success", "uri": uri, "key": key, "bytes": len(data)}
 
 
