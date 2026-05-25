@@ -332,6 +332,33 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("cancellation request received", body)
         self.assertIn("member@example.com", body)
 
+    def test_staff_email_log_review_count_ignores_login_code_logs(self):
+        db.session.add(EmailLog(
+            delivery_mode="log",
+            status="logged",
+            to_addresses="member@example.com",
+            subject="Dreamz Fitness - member portal login code",
+            body="Login code",
+        ))
+        db.session.add(EmailLog(
+            delivery_mode="log",
+            status="logged",
+            to_addresses="member@example.com",
+            subject="Dreamz Fitness - cancellation request received",
+            body="Cancellation",
+        ))
+        db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+
+        response = self.client.get("/staff/email-log?review=open")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("cancellation request received", body)
+        self.assertNotIn("member portal login code", body)
+
     def test_cancellation_status_update_to_processed_sends_confirmation(self):
         self.add_member(last_payment=date(2026, 5, 1), next_payment=date(2026, 6, 1))
         db.session.add(StaffUser(

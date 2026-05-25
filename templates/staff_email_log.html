@@ -39,13 +39,14 @@
 
 <div class="space-y-3">
   {% for email in logs %}
-    <details class="rounded border {% if not email.reviewed_at %}border-yellow-500/50{% else %}border-gray-700{% endif %} bg-gray-800/40 p-4">
+    {% set requires_review = email_log_requires_review(email) %}
+    <details class="rounded border {% if requires_review %}border-yellow-500/50{% else %}border-gray-700{% endif %} bg-gray-800/40 p-4">
       <summary class="cursor-pointer">
         <div class="inline-flex flex-wrap items-center gap-3">
           <span class="text-sm text-gray-400">{{ email.created_at|format_date('%d/%m/%Y %H:%M') }}</span>
-          {% if not email.reviewed_at %}
+          {% if requires_review %}
             <span class="rounded bg-yellow-500 px-2 py-1 text-xs font-semibold text-black">new</span>
-          {% else %}
+          {% elif email.reviewed_at %}
             <span class="rounded bg-gray-700 px-2 py-1 text-xs text-gray-300">reviewed</span>
           {% endif %}
           <span class="rounded px-2 py-1 text-xs font-semibold {% if email.status == 'sent' %}bg-green-500/20 text-green-200{% elif email.status == 'failed' %}bg-red-500/20 text-red-200{% else %}bg-yellow-500/20 text-yellow-200{% endif %}">
@@ -71,7 +72,7 @@
               <dd class="text-red-200">{{ email.error }}</dd>
             {% endif %}
           </dl>
-          {% if not email.reviewed_at %}
+          {% if requires_review %}
             <form method="post" action="{{ url_for('staff_email_log_review', email_id=email.id, status=selected_status, review=review_filter) }}" class="mt-4">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button type="submit" class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black hover:bg-yellow-400">Mark reviewed</button>

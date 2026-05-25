@@ -743,7 +743,24 @@ def open_cancellation_count():
 
 
 def open_email_log_count():
-    return EmailLog.query.filter(EmailLog.reviewed_at.is_(None)).count()
+    return EmailLog.query.filter(email_log_review_required_filter()).count()
+
+
+def email_log_review_required_filter():
+    return db.and_(
+        EmailLog.reviewed_at.is_(None),
+        db.or_(
+            EmailLog.status == "failed",
+            EmailLog.subject.ilike("%cancellation%"),
+        ),
+    )
+
+
+def email_log_requires_review(email):
+    if not email or email.reviewed_at:
+        return False
+    subject = (email.subject or "").lower()
+    return email.status == "failed" or "cancellation" in subject
 
 
 def cancellation_request_member_message(request_record, language=DEFAULT_LANGUAGE):
@@ -2090,10 +2107,10 @@ def staff_email_log():
     if selected_status:
         query = query.filter_by(status=selected_status)
     if review_filter == "open":
-        query = query.filter(EmailLog.reviewed_at.is_(None))
+        query = query.filter(email_log_review_required_filter())
     logs = query.order_by(EmailLog.created_at.desc()).limit(100).all()
     counts = {
-        "open": EmailLog.query.filter(EmailLog.reviewed_at.is_(None)).count(),
+        "open": EmailLog.query.filter(email_log_review_required_filter()).count(),
         "failed": EmailLog.query.filter_by(status="failed").count(),
         "sent": EmailLog.query.filter_by(status="sent").count(),
         "logged": EmailLog.query.filter_by(status="logged").count(),
@@ -2104,6 +2121,7 @@ def staff_email_log():
         counts=counts,
         selected_status=selected_status,
         review_filter=review_filter,
+        email_log_requires_review=email_log_requires_review,
     )
 
 
