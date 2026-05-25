@@ -107,16 +107,24 @@
   <!-- Documents -->
   <div class="bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">
     <h3 class="text-xl font-semibold mb-4 text-yellow-400">{{ t('documents') }}</h3>
-    {% if documents %}
-      <dl class="grid gap-y-3 text-sm" style="grid-template-columns: 10.5rem minmax(0, 1fr);">
-        {% for document in documents %}
-          <dt class="pr-4 font-semibold text-gray-200">{{ t_document_title(document.document_type) }}:</dt>
+    {% if document_groups %}
+      <dl class="grid gap-y-4 text-sm" style="grid-template-columns: 10.5rem minmax(0, 1fr);">
+        {% for group in document_groups %}
+          <dt class="pr-4 font-semibold text-gray-200">
+            {{ t_document_title(group.document_type) }}{% if group.documents|length > 1 %} ({{ group.documents|length }}){% endif %}:
+          </dt>
           <dd class="min-w-0">
-            <a class="text-green-400 underline" href="{{ url_for('view_member_document', document_id=document.id) }}" target="_blank" rel="noopener">{{ t('view') }}</a>
-            {% if document.source_filename %}
-              <span class="ml-2 text-xs text-gray-400 break-words">{{ document.source_filename }}</span>
-            {% endif %}
-            <p class="mt-1 text-xs leading-relaxed text-gray-400">{{ t_document_explanation(document.document_type) }}</p>
+            <ul class="space-y-2">
+              {% for document in group.documents %}
+                <li class="min-w-0">
+                  <a class="text-green-400 underline" href="{{ url_for('view_member_document', document_id=document.id) }}" target="_blank" rel="noopener">{{ t('view') }}</a>
+                  {% if document.source_filename %}
+                    <span class="ml-2 text-xs text-gray-400 break-words">{{ document.source_filename }}</span>
+                  {% endif %}
+                </li>
+              {% endfor %}
+            </ul>
+            <p class="mt-2 text-xs leading-relaxed text-gray-400">{{ t_document_explanation(group.document_type) }}</p>
           </dd>
         {% endfor %}
       </dl>

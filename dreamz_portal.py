@@ -525,6 +525,20 @@ DOCUMENT_TRANSLATION_KEYS = {
 }
 
 
+DOCUMENT_GROUP_ORDER = {
+    "signup_form": 10,
+    "contract": 20,
+    "direct_debit_mandate": 30,
+    "combined_contract_mandate": 35,
+    "group_pt": 40,
+    "cancellation": 50,
+    "id_document": 60,
+    "waiver": 70,
+    "receipt": 80,
+    "other": 90,
+}
+
+
 def translated_document_title(document_type, language=DEFAULT_LANGUAGE):
     key = DOCUMENT_TRANSLATION_KEYS.get(document_type, DOCUMENT_TRANSLATION_KEYS["other"])
     return translated_text(key, language)
@@ -1111,6 +1125,32 @@ def member_documents(member):
         .filter_by(member_id=member.member_id)
         .order_by(MemberDocument.display_order.asc(), MemberDocument.id.asc())
         .all()
+    )
+
+
+def member_document_groups(member):
+    groups = {}
+    for document in member_documents(member):
+        group = groups.setdefault(
+            document.document_type,
+            {
+                "document_type": document.document_type,
+                "documents": [],
+                "first_order": document.display_order,
+                "first_id": document.id,
+            },
+        )
+        group["documents"].append(document)
+        group["first_order"] = min(group["first_order"], document.display_order)
+        group["first_id"] = min(group["first_id"], document.id)
+
+    return sorted(
+        groups.values(),
+        key=lambda group: (
+            DOCUMENT_GROUP_ORDER.get(group["document_type"], DOCUMENT_GROUP_ORDER["other"]),
+            group["first_order"],
+            group["first_id"],
+        ),
     )
 
 
@@ -2136,6 +2176,7 @@ def member_dashboard_context(member, staff_admin_view=False):
         "display_name": display_member_name(member.name),
         "member_photo_available": member_photo_available,
         "documents": member_documents(member),
+        "document_groups": member_document_groups(member),
         "payment_status": payment_status,
         "info": info,
         "sub": sub,

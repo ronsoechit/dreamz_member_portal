@@ -239,6 +239,43 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Group PT 2022-04-27.pdf", body)
         self.assertIn(f"/documents/item/{document.id}", body)
 
+    def test_dashboard_groups_repeated_document_types(self):
+        self.add_member(member_id="80")
+        first = self.add_document(
+            member_id="80",
+            document_type="signup_form",
+            title="Signup Form",
+            source_filename="inscrip form 2024-01-08.pdf",
+        )
+        second = self.add_document(
+            member_id="80",
+            document_type="signup_form",
+            title="Signup Form",
+            source_filename="inscrip form 2025-01-03.pdf",
+            display_order=1,
+        )
+        contract = self.add_document(
+            member_id="80",
+            document_type="contract",
+            title="Contract",
+            source_filename="Contract 2025-01-03.pdf",
+            display_order=2,
+        )
+        self.login_as("80")
+
+        response = self.client.get("/dashboard?id=80")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Signup Form (2):", body)
+        self.assertEqual(body.count("Signup Form"), 1)
+        self.assertIn("inscrip form 2024-01-08.pdf", body)
+        self.assertIn("inscrip form 2025-01-03.pdf", body)
+        self.assertIn("Contract:", body)
+        self.assertIn(f"/documents/item/{first.id}", body)
+        self.assertIn(f"/documents/item/{second.id}", body)
+        self.assertIn(f"/documents/item/{contract.id}", body)
+
     def test_member_document_file_serves_pdf_for_logged_in_owner(self):
         self.add_member(member_id="1206")
         document = self.add_document(member_id="1206", path="contracts/1206_contract.pdf")
