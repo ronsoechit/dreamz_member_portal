@@ -260,6 +260,7 @@ class SyncAgentTests(unittest.TestCase):
                     upload_via_portal=True,
                     upload_changed_only=True,
                     changed_file_paths={"Data/Pictures/0000100.jpg"},
+                    existing_member_ids={"100"},
                     storage_bucket="dreamz-test",
                     portal_url="https://portal.example",
                     sync_token="sync-token",
@@ -269,6 +270,39 @@ class SyncAgentTests(unittest.TestCase):
         self.assertEqual(uploaded, [("0000100.jpg", "portal/Data/Pictures/0000100.jpg")])
         self.assertEqual(payload["documents"]["100"][0]["path"], "s3://dreamz-test/portal/Data/Attachments/0000100/contract.pdf")
         self.assertEqual(payload["members"][0]["photo_path"], "s3://dreamz-test/portal/Data/Pictures/0000100.jpg")
+
+    def test_build_sync_payload_uploads_new_member_files_even_when_unchanged_only(self):
+        uploaded = []
+
+        def fake_post_file(url, token, path, key):
+            uploaded.append((Path(path).name, key))
+            return {"uri": f"s3://dreamz-test/{key}"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            backup_dir = root / "Data" / "Backup"
+            attachment_dir = root / "Data" / "Attachments" / "0000101"
+            backup_dir.mkdir(parents=True)
+            attachment_dir.mkdir(parents=True)
+            write_backup(backup_dir / "GABackup-test.gbu", member_id="101")
+            (attachment_dir / "inscrip form 2026-05-25.pdf").write_bytes(b"%PDF signup")
+
+            with patch("sync_agent.post_file", side_effect=fake_post_file):
+                payload = build_sync_payload(
+                    root,
+                    upload_files=True,
+                    upload_via_portal=True,
+                    upload_changed_only=True,
+                    changed_file_paths=set(),
+                    existing_member_ids={"100"},
+                    storage_bucket="dreamz-test",
+                    portal_url="https://portal.example",
+                    sync_token="sync-token",
+                    storage_prefix="portal",
+                )
+
+        self.assertEqual(uploaded, [("inscrip form 2026-05-25.pdf", "portal/Data/Attachments/0000101/inscrip form 2026-05-25.pdf")])
+        self.assertEqual(payload["documents"]["101"][0]["path"], "s3://dreamz-test/portal/Data/Attachments/0000101/inscrip form 2026-05-25.pdf")
 
 
 if __name__ == "__main__":

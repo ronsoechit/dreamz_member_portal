@@ -2226,6 +2226,18 @@ def api_sync_file_upload():
     return {"status": "success", "uri": uri, "key": key, "bytes": len(data)}
 
 
+@app.get("/api/sync/member-ids")
+def api_sync_member_ids():
+    require_sync_access()
+    ensure_runtime_schema()
+    return {
+        "member_ids": [
+            member_id
+            for (member_id,) in db.session.query(Member.member_id).all()
+        ]
+    }
+
+
 @app.route("/staff/settings", methods=["GET", "POST"])
 def staff_settings():
     require_staff_access(required_role="admin")

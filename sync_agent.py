@@ -381,6 +381,7 @@ def build_sync_payload(
     upload_workers: int = 4,
     upload_changed_only: bool = False,
     changed_file_paths: set[str] | None = None,
+    existing_member_ids: set[str] | None = None,
     storage_bucket: str | None = None,
 ) -> dict:
     source_root = source_root.resolve()
@@ -405,12 +406,15 @@ def build_sync_payload(
     client = None if upload_via_portal else (s3_client() if upload_files else None)
     portal_upload_uris = {}
     changed_file_paths = changed_file_paths or set()
+    existing_member_ids = {str(member_id) for member_id in (existing_member_ids or set())}
 
     def file_storage_key(path: Path) -> str:
         return storage_key(storage_prefix, relative_path(path.resolve(), source_root))
 
-    def should_upload(path: Path) -> bool:
+    def should_upload(path: Path, member_id: str | None = None) -> bool:
         if not upload_changed_only:
+            return True
+        if member_id and member_id not in existing_member_ids:
             return True
         return relative_path(path.resolve(), source_root) in changed_file_paths
 
@@ -426,12 +430,12 @@ def build_sync_payload(
                 path = Path(record.get("path") or "")
                 if path.exists() and path.is_file():
                     key = file_storage_key(path)
-                    if should_upload(path):
+                    if should_upload(path, member_id=member_id):
                         upload_task_map[key] = path
             photo = member_photo_path(member_id, source_root)
             if photo:
                 key = file_storage_key(photo)
-                if should_upload(photo):
+                if should_upload(photo, member_id=member_id):
                     upload_task_map[key] = photo
 
         print(f"Uploading {len(upload_task_map)} files through portal API...")
@@ -503,6 +507,25 @@ def post_json(url: str, token: str, payload: dict, timeout: int = 60) -> dict:
         raise RuntimeError(f"Sync API returned HTTP {exc.code}: {detail}") from exc
     except URLError as exc:
         raise RuntimeError(f"Could not reach sync API: {exc}") from exc
+
+
+def get_existing_member_ids(portal_url: str, token: str, timeout: int = 60) -> set[str] | None:
+    endpoint = portal_url.rstrip("/") + "/api/sync/member-ids"
+    http_request = urlrequest.Request(
+        endpoint,
+        method="GET",
+        headers={"X-Sync-Token": token},
+    )
+    try:
+        with urlrequest.urlopen(http_request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+            payload = json.loads(raw) if raw else {}
+    except Exception:
+        return None
+    member_ids = payload.get("member_ids")
+    if not isinstance(member_ids, list):
+        return None
+    return {str(member_id) for member_id in member_ids}
 
 
 def load_manifest(path: Path) -> dict | None:
@@ -605,6 +628,9 @@ def main() -> None:
             raise SystemExit("--portal-url is required with --push-members")
         if not args.sync_token:
             raise SystemExit("--sync-token or SYNC_API_TOKEN is required with --push-members")
+        existing_member_ids = None
+        if args.upload_files and args.upload_via_portal and args.upload_changed_only:
+            existing_member_ids = get_existing_member_ids(args.portal_url, args.sync_token)
         payload = build_sync_payload(
             source_root,
             member_limit=args.member_limit,
@@ -616,6 +642,7 @@ def main() -> None:
             upload_workers=args.upload_workers,
             upload_changed_only=args.upload_changed_only,
             changed_file_paths=set(diff.added + diff.changed),
+            existing_member_ids=existing_member_ids,
             storage_bucket=args.storage_bucket,
         )
         endpoint = args.portal_url.rstrip("/") + "/api/sync/members"

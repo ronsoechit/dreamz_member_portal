@@ -133,6 +133,24 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(response.json["uri"], "s3://bucket/gymassistant/test.pdf")
         upload.assert_called_once_with(b"%PDF", "gymassistant/test.pdf", content_type="application/pdf")
 
+    def test_sync_member_ids_requires_token(self):
+        response = self.client.get("/api/sync/member-ids")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_sync_member_ids_returns_existing_member_ids(self):
+        db.session.add(Member(member_id="1206", name="Example, Member"))
+        db.session.add(Member(member_id="34838", name="Live, Member"))
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/sync/member-ids",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.json["member_ids"]), {"1206", "34838"})
+
     def test_member_document_file_returns_404_when_storage_object_is_missing(self):
         db.session.add(Member(member_id="1206", name="Example, Member"))
         db.session.add(MemberDocument(
