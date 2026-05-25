@@ -831,7 +831,7 @@ def cancellation_message_parts(policy, language=DEFAULT_LANGUAGE):
             translated_text("policy_short_pass_detail", language),
         )
 
-    if policy.status == "allowed_no_fixed_term":
+    if policy.status in {"allowed_no_fixed_term", "not_applicable_non_contract"}:
         return (
             translated_text("policy_no_fixed_summary", language),
             translated_text("policy_no_fixed_detail", language),
@@ -1438,7 +1438,14 @@ def is_staff_membership(member):
 
 def cancellation_portal_available_for_member(member):
     policy = cancellation_policy_for_member(member)
-    return not is_staff_membership(member) and policy.status != "not_applicable_short_pass"
+    return (
+        not is_staff_membership(member)
+        and policy.status
+        not in {
+            "not_applicable_short_pass",
+            "not_applicable_non_contract",
+        }
+    )
 
 
 def requires_direct_debit_mandate(member):
@@ -2088,7 +2095,11 @@ def member_dashboard_context(member, staff_admin_view=False):
     payment_status = localized_payment_status(payment_status_for_member(member), language)
     cancellation_request = active_cancellation_request_for_member(member)
     cancellation_request_message = cancellation_request_member_message(cancellation_request, language=language)
-    show_cancellation_section = cancellation_portal_available_for_member(member) or bool(cancellation_request)
+    show_cancellation_section = (
+        cancellation_portal_available_for_member(member)
+        or bool(cancellation_request)
+        or (staff_admin_view and policy.status == "not_applicable_non_contract")
+    )
     show_cancel = (
         show_cancellation_section
         and policy.can_request

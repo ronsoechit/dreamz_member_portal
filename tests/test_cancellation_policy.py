@@ -77,7 +77,7 @@ class CancellationPolicyTests(unittest.TestCase):
         self.assertEqual(result.window_open, date(2025, 7, 2))
         self.assertEqual(result.last_request_date, date(2025, 7, 11))
 
-    def test_no_contract_can_request_without_fixed_term_window(self):
+    def test_no_contract_is_not_applicable(self):
         result = evaluate_cancellation_policy(
             today=date(2025, 5, 1),
             plan_type="no contract 1 month",
@@ -85,8 +85,8 @@ class CancellationPolicyTests(unittest.TestCase):
             contract_end=None,
         )
 
-        self.assertTrue(result.can_request)
-        self.assertEqual(result.status, "allowed_no_fixed_term")
+        self.assertFalse(result.can_request)
+        self.assertEqual(result.status, "not_applicable_non_contract")
         self.assertIsNone(result.term_months)
 
     def test_short_pass_does_not_allow_cancellation_request(self):

@@ -100,9 +100,9 @@ def evaluate_cancellation_policy(
     term_months = detect_term_months(plan_type=plan_type, contract_type=contract_type)
     if term_months is None:
         return CancellationPolicyResult(
-            can_request=True,
-            status="allowed_no_fixed_term",
-            reason="This membership is not a 6- or 12-month fixed-term Dreamz contract.",
+            can_request=False,
+            status="not_applicable_non_contract",
+            reason="This membership is not a 6- or 12-month fixed-term Dreamz direct debit contract.",
         )
 
     start = contract_begin or signup_date

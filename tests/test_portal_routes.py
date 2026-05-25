@@ -583,6 +583,24 @@ class PortalRouteTests(unittest.TestCase):
         self.assertNotIn("Cancellation request is available now", body)
         self.assertNotIn("I want to cancel my contract", body)
 
+    def test_non_contract_member_hides_customer_cancellation_policy(self):
+        self.add_member(
+            member_id="80",
+            name="Sharon Gonzalez",
+            plan_type="OLB Bedrijfsport",
+            contract_type="No-Contract",
+            signup_date=date(2011, 11, 3),
+            start_date=date(2015, 7, 9),
+        )
+        self.login_as("80")
+
+        response = self.client.get("/dashboard?id=80")
+
+        body = response.get_data(as_text=True)
+        self.assertNotIn("Cancellation Policy", body)
+        self.assertNotIn("Cancellation request is available now", body)
+        self.assertNotIn("I want to cancel my contract", body)
+
     def test_staff_membership_cannot_submit_cancellation(self):
         self.add_member(
             member_id="13659",
