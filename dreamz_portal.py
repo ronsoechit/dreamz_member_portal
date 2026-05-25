@@ -28,7 +28,7 @@ from translations import (
     normalize_language,
     translate,
 )
-from storage_backend import is_s3_uri, open_s3_object, s3_download_name
+from storage_backend import is_s3_uri, open_s3_object, s3_download_name, upload_bytes_to_s3
 
 import csv
 import secrets
@@ -1923,6 +1923,26 @@ def api_sync_members():
         "members_updated": sync_run.members_updated,
         "documents_received": sync_run.documents_received,
     }
+
+
+def safe_storage_upload_key(raw_key):
+    key = (raw_key or "").replace("\\", "/").strip("/")
+    if not key or key.startswith("/") or ".." in key.split("/"):
+        abort(400, "Invalid storage key.")
+    return key
+
+
+@app.post("/api/sync/files")
+def api_sync_file_upload():
+    require_sync_access()
+    key = safe_storage_upload_key(request.headers.get("X-Storage-Key"))
+    content_type = request.headers.get("X-Content-Type") or request.headers.get("Content-Type")
+    data = request.get_data()
+    if not data:
+        abort(400, "No file data received.")
+
+    uri = upload_bytes_to_s3(data, key, content_type=content_type)
+    return {"status": "success", "uri": uri, "key": key, "bytes": len(data)}
 
 
 @app.route("/staff/settings", methods=["GET", "POST"])

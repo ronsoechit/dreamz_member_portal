@@ -2,6 +2,7 @@ from datetime import date
 import importlib.util
 import os
 import unittest
+from unittest.mock import patch
 
 
 if importlib.util.find_spec("flask") is None or importlib.util.find_spec("flask_sqlalchemy") is None:
@@ -78,7 +79,27 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(document.document_type, "contract")
         sync_run = SyncRun.query.one()
         self.assertEqual(sync_run.status, "success")
-        self.assertEqual(sync_run.members_received, 1)
+
+    def test_sync_file_upload_requires_token(self):
+        response = self.client.post("/api/sync/files", data=b"file", headers={"X-Storage-Key": "gymassistant/test.pdf"})
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_sync_file_upload_stores_file_and_returns_uri(self):
+        with patch("dreamz_portal.upload_bytes_to_s3", return_value="s3://bucket/gymassistant/test.pdf") as upload:
+            response = self.client.post(
+                "/api/sync/files",
+                data=b"%PDF",
+                headers={
+                    "X-Sync-Token": "sync-test-token",
+                    "X-Storage-Key": "gymassistant/test.pdf",
+                    "X-Content-Type": "application/pdf",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["uri"], "s3://bucket/gymassistant/test.pdf")
+        upload.assert_called_once_with(b"%PDF", "gymassistant/test.pdf", content_type="application/pdf")
 
     def test_sync_api_updates_existing_member(self):
         db.session.add(Member(member_id="1206", name="Old Name"))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import mimetypes
 import os
 from pathlib import Path
+from io import BytesIO
 from urllib.parse import urlparse
 
 
@@ -74,6 +75,21 @@ def upload_file_to_s3(path: Path, key: str, bucket: str | None = None, client=No
         bucket,
         key,
         ExtraArgs={"ContentType": guess_content_type(path)},
+    )
+    return s3_object_uri(key, bucket=bucket)
+
+
+def upload_bytes_to_s3(data: bytes, key: str, content_type: str | None = None, bucket: str | None = None, client=None) -> str:
+    bucket = bucket or s3_bucket_name()
+    if not bucket:
+        raise RuntimeError("S3_BUCKET or BUCKET is required to upload files.")
+
+    client = client or s3_client()
+    client.upload_fileobj(
+        BytesIO(data),
+        bucket,
+        key,
+        ExtraArgs={"ContentType": content_type or "application/octet-stream"},
     )
     return s3_object_uri(key, bucket=bucket)
 

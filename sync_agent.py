@@ -182,13 +182,73 @@ def upload_source_file(source_root: Path, path: Path, prefix: str, client=None) 
     return upload_file_to_s3(path, storage_key(prefix, relative), client=client)
 
 
-def uploaded_document_records(source_root: Path, records: list[dict[str, str]], prefix: str, client=None) -> list[dict[str, str]]:
+def post_file(url: str, token: str, path: Path, key: str, timeout: int = 180) -> dict:
+    request = urlrequest.Request(
+        url,
+        data=path.read_bytes(),
+        method="POST",
+        headers={
+            "X-Sync-Token": token,
+            "X-Storage-Key": key,
+            "X-Content-Type": "application/pdf" if path.suffix.lower() == ".pdf" else "image/jpeg",
+        },
+    )
+    try:
+        with urlrequest.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"File upload API returned HTTP {exc.code}: {detail}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Could not reach file upload API: {exc}") from exc
+
+
+def upload_file_to_portal(source_root: Path, path: Path, prefix: str, portal_url: str, token: str) -> str:
+    relative = relative_path(path.resolve(), source_root.resolve())
+    key = storage_key(prefix, relative)
+    endpoint = portal_url.rstrip("/") + "/api/sync/files"
+    result = post_file(endpoint, token, path, key)
+    uri = result.get("uri")
+    if not uri:
+        raise RuntimeError(f"File upload API did not return a URI for {path}")
+    return uri
+
+
+def uploaded_source_file(
+    source_root: Path,
+    path: Path,
+    prefix: str,
+    client=None,
+    portal_url: str | None = None,
+    sync_token: str | None = None,
+) -> str:
+    if portal_url and sync_token:
+        return upload_file_to_portal(source_root, path, prefix, portal_url, sync_token)
+    return upload_source_file(source_root, path, prefix, client=client)
+
+
+def uploaded_document_records(
+    source_root: Path,
+    records: list[dict[str, str]],
+    prefix: str,
+    client=None,
+    portal_url: str | None = None,
+    sync_token: str | None = None,
+) -> list[dict[str, str]]:
     uploaded = []
     for record in records:
         updated = dict(record)
         path = Path(updated.get("path") or "")
         if path.exists() and path.is_file():
-            updated["path"] = upload_source_file(source_root, path, prefix, client=client)
+            updated["path"] = uploaded_source_file(
+                source_root,
+                path,
+                prefix,
+                client=client,
+                portal_url=portal_url,
+                sync_token=sync_token,
+            )
         uploaded.append(updated)
     return uploaded
 
@@ -198,6 +258,9 @@ def build_sync_payload(
     member_limit: int | None = None,
     upload_files: bool = False,
     storage_prefix: str = DEFAULT_STORAGE_PREFIX,
+    upload_via_portal: bool = False,
+    portal_url: str | None = None,
+    sync_token: str | None = None,
 ) -> dict:
     source_root = source_root.resolve()
     backup = latest_backup_path(source_root)
@@ -209,7 +272,9 @@ def build_sync_payload(
     members = [dict(member) for member in source_members]
     attachment_root = attachments_root(source_root)
     documents = {}
-    client = s3_client() if upload_files else None
+    if upload_files and upload_via_portal and (not portal_url or not sync_token):
+        raise ValueError("portal_url and sync_token are required when upload_via_portal is enabled.")
+    client = None if upload_via_portal else (s3_client() if upload_files else None)
 
     if attachment_root.exists():
         for member in members:
@@ -217,14 +282,28 @@ def build_sync_payload(
             records = infer_member_document_records(member_id, attachment_root)
             if records:
                 documents[member_id] = (
-                    uploaded_document_records(source_root, records, storage_prefix, client=client)
+                    uploaded_document_records(
+                        source_root,
+                        records,
+                        storage_prefix,
+                        client=client,
+                        portal_url=portal_url if upload_via_portal else None,
+                        sync_token=sync_token if upload_via_portal else None,
+                    )
                     if upload_files else records
                 )
 
             if upload_files:
                 photo = member_photo_path(member_id, source_root)
                 if photo:
-                    member["photo_path"] = upload_source_file(source_root, photo, storage_prefix, client=client)
+                    member["photo_path"] = uploaded_source_file(
+                        source_root,
+                        photo,
+                        storage_prefix,
+                        client=client,
+                        portal_url=portal_url if upload_via_portal else None,
+                        sync_token=sync_token if upload_via_portal else None,
+                    )
 
     return {
         "source": str(source_root),
@@ -331,6 +410,7 @@ def main() -> None:
     parser.add_argument("--push-members", action="store_true", help="Push member and document metadata to the portal sync API.")
     parser.add_argument("--member-limit", type=int, help="Limit pushed members for testing.")
     parser.add_argument("--upload-files", action="store_true", help="Upload pushed member PDFs and photos to S3-compatible storage.")
+    parser.add_argument("--upload-via-portal", action="store_true", help="Upload files through the portal API so S3 credentials stay on Railway.")
     parser.add_argument("--storage-prefix", default=os.getenv("S3_PREFIX", DEFAULT_STORAGE_PREFIX), help="Object key prefix for uploaded files.")
     args = parser.parse_args()
 
@@ -355,6 +435,9 @@ def main() -> None:
             member_limit=args.member_limit,
             upload_files=args.upload_files,
             storage_prefix=args.storage_prefix,
+            upload_via_portal=args.upload_via_portal,
+            portal_url=args.portal_url,
+            sync_token=args.sync_token,
         )
         endpoint = args.portal_url.rstrip("/") + "/api/sync/members"
         result = post_json(endpoint, args.sync_token, payload)
