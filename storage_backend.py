@@ -15,7 +15,12 @@ def storage_backend() -> str:
 
 
 def s3_bucket_name() -> str | None:
-    return os.getenv("S3_BUCKET") or os.getenv("AWS_BUCKET_NAME") or os.getenv("BUCKET")
+    return (
+        os.getenv("S3_BUCKET")
+        or os.getenv("AWS_BUCKET_NAME")
+        or os.getenv("AWS_S3_BUCKET_NAME")
+        or os.getenv("BUCKET")
+    )
 
 
 def s3_object_uri(key: str, bucket: str | None = None) -> str:
@@ -51,7 +56,7 @@ def s3_client():
     access_key = os.getenv("S3_ACCESS_KEY_ID") or os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("ACCESS_KEY_ID")
     secret_key = os.getenv("S3_SECRET_ACCESS_KEY") or os.getenv("AWS_SECRET_ACCESS_KEY") or os.getenv("SECRET_ACCESS_KEY")
     region = os.getenv("S3_REGION") or os.getenv("AWS_DEFAULT_REGION") or os.getenv("REGION") or "auto"
-    endpoint_url = os.getenv("S3_ENDPOINT_URL") or os.getenv("ENDPOINT")
+    endpoint_url = os.getenv("S3_ENDPOINT_URL") or os.getenv("AWS_ENDPOINT_URL") or os.getenv("ENDPOINT")
     addressing_style = os.getenv("S3_ADDRESSING_STYLE", "virtual")
 
     return boto3.client(
