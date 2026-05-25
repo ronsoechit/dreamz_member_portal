@@ -179,15 +179,4 @@
   </nav>
 {% endif %}
 
-<script>
-  const searchInput = document.getElementById("member-search");
-  const rows = Array.from(document.querySelectorAll("#audit-table tbody tr[data-search]"));
-
-  searchInput?.addEventListener("input", () => {
-    const value = searchInput.value.trim().toLowerCase();
-    rows.forEach((row) => {
-      row.hidden = value && !row.dataset.search.includes(value);
-    });
-  });
-</script>
 {% endblock %}
