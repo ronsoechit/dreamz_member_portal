@@ -1754,6 +1754,7 @@ def inject_csrf_token():
         "current_language": current_language(),
         "available_languages": LANGUAGES,
         "language_flags": LANGUAGE_FLAGS,
+        "current_member_id": session.get("member_id"),
         "current_staff_role": current_staff_role(),
         "current_staff_username": current_staff_username(),
         "open_cancellation_count": open_cancellation_count() if is_staff_admin() else 0,

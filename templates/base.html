@@ -36,6 +36,8 @@
             {% endif %}
             <a class="text-yellow-400 hover:text-yellow-300" href="{{ url_for('staff_logout') }}">Logout</a>
           </nav>
+        {% elif current_member_id %}
+          <a class="text-sm text-yellow-400 hover:text-yellow-300" href="{{ url_for('logout') }}">{{ t('logout') }}</a>
         {% endif %}
         {% for code, label in available_languages.items() %}
           <a

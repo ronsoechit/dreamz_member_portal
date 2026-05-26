@@ -151,6 +151,29 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("/dashboard?id=1206", response.headers["Location"])
         self.assertIsNotNone(db.session.get(MemberLoginCode, login_code.id).used_at)
 
+    def test_member_dashboard_shows_logout_link(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.client.get("/language?lang=pap&next=/login")
+        self.login_as("13659")
+
+        response = self.client.get("/dashboard?id=13659")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('/logout"', body)
+        self.assertIn("Sali", body)
+
+    def test_member_logout_clears_session(self):
+        self.add_member(member_id="13659")
+        self.login_as("13659")
+
+        response = self.client.get("/logout")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response.headers["Location"])
+        with self.client.session_transaction() as sess:
+            self.assertNotIn("member_id", sess)
+
     def test_login_code_email_uses_selected_language(self):
         self.add_member(member_id="1206", name="Ron Soechit", email="member@example.com")
         self.client.get("/language?lang=pap&next=/login")
