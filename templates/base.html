@@ -16,6 +16,7 @@
       <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-end">
         {% if current_staff_role %}
           <nav class="flex flex-wrap items-center gap-1 rounded border border-gray-700 bg-gray-900/40 p-1 text-sm">
+            <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_home' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_home') }}">Home</a>
             <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_data_audit' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_data_audit') }}">Audit</a>
             {% if current_staff_role == 'admin' %}
               <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_daily_changes' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_daily_changes') }}">Changes</a>

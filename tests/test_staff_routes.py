@@ -184,6 +184,26 @@ class StaffRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
 
+    def test_staff_home_requires_login(self):
+        response = self.client.get("/staff")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_staff_home_shows_member_portal_and_fep_choices(self):
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+
+        response = self.client.get("/staff")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Staff Home", body)
+        self.assertIn("Member Info Staff/Admin", body)
+        self.assertIn("/staff/data-audit", body)
+        self.assertIn("FEP Manager", body)
+        self.assertIn("https://dreamz-fep.onrender.com/login", body)
+
     def test_staff_data_audit_lists_member_issues(self):
         self.add_member(email="", mobile="", photo_path=None)
         self.add_document(document_type="contract", title="Contract")
@@ -292,7 +312,8 @@ class StaffRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Manager Dashboard", response.get_data(as_text=True))
+        self.assertIn("Staff Home", response.get_data(as_text=True))
+        self.assertIn("Member Info Staff/Admin", response.get_data(as_text=True))
 
     def test_staff_settings_updates_notifications_and_staff_user(self):
         with self.client.session_transaction() as sess:

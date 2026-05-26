@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Staff Home | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+  <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ staff_role|title }} Dashboard</div>
+  <h2 class="text-2xl font-semibold">Staff Home</h2>
+  <p class="mt-1 max-w-3xl text-sm text-gray-400">
+    Choose which Dreamz Fitness management tool you want to use.
+  </p>
+</div>
+
+<div class="grid gap-5 lg:grid-cols-2">
+  <a
+    href="{{ url_for('staff_data_audit') }}"
+    class="group rounded border border-gray-700 bg-gray-800/50 p-6 transition hover:border-yellow-400 hover:bg-gray-800"
+  >
+    <div class="flex items-start justify-between gap-4">
+      <div>
+        <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">Member Portal</div>
+        <h3 class="mt-2 text-xl font-semibold text-white">Member Info Staff/Admin</h3>
+      </div>
+      <span class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition group-hover:bg-yellow-400">Open</span>
+    </div>
+    <p class="mt-4 text-sm leading-6 text-gray-300">
+      Review member data, documents, missing information, cancellation requests, e-mail logs and GymAssistant sync activity.
+    </p>
+  </a>
+
+  <a
+    href="{{ fep_manager_url }}"
+    class="group rounded border border-gray-700 bg-gray-800/50 p-6 transition hover:border-yellow-400 hover:bg-gray-800"
+  >
+    <div class="flex items-start justify-between gap-4">
+      <div>
+        <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">Direct Debit</div>
+        <h3 class="mt-2 text-xl font-semibold text-white">FEP Manager</h3>
+      </div>
+      <span class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition group-hover:bg-yellow-400">Open</span>
+    </div>
+    <p class="mt-4 text-sm leading-6 text-gray-300">
+      Open the existing FEP Manager used to prepare direct debit export files for MCB Online Banking.
+    </p>
+    <p class="mt-3 rounded border border-yellow-500/30 bg-yellow-500/10 p-3 text-xs leading-5 text-yellow-100">
+      This opens the existing production FEP app. The member portal does not change or import FEP data.
+    </p>
+  </a>
+</div>
+{% endblock %}

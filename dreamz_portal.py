@@ -72,6 +72,7 @@ app.config["STAFF_ADMIN_PASSWORD"] = os.getenv("STAFF_ADMIN_PASSWORD", "dreamz-a
 app.config["STAFF_MANAGER_USERNAME"] = os.getenv("STAFF_MANAGER_USERNAME", "manager")
 app.config["STAFF_MANAGER_PASSWORD"] = os.getenv("STAFF_MANAGER_PASSWORD", "dreamz-manager-dev")
 app.config["STAFF_ADMIN_EMAIL"] = os.getenv("STAFF_ADMIN_EMAIL", "ron@dreamzfitness.com")
+app.config["FEP_MANAGER_URL"] = os.getenv("FEP_MANAGER_URL", "https://dreamz-fep.onrender.com/login")
 app.config["EMAIL_DELIVERY_MODE"] = os.getenv("EMAIL_DELIVERY_MODE", "log")
 app.config["MEMBER_LOGIN_CODE_TTL_MINUTES"] = int(os.getenv("MEMBER_LOGIN_CODE_TTL_MINUTES", "15"))
 app.config["DIRECT_DEBIT_DAY"] = int(os.getenv("DIRECT_DEBIT_DAY", "28"))
@@ -2318,7 +2319,7 @@ def staff_login():
             session["staff_username"] = username
             session["staff_role"] = user.role
             session.permanent = True
-            return redirect(url_for("staff_data_audit"))
+            return redirect(url_for("staff_home"))
         flash("Invalid staff login.")
         return redirect(url_for("staff_login"))
 
@@ -2335,9 +2336,12 @@ def staff_logout():
 
 @app.get("/staff")
 def staff_home():
-    if current_staff_role():
-        return redirect(url_for("staff_data_audit"))
-    return redirect(url_for("staff_login"))
+    staff_role = require_staff_access()
+    return render_template(
+        "staff_home.html",
+        staff_role=staff_role,
+        fep_manager_url=app.config["FEP_MANAGER_URL"],
+    )
 
 
 @app.post("/api/sync/members")
