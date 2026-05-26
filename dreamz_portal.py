@@ -198,6 +198,7 @@ class CancellationRequest(db.Model):
 
     mail_status = db.Column(db.String, default="not_sent", nullable=False)
     mail_error = db.Column(db.Text)
+    language = db.Column(db.String, default=DEFAULT_LANGUAGE)
     notification_to = db.Column(db.Text)
     notification_cc = db.Column(db.Text)
 
@@ -339,6 +340,7 @@ def ensure_runtime_schema():
     ensure_sqlite_model_column("cancellation_request", "confirmation_body", "TEXT")
     ensure_sqlite_model_column("cancellation_request", "last_paid_date", "DATE")
     ensure_sqlite_model_column("cancellation_request", "access_until", "DATE")
+    ensure_model_column("cancellation_request", "language", "VARCHAR")
     ensure_sqlite_model_column("email_log", "html_body", "TEXT")
     ensure_sqlite_model_column("email_log", "reviewed_at", "DATETIME")
     ensure_sqlite_model_column("email_log", "reviewed_by", "VARCHAR")
@@ -913,11 +915,12 @@ def cancellation_message_parts(policy, language=DEFAULT_LANGUAGE):
 
     return policy.reason, ""
 
-def create_cancellation_request(member, policy, reason, status, mail_status="not_sent", mail_error=None):
+def create_cancellation_request(member, policy, reason, status, mail_status="not_sent", mail_error=None, language=None):
     request_record = CancellationRequest(
         member_id=member.member_id,
         status=status,
         reason=reason or None,
+        language=normalize_language(language),
         policy_status=policy.status,
         policy_reason=policy.reason,
         term_months=policy.term_months,
@@ -1037,11 +1040,14 @@ def cancellation_access_until(member, request_record=None):
     return member.next_payment or member.due_date or getattr(request_record, "current_term_end", None)
 
 
-def format_email_date(value):
-    return value.strftime("%d %B %Y") if value else "Not available"
+def format_email_date(value, language=DEFAULT_LANGUAGE):
+    if isinstance(value, datetime):
+        value = value.date()
+    return fmt_policy_date(value, language) or translated_text("not_available", language)
 
 
 def build_cancellation_confirmation(member, request_record):
+    language = normalize_language(getattr(request_record, "language", None))
     request_date = request_record.requested_at.date() if request_record.requested_at else None
     last_paid_date = (
         final_payment_date_for_cancellation(request_date)
@@ -1053,37 +1059,41 @@ def build_cancellation_confirmation(member, request_record):
         if request_date
         else cancellation_access_until(member, request_record)
     )
-    subject = "Dreamz Fitness - cancellation confirmed"
-    body = f"""Dear {display_member_name(member.name)},
+    member_name = display_member_name(member.name)
+    subject = translated_text("email_cancel_confirmed_subject", language)
+    intro = translated_text("email_cancel_confirmed_intro", language, name=member_name)
+    note = translated_text("email_cancel_confirmed_note", language)
+    signoff = translated_text("email_signoff", language)
+    not_provided = translated_text("not_provided", language)
+    body = f"""{intro}
 
-We confirm that your Dreamz Fitness membership cancellation has been processed.
+{translated_text("member_id", language)}: {member.member_id}
+{translated_text("membership_type", language)}: {member.plan_type or translated_text("not_available", language)}
+{translated_text("email_request_date", language)}: {format_email_date(request_record.requested_at, language)}
+{translated_text("email_final_payment_date", language)}: {format_email_date(last_paid_date, language)}
+{translated_text("access_until", language)}: {format_email_date(access_until, language)}
 
-Member ID: {member.member_id}
-Membership: {member.plan_type or 'Not available'}
-Cancellation request date: {format_email_date(request_record.requested_at.date() if request_record.requested_at else None)}
-Final payment date: {format_email_date(last_paid_date)}
-Access until: {format_email_date(access_until)}
+{note}
 
-You may continue training until the access-until date above, provided there is no outstanding balance or other separate agreement.
+{translated_text("reason", language)}:
+{request_record.reason or not_provided}
 
-Reason submitted:
-{request_record.reason or 'Not provided'}
-
-Kind regards,
+{signoff}
 Dreamz Fitness
 """
     html_body = email_html_layout(
-        "Cancellation confirmed",
-        f"Dear {display_member_name(member.name)}, your Dreamz Fitness membership cancellation has been processed.",
+        translated_text("cancellation_confirmed_title", language),
+        intro,
         rows=[
-            ("Member ID", member.member_id),
-            ("Membership", member.plan_type or "Not available"),
-            ("Request date", format_email_date(request_record.requested_at.date() if request_record.requested_at else None)),
-            ("Final payment", format_email_date(last_paid_date)),
-            ("Access until", format_email_date(access_until)),
-            ("Reason", request_record.reason or "Not provided"),
+            (translated_text("member_id", language), member.member_id),
+            (translated_text("membership_type", language), member.plan_type or translated_text("not_available", language)),
+            (translated_text("email_request_date", language), format_email_date(request_record.requested_at, language)),
+            (translated_text("email_final_payment_date", language), format_email_date(last_paid_date, language)),
+            (translated_text("access_until", language), format_email_date(access_until, language)),
+            (translated_text("reason", language), request_record.reason or not_provided),
         ],
-        note="You may continue training until the access-until date above, provided there is no outstanding balance or other separate agreement.",
+        note=note,
+        signoff=signoff,
         tone="success",
     )
     return subject, body, html_body, last_paid_date, access_until
@@ -1335,8 +1345,8 @@ def generate_member_login_code(member):
     return login_code, code
 
 
-def send_member_login_code(member, code):
-    subject, body, html_body = build_member_login_code_email(member, code)
+def send_member_login_code(member, code, language=DEFAULT_LANGUAGE):
+    subject, body, html_body = build_member_login_code_email(member, code, language=language)
     return deliver_email([member.email], subject, body, html_body=html_body)
 
 
@@ -1803,7 +1813,7 @@ def email_field_rows(rows):
     return "".join(row_html)
 
 
-def email_html_layout(title, intro, rows=None, note=None, action_label=None, action_url=None, tone="gold"):
+def email_html_layout(title, intro, rows=None, note=None, action_label=None, action_url=None, tone="gold", signoff="Kind regards,"):
     accent = "#10b981" if tone == "success" else "#fbbf24"
     rows_html = (
         f"<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"width:100%;margin:18px 0;border-collapse:collapse;\">{email_field_rows(rows)}</table>"
@@ -1837,7 +1847,7 @@ def email_html_layout(title, intro, rows=None, note=None, action_label=None, act
                 {rows_html}
                 {note_html}
                 {action_html}
-                <p style="margin:26px 0 0;color:#cbd5e1;line-height:1.5;">Kind regards,<br><strong style="color:#ffffff;">Dreamz Fitness</strong></p>
+                <p style="margin:26px 0 0;color:#cbd5e1;line-height:1.5;">{escape_html(signoff)}<br><strong style="color:#ffffff;">Dreamz Fitness</strong></p>
               </td>
             </tr>
           </table>
@@ -1895,29 +1905,39 @@ def deliver_email(to_addresses, subject, body, cc_addresses=None, html_body=None
     return "sent"
 
 
-def build_member_login_code_email(member, code):
-    subject = "Dreamz Fitness - member portal login code"
+def build_member_login_code_email(member, code, language=DEFAULT_LANGUAGE):
+    language = normalize_language(language)
+    subject = translated_text("email_login_subject", language)
     member_name = display_member_name(member.name)
-    body = f"""Dear {display_member_name(member.name)},
+    intro = translated_text("email_login_intro", language, name=member_name)
+    expires = translated_text(
+        "email_expires_minutes",
+        language,
+        minutes=app.config["MEMBER_LOGIN_CODE_TTL_MINUTES"],
+    )
+    note = translated_text("email_login_note", language)
+    signoff = translated_text("email_signoff", language)
+    body = f"""{intro}
 
-Use this code to log in to the Dreamz Fitness member portal:
+{translated_text("login_code", language)}:
 
 {code}
 
-This code expires in {app.config['MEMBER_LOGIN_CODE_TTL_MINUTES']} minutes.
-If you did not request this code, you can ignore this e-mail.
+{expires}
+{note}
 
-Kind regards,
+{signoff}
 Dreamz Fitness
 """
     html_body = email_html_layout(
-        "Member portal login code",
-        f"Dear {member_name}, use this code to log in to the Dreamz Fitness member portal.",
+        translated_text("email_login_title", language),
+        intro,
         rows=[
-            ("Login code", code),
-            ("Expires in", f"{app.config['MEMBER_LOGIN_CODE_TTL_MINUTES']} minutes"),
+            (translated_text("login_code", language), code),
+            (translated_text("email_expires_in", language), expires),
         ],
-        note="If you did not request this code, you can ignore this e-mail.",
+        note=note,
+        signoff=signoff,
     )
     return subject, body, html_body
 
@@ -1964,58 +1984,64 @@ Review this request in the Dreamz Fitness staff dashboard. Only mark it as Proce
 
 
 def build_member_cancellation_request_email(member, request_record):
+    language = normalize_language(getattr(request_record, "language", None))
     member_name = display_member_name(member.name)
+    request_date = request_record.requested_at.date() if request_record.requested_at else None
+    not_provided = translated_text("not_provided", language)
+    signoff = translated_text("email_signoff", language)
     if request_record.status == "accepted":
-        subject = "Dreamz Fitness - cancellation request received"
-        body = f"""Dear {display_member_name(member.name)},
+        subject = translated_text("email_cancel_request_subject", language)
+        intro = translated_text("email_cancel_request_intro", language, name=member_name)
+        note = translated_text("email_cancel_request_note", language)
+        body = f"""{intro}
 
-We received your cancellation request for your Dreamz Fitness membership.
+{translated_text("member_id", language)}: {member.member_id}
+{translated_text("email_request_date", language)}: {format_email_date(request_date, language)}
+{translated_text("reason", language)}:
+{request_record.reason or not_provided}
 
-Member ID: {member.member_id}
-Request date: {format_email_date(request_record.requested_at.date() if request_record.requested_at else None)}
-Reason submitted:
-{request_record.reason or 'Not provided'}
+{note}
 
-Your request is being reviewed by Dreamz Fitness. Your cancellation is final only after you receive the official confirmation e-mail.
-
-Kind regards,
+{signoff}
 Dreamz Fitness
 """
         html_body = email_html_layout(
-            "Cancellation request received",
-            f"Dear {member_name}, we received your cancellation request for your Dreamz Fitness membership.",
+            translated_text("cancellation_request_received_title", language),
+            intro,
             rows=[
-                ("Member ID", member.member_id),
-                ("Request date", format_email_date(request_record.requested_at.date() if request_record.requested_at else None)),
-                ("Reason", request_record.reason or "Not provided"),
+                (translated_text("member_id", language), member.member_id),
+                (translated_text("email_request_date", language), format_email_date(request_date, language)),
+                (translated_text("reason", language), request_record.reason or not_provided),
             ],
-            note="Your request is being reviewed by Dreamz Fitness. Your cancellation is final only after you receive the official confirmation e-mail.",
+            note=note,
+            signoff=signoff,
         )
         return subject, body, html_body
 
-    subject = "Dreamz Fitness - cancellation request not available yet"
-    body = f"""Dear {display_member_name(member.name)},
+    subject = translated_text("email_cancel_blocked_subject", language)
+    intro = translated_text("email_cancel_blocked_intro", language, name=member_name)
+    note = translated_text("email_cancel_blocked_note", language)
+    body = f"""{intro}
 
-We received your cancellation attempt, but the cancellation window is not open for this contract.
+{translated_text("member_id", language)}: {member.member_id}
+{translated_text("email_term_ends", language)}: {format_email_date(request_record.current_term_end, language)}
+{translated_text("email_cancellation_window", language)}: {format_email_date(request_record.window_open, language)} - {format_email_date(request_record.last_request_date, language)}
 
-Member ID: {member.member_id}
-Current term ends: {format_email_date(request_record.current_term_end)}
-Cancellation window: {format_email_date(request_record.window_open)} through {format_email_date(request_record.last_request_date)}
+{note}
 
-According to the contract, cancellation is only possible during the 10-day window that starts 30 days before the end of the term. If you believe your membership data is incorrect, please contact Dreamz Fitness staff.
-
-Kind regards,
+{signoff}
 Dreamz Fitness
 """
     html_body = email_html_layout(
-        "Cancellation request not available yet",
-        f"Dear {member_name}, we received your cancellation attempt, but the cancellation window is not open for this contract.",
+        translated_text("email_cancel_blocked_title", language),
+        intro,
         rows=[
-            ("Member ID", member.member_id),
-            ("Term ends", format_email_date(request_record.current_term_end)),
-            ("Window", f"{format_email_date(request_record.window_open)} through {format_email_date(request_record.last_request_date)}"),
+            (translated_text("member_id", language), member.member_id),
+            (translated_text("email_term_ends", language), format_email_date(request_record.current_term_end, language)),
+            (translated_text("email_cancellation_window", language), f"{format_email_date(request_record.window_open, language)} - {format_email_date(request_record.last_request_date, language)}"),
         ],
-        note="According to the contract, cancellation is only possible during the 10-day window that starts 30 days before the end of the term. If you believe your membership data is incorrect, please contact Dreamz Fitness staff.",
+        note=note,
+        signoff=signoff,
     )
     return subject, body, html_body
 
@@ -2924,7 +2950,7 @@ def cancel():
         return redirect(url_for("dashboard", id=member_id))
 
     if not policy.can_request:
-        request_record = create_cancellation_request(member, policy, reason, status="blocked")
+        request_record = create_cancellation_request(member, policy, reason, status="blocked", language=current_language())
         db.session.commit()
         try:
             staff_mail_status = send_cancel_email(
@@ -2949,6 +2975,7 @@ def cancel():
         reason,
         status="accepted",
         mail_status="pending",
+        language=current_language(),
     )
     db.session.commit()
 
@@ -2980,7 +3007,7 @@ def login():
             if member:
                 login_code, code = generate_member_login_code(member)
                 try:
-                    mail_status = send_member_login_code(member, code)
+                    mail_status = send_member_login_code(member, code, language=current_language())
                 except Exception:
                     mail_status = "failed"
                 session["pending_login_email"] = normalize_email(member.email)

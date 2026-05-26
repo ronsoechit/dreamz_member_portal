@@ -15,7 +15,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
-from dreamz_portal import CancellationRequest, Member, MemberDocument, MemberLoginCode, app, cancellation_message, db  # noqa: E402
+from dreamz_portal import CancellationRequest, EmailLog, Member, MemberDocument, MemberLoginCode, app, cancellation_message, db  # noqa: E402
 
 
 class FakeS3Body:
@@ -150,6 +150,22 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/dashboard?id=1206", response.headers["Location"])
         self.assertIsNotNone(db.session.get(MemberLoginCode, login_code.id).used_at)
+
+    def test_login_code_email_uses_selected_language(self):
+        self.add_member(member_id="1206", name="Ron Soechit", email="member@example.com")
+        self.client.get("/language?lang=pap&next=/login")
+        token = self.get_login_csrf_token()
+
+        response = self.client.post(
+            "/login",
+            data={"step": "email", "email": "member@example.com", "csrf_token": token},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        email = EmailLog.query.one()
+        self.assertIn("kodigo di login", email.subject)
+        self.assertIn("Estima Ron Soechit", email.body)
+        self.assertIn("portal di miembro", email.html_body)
 
     def test_login_with_unknown_email_is_neutral(self):
         token = self.get_login_csrf_token()
