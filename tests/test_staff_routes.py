@@ -2,6 +2,7 @@ from datetime import date, datetime
 import csv
 import importlib.util
 import io
+import json
 import os
 import unittest
 from unittest.mock import patch
@@ -13,7 +14,7 @@ if importlib.util.find_spec("flask") is None or importlib.util.find_spec("flask_
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
-from dreamz_portal import AppSetting, CancellationRequest, EmailLog, Member, MemberDocument, StaffUser, app, db, deliver_email, payment_status_for_member  # noqa: E402
+from dreamz_portal import AppSetting, CancellationRequest, EmailLog, Member, MemberDocument, StaffUser, SyncRun, app, db, deliver_email, payment_status_for_member  # noqa: E402
 
 
 class StaffRouteTests(unittest.TestCase):
@@ -197,6 +198,65 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("Missing Email", body)
         self.assertIn("Missing Phone", body)
         self.assertIn("Stale Payment Data", body)
+
+    def test_staff_daily_changes_groups_sync_changes_by_date(self):
+        db.session.add(SyncRun(
+            source="unit-test",
+            status="success",
+            started_at=datetime(2026, 5, 25, 18, 5),
+            completed_at=datetime(2026, 5, 25, 18, 6),
+            members_received=2,
+            members_new=1,
+            members_updated=1,
+            documents_received=1,
+            change_summary=json.dumps({
+                "new_members": [
+                    {"member_id": "34838", "name": "Coffy, Etisienne", "plan_type": "Contract 12 months 2024"}
+                ],
+                "changed_members": [
+                    {
+                        "member_id": "1206",
+                        "name": "Damon, Norluze",
+                        "plan_type": "contract Dreamz 12 months",
+                        "changes": [
+                            {"label": "Balance", "old": 7.0, "new": 0.0}
+                        ],
+                    }
+                ],
+                "document_changes": [
+                    {"member_id": "34838", "name": "Coffy, Etisienne", "old_count": 0, "new_count": 2}
+                ],
+            }),
+        ))
+        db.session.add(SyncRun(
+            source="old-run",
+            status="success",
+            started_at=datetime(2026, 5, 24, 18, 5),
+            completed_at=datetime(2026, 5, 24, 18, 6),
+            change_summary=json.dumps({
+                "new_members": [
+                    {"member_id": "999", "name": "Old Member"}
+                ],
+                "changed_members": [],
+                "document_changes": [],
+            }),
+        ))
+        db.session.commit()
+
+        response = self.client.get("/staff/changes?token=staff-test-token&date=2026-05-25")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Daily Changes", body)
+        self.assertIn("New Members", body)
+        self.assertIn("Coffy, Etisienne", body)
+        self.assertIn("Changed Members", body)
+        self.assertIn("Damon, Norluze", body)
+        self.assertIn("Balance", body)
+        self.assertIn("7.0", body)
+        self.assertIn("Document Updates", body)
+        self.assertIn("0 -> 2 documents", body)
+        self.assertNotIn("Old Member", body)
 
     def test_staff_data_audit_paginates_500_members(self):
         for index in range(1, 506):

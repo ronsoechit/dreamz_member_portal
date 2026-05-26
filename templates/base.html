@@ -8,52 +8,55 @@
 </head>
 <body class="bg-gray-900 text-white min-h-screen flex flex-col">
 
-  <!-- Header met Dreamz-logo -->
   <header class="bg-gray-800 shadow-md">
-    <div class="container mx-auto px-6 py-4 flex items-center justify-between">
-      <a href="/">
+    <div class="container mx-auto flex flex-col gap-4 px-6 py-4 lg:flex-row lg:items-center lg:justify-between">
+      <a href="/" class="shrink-0">
         <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Logo" class="h-10">
       </a>
-      <div class="flex items-center gap-4 text-xs">
+      <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-end">
         {% if current_staff_role %}
-          <nav class="hidden items-center gap-3 text-sm md:flex">
-              <a class="text-gray-300 hover:text-white" href="{{ url_for('staff_data_audit') }}">Staff</a>
+          <nav class="flex flex-wrap items-center gap-1 rounded border border-gray-700 bg-gray-900/40 p-1 text-sm">
+            <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_data_audit' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_data_audit') }}">Audit</a>
             {% if current_staff_role == 'admin' %}
-              <a class="text-gray-300 hover:text-white" href="{{ url_for('staff_sync_status') }}">Sync</a>
-              <a class="relative text-gray-300 hover:text-white" href="{{ url_for('staff_cancellations') }}">
+              <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_daily_changes' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_daily_changes') }}">Changes</a>
+              <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_sync_status' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_sync_status') }}">Sync</a>
+              <a class="relative rounded px-3 py-2 {% if request.endpoint == 'staff_cancellations' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_cancellations') }}">
                 Cancellations
                 {% if open_cancellation_count %}
                   <span class="ml-1 rounded-full bg-yellow-500 px-2 py-0.5 text-xs font-semibold text-black">{{ open_cancellation_count }}</span>
                 {% endif %}
               </a>
-              <a class="relative text-gray-300 hover:text-white" href="{{ url_for('staff_email_log') }}">
+              <a class="relative rounded px-3 py-2 {% if request.endpoint == 'staff_email_log' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_email_log') }}">
                 Email Log
                 {% if open_email_log_count %}
                   <span class="ml-1 rounded-full bg-yellow-500 px-2 py-0.5 text-xs font-semibold text-black">{{ open_email_log_count }}</span>
                 {% endif %}
               </a>
-              <a class="text-gray-300 hover:text-white" href="{{ url_for('staff_settings') }}">Settings</a>
+              <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_settings' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_settings') }}">Settings</a>
             {% endif %}
-            <a class="text-yellow-400 hover:text-yellow-300" href="{{ url_for('staff_logout') }}">Logout</a>
+            <a class="rounded px-3 py-2 text-yellow-400 hover:bg-gray-700 hover:text-yellow-300" href="{{ url_for('staff_logout') }}">Logout</a>
           </nav>
         {% elif current_member_id %}
-          <a class="text-sm text-yellow-400 hover:text-yellow-300" href="{{ url_for('logout') }}">{{ t('logout') }}</a>
+          <div class="flex justify-end">
+            <a class="rounded border border-gray-700 bg-gray-900/40 px-3 py-2 text-sm text-yellow-400 hover:bg-gray-700 hover:text-yellow-300" href="{{ url_for('logout') }}">{{ t('logout') }}</a>
+          </div>
         {% endif %}
-        {% for code, label in available_languages.items() %}
-          <a
-            href="{{ url_for('set_language', lang=code, next=request.full_path if request.query_string else request.path) }}"
-            class="flex flex-col items-center leading-tight {% if current_language == code %}text-yellow-400 font-semibold{% else %}text-gray-300 hover:text-white{% endif %}"
-            title="{{ label }}"
-          >
-            <span class="text-lg">{{ language_flags[code] }}</span>
-            <span>{{ label }}</span>
-          </a>
-        {% endfor %}
+        <div class="flex flex-wrap items-center gap-2 border-gray-700 text-xs lg:border-l lg:pl-4">
+          {% for code, label in available_languages.items() %}
+            <a
+              href="{{ url_for('set_language', lang=code, next=request.full_path if request.query_string else request.path) }}"
+              class="flex min-w-[3.25rem] flex-col items-center rounded px-2 py-1 leading-tight {% if current_language == code %}bg-yellow-500/10 text-yellow-400 font-semibold{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}"
+              title="{{ label }}"
+            >
+              <span class="text-base">{{ language_flags[code] }}</span>
+              <span>{{ label }}</span>
+            </a>
+          {% endfor %}
+        </div>
       </div>
     </div>
   </header>
 
-  <!-- Pagina-inhoud -->
   <main class="container mx-auto flex-grow px-4 py-8">
 	  {% with messages = get_flashed_messages() %}
 		{% if messages %}
@@ -66,7 +69,6 @@
 	  {% block content %}{% endblock %}
   </main>
 
-  <!-- Footer -->
   <footer class="bg-gray-800 text-center py-4 text-sm text-gray-400">
     &copy; {{ current_year or 2025 }} Dreamz Fitness Bonaire
   </footer>

@@ -102,6 +102,9 @@ class PortalRouteTests(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("Email address", body)
         self.assertIn("Send login code", body)
+        self.assertIn("data-loading-form", body)
+        self.assertIn("Sending code...", body)
+        self.assertIn("button.disabled = true", body)
         self.assertNotIn("Password", body)
         self.assertNotIn("Birthdate", body)
 
@@ -150,6 +153,18 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/dashboard?id=1206", response.headers["Location"])
         self.assertIsNotNone(db.session.get(MemberLoginCode, login_code.id).used_at)
+
+    def test_repeated_login_code_request_does_not_send_multiple_codes(self):
+        self.add_member(member_id="1206", email="member@example.com")
+        token = self.get_login_csrf_token()
+
+        first = self.client.post("/login", data={"step": "email", "email": "member@example.com", "csrf_token": token})
+        second = self.client.post("/login", data={"step": "email", "email": "member@example.com", "csrf_token": token})
+
+        self.assertEqual(first.status_code, 302)
+        self.assertEqual(second.status_code, 302)
+        self.assertEqual(MemberLoginCode.query.filter_by(email="member@example.com").count(), 1)
+        self.assertEqual(EmailLog.query.filter_by(to_addresses="member@example.com").count(), 1)
 
     def test_member_dashboard_shows_logout_link(self):
         self.add_member(member_id="13659", name="Ron Soechit")

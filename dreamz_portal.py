@@ -285,6 +285,7 @@ DEFAULT_SETTINGS = {
 
 DEFAULT_PORTAL_TIMEZONE_OFFSET_HOURS = -4
 STALE_SYNC_RUN_MINUTES = 15
+LOGIN_CODE_RESEND_COOLDOWN_SECONDS = 60
 
 
 def portal_timezone():
@@ -711,6 +712,62 @@ def sync_change_summary_for_template(sync_run):
         return json.loads(sync_run.change_summary)
     except (TypeError, json.JSONDecodeError):
         return {"new_members": [], "changed_members": [], "document_changes": []}
+
+
+def sync_runs_for_local_date(selected_date):
+    return [
+        run
+        for run in SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc()).all()
+        if run.started_at and local_datetime(run.started_at).date() == selected_date
+    ]
+
+
+def daily_sync_changes(selected_date):
+    runs = sync_runs_for_local_date(selected_date)
+    new_members = {}
+    changed_members = {}
+    document_changes = {}
+
+    for run in runs:
+        summary = sync_change_summary_for_template(run)
+        run_time = format_date(run.started_at, "%H:%M")
+        for item in summary.get("new_members", []):
+            member_id = str(item.get("member_id") or "")
+            if not member_id:
+                continue
+            new_members.setdefault(member_id, {**item, "run_time": run_time})
+
+        for item in summary.get("changed_members", []):
+            member_id = str(item.get("member_id") or "")
+            if not member_id:
+                continue
+            entry = changed_members.setdefault(member_id, {
+                "member_id": member_id,
+                "name": item.get("name") or "",
+                "email": item.get("email") or "",
+                "plan_type": item.get("plan_type") or "",
+                "changes": [],
+            })
+            for change in item.get("changes", []):
+                entry["changes"].append({**change, "run_time": run_time})
+
+        for item in summary.get("document_changes", []):
+            member_id = str(item.get("member_id") or "")
+            if not member_id:
+                continue
+            entry = document_changes.setdefault(member_id, {**item, "run_times": []})
+            entry["run_times"].append(run_time)
+            entry["old_count"] = item.get("old_count", entry.get("old_count", 0))
+            entry["new_count"] = item.get("new_count", entry.get("new_count", 0))
+            if item.get("documents"):
+                entry["documents"] = item.get("documents")
+
+    return {
+        "runs": runs,
+        "new_members": sorted(new_members.values(), key=lambda item: item.get("name") or item.get("member_id") or ""),
+        "changed_members": sorted(changed_members.values(), key=lambda item: item.get("name") or item.get("member_id") or ""),
+        "document_changes": sorted(document_changes.values(), key=lambda item: item.get("name") or item.get("member_id") or ""),
+    }
 
 
 def mark_stale_sync_runs(now=None):
@@ -1334,11 +1391,14 @@ def member_by_email(email):
 
 
 def generate_member_login_code(member):
+    normalized_email = normalize_email(member.email)
+    now = datetime.now()
+    MemberLoginCode.query.filter_by(email=normalized_email, used_at=None).update({"used_at": now})
     code = f"{secrets.randbelow(1_000_000):06d}"
-    expires_at = datetime.now() + timedelta(minutes=app.config["MEMBER_LOGIN_CODE_TTL_MINUTES"])
+    expires_at = now + timedelta(minutes=app.config["MEMBER_LOGIN_CODE_TTL_MINUTES"])
     login_code = MemberLoginCode(
         member_id=member.member_id,
-        email=normalize_email(member.email),
+        email=normalized_email,
         code_hash=generate_password_hash(code),
         expires_at=expires_at,
     )
@@ -1356,6 +1416,19 @@ def latest_member_login_code(email):
     return (
         MemberLoginCode.query
         .filter_by(email=normalize_email(email), used_at=None)
+        .order_by(MemberLoginCode.created_at.desc())
+        .first()
+    )
+
+
+def recent_member_login_code_request(email, now=None):
+    now = now or datetime.now()
+    cutoff = now - timedelta(seconds=LOGIN_CODE_RESEND_COOLDOWN_SECONDS)
+    return (
+        MemberLoginCode.query
+        .filter_by(email=normalize_email(email), used_at=None)
+        .filter(MemberLoginCode.expires_at > now)
+        .filter(MemberLoginCode.created_at >= cutoff)
         .order_by(MemberLoginCode.created_at.desc())
         .first()
     )
@@ -2544,6 +2617,31 @@ def staff_sync_status():
     )
 
 
+@app.get("/staff/changes")
+def staff_daily_changes():
+    require_staff_access(required_role="admin")
+    ensure_runtime_schema()
+    mark_stale_sync_runs()
+    today = local_datetime(datetime.now(timezone.utc)).date()
+    raw_date = request.args.get("date", "").strip()
+    try:
+        selected_date = date.fromisoformat(raw_date) if raw_date else today
+    except ValueError:
+        selected_date = today
+    changes = daily_sync_changes(selected_date)
+    return render_template(
+        "staff_daily_changes.html",
+        selected_date=selected_date,
+        previous_date=selected_date - timedelta(days=1),
+        next_date=selected_date + timedelta(days=1),
+        today=today,
+        runs=changes["runs"],
+        new_members=changes["new_members"],
+        changed_members=changes["changed_members"],
+        document_changes=changes["document_changes"],
+    )
+
+
 @app.post("/staff/email-log/<int:email_id>/review")
 def staff_email_log_review(email_id):
     validate_csrf_token()
@@ -3052,16 +3150,18 @@ def login():
             email = normalize_email(request.form.get("email"))
             member = member_by_email(email)
             if member:
-                login_code, code = generate_member_login_code(member)
-                try:
-                    mail_status = send_member_login_code(member, code, language=current_language())
-                except Exception:
-                    mail_status = "failed"
                 session["pending_login_email"] = normalize_email(member.email)
-                if mail_status == "logged":
-                    session["dev_login_code"] = code
-                else:
-                    session.pop("dev_login_code", None)
+                recent_code = recent_member_login_code_request(member.email)
+                if not recent_code:
+                    login_code, code = generate_member_login_code(member)
+                    try:
+                        mail_status = send_member_login_code(member, code, language=current_language())
+                    except Exception:
+                        mail_status = "failed"
+                    if mail_status == "logged":
+                        session["dev_login_code"] = code
+                    else:
+                        session.pop("dev_login_code", None)
                 flash(translated_text("login_code_sent_if_registered", current_language()))
                 return redirect(url_for("login", step="code"))
 
