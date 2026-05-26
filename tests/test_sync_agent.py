@@ -168,6 +168,41 @@ class SyncAgentTests(unittest.TestCase):
         self.assertEqual(member["mobile"], "795-6175")
         self.assertEqual(member["balance"], 5.0)
 
+    def test_payment_log_updates_last_paid_without_overwriting_billing_amount(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            backup_dir = data_dir / "Backup"
+            backup_dir.mkdir(parents=True)
+            backup = backup_dir / "GABackup-test.gbu"
+            members_text = "\n".join([
+                "MN=18659",
+                "LN=De Aquino",
+                "FN=Derick",
+                "MTN=contract Dreamz 6 months",
+                "R$=6500",
+                "N$=6500",
+                "$B=0",
+                "-",
+                "",
+            ])
+            with zipfile.ZipFile(backup, "w") as backup_file:
+                backup_file.writestr("Members.btx", members_text)
+            log_file = data_dir / "Temp Files" / "Member Updates" / "EditMembers 2026-05-26.txt"
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            log_file.write_text(
+                "2026/05/26 10:20:00|FRONTDESK|Gym Assistant|MN=18659\tLP=20260526\tR$=400\tN$=6500\t$B=0\t-\t\n",
+                encoding="latin-1",
+            )
+            os.utime(backup, (1000, 1000))
+            os.utime(log_file, (2000, 2000))
+
+            payload = build_sync_payload(root)
+
+        member = next(member for member in payload["members"] if member["member_id"] == "18659")
+        self.assertEqual(member["billing_amount"], 65.0)
+        self.assertEqual(member["last_payment_amount"], 4.0)
+
     def test_manifest_diff_detects_added_changed_and_removed_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "Gym Assistant 2.6"

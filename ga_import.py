@@ -197,8 +197,8 @@ def normalize_backup_record(fields: dict[str, str], record_number: int) -> tuple
 
     plan_type = (fields.get("MTN") or "").strip() or None
     billing_type = (fields.get("BT") or "").strip() or None
-    billing_amount = parse_backup_money(fields.get("R$") or fields.get("N$"))
-    last_payment_amount = parse_backup_money(fields.get("N$") or fields.get("R$"))
+    billing_amount = parse_backup_money(fields.get("N$") or fields.get("R$"))
+    last_payment_amount = parse_backup_money(fields.get("R$") or fields.get("N$"))
     balance = parse_backup_money(fields.get("$B"))
 
     record: dict = {
@@ -253,10 +253,10 @@ def normalize_backup_update_record(fields: dict[str, str], record_number: int) -
     if "BT" in fields:
         record["billing_option"] = full_record.get("billing_option")
         record["billing_type"] = full_record.get("billing_type")
-    if "R$" in fields:
-        record["billing_amount"] = parse_backup_money(fields.get("R$"))
     if "N$" in fields:
-        record["last_payment_amount"] = parse_backup_money(fields.get("N$"))
+        record["billing_amount"] = parse_backup_money(fields.get("N$"))
+    if "R$" in fields:
+        record["last_payment_amount"] = parse_backup_money(fields.get("R$"))
     if "$B" in fields:
         record["balance"] = parse_backup_money(fields.get("$B"))
     if "EM" in fields:

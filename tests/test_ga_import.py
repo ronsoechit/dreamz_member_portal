@@ -64,9 +64,9 @@ PU=20260601
 LP=20260429
 SU=20211005
 MTN=contract Dreamz 12 months
-R$=5500
+R$=400
 BT=1 MONTHS EFT
-N$=5500
+N$=6500
 PH=
 PM=701-0000
 BD=00000000
@@ -156,8 +156,8 @@ class GymAssistantImportTests(unittest.TestCase):
         self.assertEqual(member["name"], "Damon, Norluze")
         self.assertEqual(member["contract_type"], "12-months")
         self.assertEqual(member["billing_type"], "1 MONTHS EFT")
-        self.assertEqual(member["billing_amount"], 55.0)
-        self.assertEqual(member["last_payment_amount"], 55.0)
+        self.assertEqual(member["billing_amount"], 65.0)
+        self.assertEqual(member["last_payment_amount"], 4.0)
         self.assertEqual(member["due_date"], date(2026, 6, 1))
         self.assertEqual(member["next_payment"], date(2026, 6, 1))
         self.assertEqual(member["last_payment"], date(2026, 4, 29))
