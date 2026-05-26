@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}{{ t('my_coach') }} | Dreamz Fitness{% endblock %}
+
+{% macro option_select(name, label, values, selected, label_key, help_text=None) %}
+  <label class="block">
+    <span class="text-sm font-semibold text-gray-200">{{ label }}</span>
+    {% if help_text %}
+      <span class="mt-1 block text-xs leading-5 text-gray-400">{{ help_text }}</span>
+    {% endif %}
+    <select name="{{ name }}" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white">
+      <option value="">{{ t('choose_option') }}</option>
+      {% for value in values %}
+        <option value="{{ value }}" {% if selected == value %}selected{% endif %}>{{ coach_label(label_key, value) }}</option>
+      {% endfor %}
+    </select>
+  </label>
+{% endmacro %}
+
+{% block content %}
+<div class="mb-6">
+  <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('my_coach') }}</div>
+  <h2 class="mt-1 text-2xl font-semibold">{{ t('coach_title') }}</h2>
+  <p class="mt-2 max-w-4xl text-sm leading-6 text-gray-300">{{ t('coach_intro') }}</p>
+</div>
+
+<div class="mb-6 grid gap-4 lg:grid-cols-[1fr_18rem]">
+  <div class="rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <div>
+        <h3 class="text-lg font-semibold text-yellow-400">{{ t('coach_profile_status') }}</h3>
+        <p class="mt-1 text-sm text-gray-300">{{ t('coach_profile_status_intro') }}</p>
+      </div>
+      <div class="text-left md:text-right">
+        <div class="text-3xl font-semibold text-yellow-400">{{ completion }}%</div>
+        <div class="text-xs text-gray-400">{{ t('coach_profile_complete') }}</div>
+      </div>
+    </div>
+  </div>
+
+  <a class="flex items-center justify-center rounded-lg border border-gray-700 bg-gray-800/40 p-5 text-center text-sm font-semibold text-yellow-300 transition hover:border-yellow-400 hover:bg-gray-800" href="{{ url_for('dashboard', id=member.member_id) }}">
+    {{ t('back_to_dashboard') }}
+  </a>
+</div>
+
+<form method="post" class="space-y-6" data-loading-form>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <section class="rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <h3 class="text-xl font-semibold text-yellow-400">{{ t('coach_training_profile') }}</h3>
+    <div class="mt-5 grid gap-5 md:grid-cols-2">
+      {{ option_select('primary_goal', t('coach_primary_goal'), coach_goals, profile.primary_goal if profile else '', 'goal') }}
+      {{ option_select('experience_level', t('coach_experience_level'), coach_experience_levels, profile.experience_level if profile else '', 'experience') }}
+      <label class="block">
+        <span class="text-sm font-semibold text-gray-200">{{ t('coach_training_days') }}</span>
+        <select name="training_days" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white">
+          <option value="">{{ t('choose_option') }}</option>
+          {% for value in coach_training_days %}
+            <option value="{{ value }}" {% if profile and profile.training_days == value %}selected{% endif %}>{{ value }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="block">
+        <span class="text-sm font-semibold text-gray-200">{{ t('coach_session_minutes') }}</span>
+        <select name="session_minutes" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white">
+          <option value="">{{ t('choose_option') }}</option>
+          {% for value in coach_session_minutes %}
+            <option value="{{ value }}" {% if profile and profile.session_minutes == value %}selected{% endif %}>{{ value }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {{ option_select('training_place', t('coach_training_place'), coach_training_places, profile.training_place if profile else '', 'place') }}
+      <label class="block md:col-span-2">
+        <span class="text-sm font-semibold text-gray-200">{{ t('coach_injuries') }}</span>
+        <textarea name="injuries" rows="3" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" placeholder="{{ t('coach_injuries_placeholder') }}">{{ profile.injuries if profile and profile.injuries else '' }}</textarea>
+      </label>
+    </div>
+  </section>
+
+  <section class="rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <h3 class="text-xl font-semibold text-yellow-400">{{ t('coach_body_nutrition_profile') }}</h3>
+    <div class="mt-5 grid gap-5 md:grid-cols-2">
+      <label class="block">
+        <span class="text-sm font-semibold text-gray-200">{{ t('coach_height_cm') }}</span>
+        <input name="height_cm" inputmode="decimal" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" value="{{ profile.height_cm if profile and profile.height_cm is not none else '' }}">
+      </label>
+      <label class="block">
+        <span class="text-sm font-semibold text-gray-200">{{ t('coach_weight_kg') }}</span>
+        <input name="weight_kg" inputmode="decimal" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" value="{{ profile.weight_kg if profile and profile.weight_kg is not none else '' }}">
+      </label>
+      {{ option_select('nutrition_goal', t('coach_nutrition_goal'), coach_nutrition_goals, profile.nutrition_goal if profile else '', 'nutrition') }}
+      <label class="block">
+        <span class="text-sm font-semibold text-gray-200">{{ t('coach_dietary_preferences') }}</span>
+        <textarea name="dietary_preferences" rows="3" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" placeholder="{{ t('coach_dietary_preferences_placeholder') }}">{{ profile.dietary_preferences if profile and profile.dietary_preferences else '' }}</textarea>
+      </label>
+      <label class="block md:col-span-2">
+        <span class="text-sm font-semibold text-gray-200">{{ t('coach_allergies') }}</span>
+        <textarea name="allergies" rows="2" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" placeholder="{{ t('coach_allergies_placeholder') }}">{{ profile.allergies if profile and profile.allergies else '' }}</textarea>
+      </label>
+    </div>
+  </section>
+
+  <button type="submit" class="w-full rounded bg-yellow-500 px-4 py-3 font-semibold text-black transition hover:bg-yellow-400 disabled:cursor-not-allowed disabled:bg-gray-600 disabled:text-gray-300 md:w-auto" data-loading-text="{{ t('saving') }}">
+    {{ t('save_coach_profile') }}
+  </button>
+</form>
+
+{% if profile %}
+  <section class="mt-6 rounded-lg border border-green-500/30 bg-green-500/10 p-5">
+    <h3 class="text-xl font-semibold text-green-200">{{ t('coach_starter_guidance') }}</h3>
+    <p class="mt-2 text-sm leading-6 text-green-50/90">{{ t('coach_starter_guidance_intro') }}</p>
+    <div class="mt-5 grid gap-4 lg:grid-cols-3">
+      {% for item in starter_guidance %}
+        <article class="rounded border border-green-500/20 bg-gray-900/60 p-4">
+          <h4 class="font-semibold text-yellow-300">{{ item.title }}</h4>
+          <p class="mt-2 text-sm leading-6 text-gray-200">{{ item.body }}</p>
+        </article>
+      {% endfor %}
+    </div>
+    <p class="mt-5 rounded border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm leading-6 text-yellow-100">{{ t('coach_ai_next_note') }}</p>
+  </section>
+{% endif %}
+{% endblock %}

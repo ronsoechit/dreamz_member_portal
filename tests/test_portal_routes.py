@@ -15,7 +15,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
-from dreamz_portal import CancellationRequest, EmailLog, Member, MemberDocument, MemberLoginCode, app, cancellation_message, db  # noqa: E402
+from dreamz_portal import CancellationRequest, CoachProfile, EmailLog, Member, MemberDocument, MemberLoginCode, app, cancellation_message, db  # noqa: E402
 
 
 class FakeS3Body:
@@ -204,6 +204,55 @@ class PortalRouteTests(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn('/logout"', body)
         self.assertIn("Sali", body)
+
+    def test_member_dashboard_links_to_my_coach(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+
+        response = self.client.get("/dashboard?id=13659")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("/coach", body)
+        self.assertIn("Your personal Dreamz trainer", body)
+
+    def test_coach_page_requires_member_login(self):
+        response = self.client.get("/coach")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response.headers["Location"])
+
+    def test_coach_profile_can_be_saved(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+
+        response = self.client.post(
+            "/coach",
+            data=self.csrf_form_data(
+                primary_goal="build_muscle",
+                experience_level="intermediate",
+                training_days="4",
+                session_minutes="60",
+                training_place="dreamz_gym",
+                height_cm="180",
+                weight_kg="85.5",
+                injuries="No injuries",
+                nutrition_goal="muscle_gain",
+                dietary_preferences="Local food",
+                allergies="None",
+            ),
+        )
+
+        self.assertEqual(response.status_code, 302)
+        profile = CoachProfile.query.filter_by(member_id="13659").one()
+        self.assertEqual(profile.primary_goal, "build_muscle")
+        self.assertEqual(profile.training_days, 4)
+        self.assertEqual(profile.weight_kg, 85.5)
+
+        response = self.client.get("/coach")
+        body = response.get_data(as_text=True)
+        self.assertIn("Starter guidance", body)
+        self.assertIn("Build muscle", body)
 
     def test_member_logout_clears_session(self):
         self.add_member(member_id="13659")

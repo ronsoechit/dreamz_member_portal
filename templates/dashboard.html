@@ -47,6 +47,21 @@
   </div>
 </div>
 
+{% if not staff_admin_view %}
+  <section class="mb-6 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-5">
+    <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      <div>
+        <div class="text-sm font-semibold uppercase tracking-wide text-yellow-300">{{ t('my_coach') }}</div>
+        <h3 class="mt-1 text-xl font-semibold">{{ t('coach_dashboard_title') }}</h3>
+        <p class="mt-2 max-w-3xl text-sm leading-6 text-yellow-50/90">{{ t('coach_dashboard_intro') }}</p>
+      </div>
+      <a class="inline-flex items-center justify-center rounded bg-yellow-500 px-4 py-2 font-semibold text-black transition hover:bg-yellow-400" href="{{ url_for('member_coach') }}">
+        {{ t('open_my_coach') }}
+      </a>
+    </div>
+  </section>
+{% endif %}
+
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
   <!-- Member Information -->
   <div class="bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">

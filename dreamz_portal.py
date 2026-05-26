@@ -279,6 +279,24 @@ class MemberLoginCode(db.Model):
     attempts = db.Column(db.Integer, default=0, nullable=False)
 
 
+class CoachProfile(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.String, unique=True, nullable=False, index=True)
+    primary_goal = db.Column(db.String)
+    experience_level = db.Column(db.String)
+    training_days = db.Column(db.Integer)
+    session_minutes = db.Column(db.Integer)
+    training_place = db.Column(db.String)
+    height_cm = db.Column(db.Float)
+    weight_kg = db.Column(db.Float)
+    injuries = db.Column(db.Text)
+    nutrition_goal = db.Column(db.String)
+    dietary_preferences = db.Column(db.Text)
+    allergies = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+
 DEFAULT_SETTINGS = {
     "admin_email": "ron@dreamzfitness.com",
     "notification_to": "ron@dreamzfitness.com",
@@ -1176,6 +1194,92 @@ def current_member_or_redirect():
         return None, redirect(url_for("login"))
 
     return member, None
+
+
+COACH_GOALS = ["lose_weight", "build_muscle", "get_fitter", "strength", "health"]
+COACH_EXPERIENCE_LEVELS = ["beginner", "intermediate", "advanced"]
+COACH_TRAINING_DAYS = [2, 3, 4, 5, 6]
+COACH_SESSION_MINUTES = [30, 45, 60, 75, 90]
+COACH_TRAINING_PLACES = ["dreamz_gym", "home", "both"]
+COACH_NUTRITION_GOALS = ["fat_loss", "muscle_gain", "maintenance", "healthier"]
+
+
+def coach_profile_for_member(member):
+    return CoachProfile.query.filter_by(member_id=member.member_id).first()
+
+
+def parse_optional_float(value):
+    value = str(value or "").strip().replace(",", ".")
+    if not value:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def parse_optional_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def coach_label(key, value, language=None):
+    if not value:
+        return translated_text("not_available", language or current_language())
+    return translated_text(f"coach_{key}_{value}", language or current_language())
+
+
+def coach_profile_completion(profile):
+    if not profile:
+        return 0
+    fields = [
+        profile.primary_goal,
+        profile.experience_level,
+        profile.training_days,
+        profile.session_minutes,
+        profile.training_place,
+        profile.height_cm,
+        profile.weight_kg,
+        profile.nutrition_goal,
+    ]
+    return round((sum(1 for field in fields if field not in (None, "")) / len(fields)) * 100)
+
+
+def coach_starter_guidance(profile, language=None):
+    language = language or current_language()
+    if not profile:
+        return []
+
+    training_days = profile.training_days or 3
+    session_minutes = profile.session_minutes or 45
+    goal_key = profile.primary_goal or "get_fitter"
+    nutrition_key = profile.nutrition_goal or "healthier"
+    return [
+        {
+            "title": translated_text("coach_guidance_training_title", language),
+            "body": translated_text(
+                "coach_guidance_training_body",
+                language,
+                days=training_days,
+                minutes=session_minutes,
+                goal=coach_label("goal", goal_key, language).lower(),
+            ),
+        },
+        {
+            "title": translated_text("coach_guidance_nutrition_title", language),
+            "body": translated_text(
+                "coach_guidance_nutrition_body",
+                language,
+                goal=coach_label("nutrition", nutrition_key, language).lower(),
+            ),
+        },
+        {
+            "title": translated_text("coach_guidance_safety_title", language),
+            "body": translated_text("coach_guidance_safety_body", language),
+        },
+    ]
 
 
 def document_config_or_404(document_type):
@@ -3048,6 +3152,51 @@ def dashboard():
         return abort(404, "Member not found.")
 
     return render_template("dashboard.html", **member_dashboard_context(member))
+
+
+@app.route("/coach", methods=["GET", "POST"])
+def member_coach():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+
+    profile = coach_profile_for_member(member)
+    if request.method == "POST":
+        validate_csrf_token()
+        if not profile:
+            profile = CoachProfile(member_id=member.member_id)
+            db.session.add(profile)
+
+        profile.primary_goal = request.form.get("primary_goal", "").strip() or None
+        profile.experience_level = request.form.get("experience_level", "").strip() or None
+        profile.training_days = parse_optional_int(request.form.get("training_days"))
+        profile.session_minutes = parse_optional_int(request.form.get("session_minutes"))
+        profile.training_place = request.form.get("training_place", "").strip() or None
+        profile.height_cm = parse_optional_float(request.form.get("height_cm"))
+        profile.weight_kg = parse_optional_float(request.form.get("weight_kg"))
+        profile.injuries = request.form.get("injuries", "").strip() or None
+        profile.nutrition_goal = request.form.get("nutrition_goal", "").strip() or None
+        profile.dietary_preferences = request.form.get("dietary_preferences", "").strip() or None
+        profile.allergies = request.form.get("allergies", "").strip() or None
+        profile.updated_at = datetime.now()
+        db.session.commit()
+        flash(translated_text("coach_profile_saved", current_language()))
+        return redirect(url_for("member_coach"))
+
+    return render_template(
+        "coach.html",
+        member=member,
+        profile=profile,
+        completion=coach_profile_completion(profile),
+        starter_guidance=coach_starter_guidance(profile),
+        coach_goals=COACH_GOALS,
+        coach_experience_levels=COACH_EXPERIENCE_LEVELS,
+        coach_training_days=COACH_TRAINING_DAYS,
+        coach_session_minutes=COACH_SESSION_MINUTES,
+        coach_training_places=COACH_TRAINING_PLACES,
+        coach_nutrition_goals=COACH_NUTRITION_GOALS,
+        coach_label=coach_label,
+    )
 
     policy = cancellation_policy_for_member(member)
     language = current_language()

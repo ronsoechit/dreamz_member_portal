@@ -42,9 +42,11 @@
             <a class="rounded border border-gray-700 bg-gray-900/40 px-3 py-2 text-sm text-yellow-400 hover:bg-gray-700 hover:text-yellow-300" href="{{ url_for('staff_logout') }}">Logout</a>
           </div>
         {% elif current_member_id %}
-          <div class="flex justify-end">
-            <a class="rounded border border-gray-700 bg-gray-900/40 px-3 py-2 text-sm text-yellow-400 hover:bg-gray-700 hover:text-yellow-300" href="{{ url_for('logout') }}">{{ t('logout') }}</a>
-          </div>
+          <nav class="flex flex-wrap items-center gap-1 rounded border border-gray-700 bg-gray-900/40 p-1 text-sm">
+            <a class="rounded px-3 py-2 {% if request.endpoint == 'dashboard' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('dashboard', id=current_member_id) }}">{{ t('dashboard') }}</a>
+            <a class="rounded px-3 py-2 {% if request.endpoint == 'member_coach' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('member_coach') }}">{{ t('my_coach') }}</a>
+            <a class="rounded px-3 py-2 text-yellow-400 hover:bg-gray-700 hover:text-yellow-300" href="{{ url_for('logout') }}">{{ t('logout') }}</a>
+          </nav>
         {% endif %}
         <div class="flex flex-wrap items-center gap-2 border-gray-700 text-xs lg:border-l lg:pl-4">
           {% for code, label in available_languages.items() %}
