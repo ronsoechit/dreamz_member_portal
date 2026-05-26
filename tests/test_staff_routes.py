@@ -187,7 +187,8 @@ class StaffRouteTests(unittest.TestCase):
     def test_staff_home_requires_login(self):
         response = self.client.get("/staff")
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/staff/login", response.headers["Location"])
 
     def test_staff_home_shows_member_portal_and_fep_choices(self):
         with self.client.session_transaction() as sess:
@@ -198,11 +199,14 @@ class StaffRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn("Staff Home", body)
+        self.assertIn("Dreamz Fitness Staff", body)
         self.assertIn("Member Info Staff/Admin", body)
         self.assertIn("/staff/data-audit", body)
         self.assertIn("FEP Manager", body)
         self.assertIn("https://dreamz-fep.onrender.com/login", body)
+        self.assertNotIn(">Audit</a>", body)
+        self.assertNotIn(">Sync</a>", body)
+        self.assertIn("/staff/logout", body)
 
     def test_staff_data_audit_lists_member_issues(self):
         self.add_member(email="", mobile="", photo_path=None)
@@ -312,7 +316,7 @@ class StaffRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Staff Home", response.get_data(as_text=True))
+        self.assertIn("Dreamz Fitness Staff", response.get_data(as_text=True))
         self.assertIn("Member Info Staff/Admin", response.get_data(as_text=True))
 
     def test_staff_settings_updates_notifications_and_staff_user(self):

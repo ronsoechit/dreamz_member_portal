@@ -14,7 +14,7 @@
         <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Logo" class="h-10">
       </a>
       <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-end">
-        {% if current_staff_role %}
+        {% if current_staff_role and request.endpoint != 'staff_home' %}
           <nav class="flex flex-wrap items-center gap-1 rounded border border-gray-700 bg-gray-900/40 p-1 text-sm">
             <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_home' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_home') }}">Home</a>
             <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_data_audit' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_data_audit') }}">Audit</a>
@@ -37,6 +37,10 @@
             {% endif %}
             <a class="rounded px-3 py-2 text-yellow-400 hover:bg-gray-700 hover:text-yellow-300" href="{{ url_for('staff_logout') }}">Logout</a>
           </nav>
+        {% elif current_staff_role %}
+          <div class="flex justify-end">
+            <a class="rounded border border-gray-700 bg-gray-900/40 px-3 py-2 text-sm text-yellow-400 hover:bg-gray-700 hover:text-yellow-300" href="{{ url_for('staff_logout') }}">Logout</a>
+          </div>
         {% elif current_member_id %}
           <div class="flex justify-end">
             <a class="rounded border border-gray-700 bg-gray-900/40 px-3 py-2 text-sm text-yellow-400 hover:bg-gray-700 hover:text-yellow-300" href="{{ url_for('logout') }}">{{ t('logout') }}</a>

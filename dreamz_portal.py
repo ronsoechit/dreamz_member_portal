@@ -2336,6 +2336,8 @@ def staff_logout():
 
 @app.get("/staff")
 def staff_home():
+    if not current_staff_role() and not staff_access_from_token():
+        return redirect(url_for("staff_login"))
     staff_role = require_staff_access()
     return render_template(
         "staff_home.html",
