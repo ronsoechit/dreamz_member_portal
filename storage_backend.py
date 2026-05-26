@@ -116,15 +116,16 @@ def open_s3_object(uri: str):
     return response["Body"]
 
 
-def s3_object_exists(uri: str) -> bool:
+def s3_object_exists(uri: str, client=None) -> bool:
     from botocore.exceptions import ClientError
 
     parsed = parse_s3_uri(uri)
     if not parsed:
         return False
     bucket, key = parsed
+    client = client or s3_client()
     try:
-        s3_client().head_object(Bucket=bucket, Key=key)
+        client.head_object(Bucket=bucket, Key=key)
     except ClientError as exc:
         code = (exc.response.get("Error") or {}).get("Code")
         if code in {"404", "NoSuchKey", "NotFound"}:

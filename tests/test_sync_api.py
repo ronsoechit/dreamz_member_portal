@@ -162,7 +162,7 @@ class SyncApiTests(unittest.TestCase):
         ))
         db.session.commit()
 
-        def fake_exists(uri):
+        def fake_exists(uri, client=None):
             return uri.endswith("photos/1206.jpg")
 
         with patch("dreamz_portal.s3_object_exists", side_effect=fake_exists):
@@ -173,6 +173,7 @@ class SyncApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["missing_keys"], ["gymassistant/docs/contract.pdf"])
+        self.assertEqual(response.json["checked"], 2)
 
     def test_member_document_file_returns_404_when_storage_object_is_missing(self):
         db.session.add(Member(member_id="1206", name="Example, Member"))

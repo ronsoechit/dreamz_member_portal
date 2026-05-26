@@ -532,7 +532,7 @@ def get_existing_member_ids(portal_url: str, token: str, timeout: int = 60) -> s
     return {str(member_id) for member_id in member_ids}
 
 
-def get_missing_file_keys(portal_url: str, token: str, timeout: int = 120) -> set[str]:
+def get_missing_file_keys(portal_url: str, token: str, timeout: int = 300) -> set[str]:
     endpoint = portal_url.rstrip("/") + "/api/sync/missing-file-keys"
     http_request = urlrequest.Request(
         endpoint,
