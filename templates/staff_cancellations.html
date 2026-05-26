@@ -91,6 +91,9 @@
             {% if req.notification_cc %}
               <div class="break-words text-xs text-gray-400">Cc: {{ req.notification_cc }}</div>
             {% endif %}
+            {% if req.notification_bcc %}
+              <div class="break-words text-xs text-gray-400">Bcc: {{ req.notification_bcc }}</div>
+            {% endif %}
             {% if req.mail_error %}
               <div class="mt-2 rounded border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-200">{{ req.mail_error }}</div>
             {% endif %}
@@ -115,9 +118,20 @@
 
           <div>
             {% if staff_role != 'admin' %}
-              <div class="rounded border border-gray-700 bg-gray-800/50 p-3 text-xs leading-5 text-gray-300">
-                View only. Admin processing is required to update this request.
-              </div>
+              {% if staff_role == 'manager' and admin_status == 'reviewed' %}
+                <form method="post" action="{{ url_for('staff_cancellation_status', request_id=req.id, admin_status=selected_admin_status) }}" class="space-y-2 rounded border border-yellow-500/30 bg-yellow-500/10 p-3">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="admin_status" value="processed">
+                  <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">Manager completion</div>
+                  <p class="text-xs leading-5 text-yellow-100">Use this only after GymAssistant and FEP Manager have been updated.</p>
+                  <textarea name="staff_note" rows="2" placeholder="Completion note" class="w-full rounded bg-gray-900 p-2 text-sm text-white placeholder-gray-500">{{ req.staff_note or '' }}</textarea>
+                  <button type="submit" class="w-full rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black hover:bg-yellow-400">Mark completed & send confirmation</button>
+                </form>
+              {% else %}
+                <div class="rounded border border-gray-700 bg-gray-800/50 p-3 text-xs leading-5 text-gray-300">
+                  View only. Admin review is required before the manager can complete this request.
+                </div>
+              {% endif %}
             {% elif req.admin_status == 'processed' %}
               <div class="rounded border border-gray-700 bg-gray-800/50 p-3 text-xs leading-5 text-gray-300">
                 This request is processed and locked.

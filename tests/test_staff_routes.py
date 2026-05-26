@@ -181,7 +181,7 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("Blocked Member", body)
         self.assertNotIn("Accepted Member", body)
 
-    def test_manager_can_view_cancellations_but_not_update(self):
+    def test_manager_can_view_cancellations_but_not_update_unreviewed_request(self):
         record = self.add_request()
         with self.client.session_transaction() as sess:
             sess["staff_role"] = "manager"
@@ -202,6 +202,39 @@ class StaffRouteTests(unittest.TestCase):
             data={"csrf_token": "token", "admin_status": "processed"},
         )
         self.assertEqual(update_response.status_code, 403)
+
+    def test_manager_can_complete_reviewed_cancellation_and_send_confirmation(self):
+        self.add_member(last_payment=date(2026, 5, 1), next_payment=date(2026, 6, 1))
+        record = self.add_request(admin_status="reviewed", staff_note="Ready for manager")
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "christel"
+            sess["_csrf_token"] = "token"
+
+        response = self.client.get("/staff/cancellations")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Manager completion", body)
+        self.assertIn("Mark completed & send confirmation", body)
+
+        update_response = self.client.post(
+            f"/staff/cancellations/{record.id}/status",
+            data={"csrf_token": "token", "admin_status": "processed", "staff_note": "Updated in GymAssistant and FEP"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(update_response.status_code, 200)
+        updated = db.session.get(CancellationRequest, record.id)
+        self.assertEqual(updated.admin_status, "processed")
+        self.assertEqual(updated.handled_by, "christel")
+        self.assertEqual(updated.staff_note, "Updated in GymAssistant and FEP")
+        self.assertEqual(updated.notification_to, "member@example.com")
+        self.assertEqual(updated.notification_bcc, "ron@dreamzfitness.com")
+        self.assertEqual(updated.notification_cc, "")
+        email = EmailLog.query.order_by(EmailLog.id.desc()).first()
+        self.assertEqual(email.to_addresses, "member@example.com")
+        self.assertEqual(email.bcc_addresses, "ron@dreamzfitness.com")
 
     def test_staff_cancellations_csv_export(self):
         self.add_request()
@@ -465,14 +498,21 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("Test email logged", response.get_data(as_text=True))
 
     def test_deliver_email_records_log_entry(self):
-        status = deliver_email(["member@example.com"], "Test subject", "Test body", cc_addresses=["ron@dreamzfitness.com"])
+        status = deliver_email(
+            ["member@example.com"],
+            "Test subject",
+            "Test body",
+            cc_addresses=["manager@dreamzfitness.com"],
+            bcc_addresses=["ron@dreamzfitness.com"],
+        )
 
         self.assertEqual(status, "logged")
         log_entry = EmailLog.query.one()
         self.assertEqual(log_entry.status, "logged")
         self.assertEqual(log_entry.delivery_mode, "log")
         self.assertEqual(log_entry.to_addresses, "member@example.com")
-        self.assertEqual(log_entry.cc_addresses, "ron@dreamzfitness.com")
+        self.assertEqual(log_entry.cc_addresses, "manager@dreamzfitness.com")
+        self.assertEqual(log_entry.bcc_addresses, "ron@dreamzfitness.com")
         self.assertEqual(log_entry.subject, "Test subject")
         self.assertEqual(log_entry.body, "Test body")
 
@@ -586,8 +626,11 @@ class StaffRouteTests(unittest.TestCase):
         self.assertEqual(updated.access_until, date(2026, 6, 30))
         self.assertIn("Final payment date: 28 May 2026", updated.confirmation_body)
         self.assertIn("Access until: 30 June 2026", updated.confirmation_body)
-        self.assertIn("ron@dreamzfitness.com", updated.notification_cc)
-        self.assertIn("manager@dreamzfitness.com", updated.notification_cc)
+        self.assertEqual(updated.notification_cc, "")
+        self.assertEqual(updated.notification_bcc, "ron@dreamzfitness.com")
+        email = EmailLog.query.order_by(EmailLog.id.desc()).first()
+        self.assertEqual(email.to_addresses, "member@example.com")
+        self.assertEqual(email.bcc_addresses, "ron@dreamzfitness.com")
 
     def test_processed_cancellation_is_locked_without_admin_override(self):
         self.add_member()

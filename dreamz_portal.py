@@ -204,6 +204,7 @@ class CancellationRequest(db.Model):
     language = db.Column(db.String, default=DEFAULT_LANGUAGE)
     notification_to = db.Column(db.Text)
     notification_cc = db.Column(db.Text)
+    notification_bcc = db.Column(db.Text)
 
     member_name = db.Column(db.String)
     member_email = db.Column(db.String)
@@ -244,6 +245,7 @@ class EmailLog(db.Model):
     status = db.Column(db.String, default="pending", nullable=False)
     to_addresses = db.Column(db.Text)
     cc_addresses = db.Column(db.Text)
+    bcc_addresses = db.Column(db.Text)
     subject = db.Column(db.String)
     body = db.Column(db.Text)
     html_body = db.Column(db.Text)
@@ -335,6 +337,7 @@ def ensure_runtime_schema():
     db.create_all()
     ensure_sqlite_model_column("cancellation_request", "notification_to", "TEXT")
     ensure_sqlite_model_column("cancellation_request", "notification_cc", "TEXT")
+    ensure_model_column("cancellation_request", "notification_bcc", "TEXT")
     ensure_sqlite_model_column("cancellation_request", "admin_status", "VARCHAR DEFAULT 'new' NOT NULL")
     ensure_sqlite_model_column("cancellation_request", "handled_by", "VARCHAR")
     ensure_sqlite_model_column("cancellation_request", "handled_at", "DATETIME")
@@ -346,6 +349,7 @@ def ensure_runtime_schema():
     ensure_sqlite_model_column("cancellation_request", "access_until", "DATE")
     ensure_model_column("cancellation_request", "language", "VARCHAR")
     ensure_sqlite_model_column("email_log", "html_body", "TEXT")
+    ensure_model_column("email_log", "bcc_addresses", "TEXT")
     ensure_sqlite_model_column("email_log", "reviewed_at", "DATETIME")
     ensure_sqlite_model_column("email_log", "reviewed_by", "VARCHAR")
     ensure_model_column("sync_run", "change_summary", "TEXT")
@@ -1492,6 +1496,7 @@ def cancellation_request_rows(records):
             "mail_status": record.mail_status or "",
             "notification_to": record.notification_to or "",
             "notification_cc": record.notification_cc or "",
+            "notification_bcc": record.notification_bcc or "",
             "reason": record.reason or "",
             "plan_type": record.plan_type or "",
             "contract_type": record.contract_type or "",
@@ -1940,9 +1945,10 @@ def email_html_layout(title, intro, rows=None, note=None, action_label=None, act
 </html>"""
 
 
-def deliver_email(to_addresses, subject, body, cc_addresses=None, html_body=None):
+def deliver_email(to_addresses, subject, body, cc_addresses=None, bcc_addresses=None, html_body=None):
     to_addresses = [email for email in (to_addresses or []) if email]
     cc_addresses = [email for email in (cc_addresses or []) if email]
+    bcc_addresses = [email for email in (bcc_addresses or []) if email]
     delivery_mode = app.config.get("EMAIL_DELIVERY_MODE", "log")
 
     log_record = EmailLog(
@@ -1950,6 +1956,7 @@ def deliver_email(to_addresses, subject, body, cc_addresses=None, html_body=None
         status="pending",
         to_addresses=", ".join(to_addresses),
         cc_addresses=", ".join(cc_addresses),
+        bcc_addresses=", ".join(bcc_addresses),
         subject=subject,
         body=body,
         html_body=html_body,
@@ -1975,7 +1982,7 @@ def deliver_email(to_addresses, subject, body, cc_addresses=None, html_body=None
     try:
         with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as s:
             s.login(SMTP_USER, SMTP_PASS)
-            s.send_message(msg, to_addrs=[*to_addresses, *cc_addresses])
+            s.send_message(msg, to_addrs=[*to_addresses, *cc_addresses, *bcc_addresses])
     except Exception as exc:
         log_record.status = "failed"
         log_record.error = str(exc)
@@ -2209,18 +2216,21 @@ def send_cancellation_confirmation_email(member, request_record):
     request_record.access_until = access_until
 
     to_addresses = [member.email] if member.email else []
-    staff_to_addresses, cc_addresses = notification_recipients()
+    staff_to_addresses, _ = notification_recipients()
+    cc_addresses = []
+    bcc_addresses = []
     member_email = normalize_email(member.email)
-    for staff_email in staff_to_addresses:
-        if normalize_email(staff_email) != member_email:
-            append_unique_email(cc_addresses, staff_email)
+    admin_email = setting_value("admin_email", "ron@dreamzfitness.com")
+    if admin_email and normalize_email(admin_email) != member_email:
+        append_unique_email(bcc_addresses, admin_email)
     if not to_addresses:
-        to_addresses, cc_addresses = staff_to_addresses, cc_addresses
+        to_addresses, bcc_addresses = staff_to_addresses, []
 
     request_record.notification_to = ", ".join(to_addresses)
     request_record.notification_cc = ", ".join(cc_addresses)
+    request_record.notification_bcc = ", ".join(bcc_addresses)
 
-    return deliver_email(to_addresses, subject, body, cc_addresses=cc_addresses, html_body=html_body)
+    return deliver_email(to_addresses, subject, body, cc_addresses=cc_addresses, bcc_addresses=bcc_addresses, html_body=html_body)
 
 @app.route("/")
 def home():
@@ -2700,6 +2710,7 @@ def staff_cancellations_csv():
         "mail_status",
         "notification_to",
         "notification_cc",
+        "notification_bcc",
         "reason",
         "plan_type",
         "contract_type",
@@ -2730,7 +2741,7 @@ def staff_cancellations_csv():
 @app.post("/staff/cancellations/<int:request_id>/status")
 def staff_cancellation_status(request_id):
     validate_csrf_token()
-    require_staff_access(required_role="admin")
+    staff_role = require_staff_access()
     request_record = db.session.get(CancellationRequest, request_id)
     if not request_record:
         abort(404, "Cancellation request not found.")
@@ -2741,6 +2752,9 @@ def staff_cancellation_status(request_id):
 
     previous_status = request_record.admin_status or "new"
     admin_override = request.form.get("admin_override") == "1"
+    if staff_role != "admin":
+        if admin_override or previous_status != "reviewed" or admin_status != "processed":
+            abort(403, "Manager can only complete reviewed cancellation requests.")
     if previous_status == "processed" and not admin_override:
         abort(409, "Processed cancellation requests are locked. Use admin correction to change them.")
 

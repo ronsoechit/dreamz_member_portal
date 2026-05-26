@@ -65,6 +65,8 @@
             <dd class="text-gray-300">{{ email.to_addresses or 'Not available' }}</dd>
             <dt class="font-semibold text-gray-200">Cc</dt>
             <dd class="text-gray-300">{{ email.cc_addresses or 'None' }}</dd>
+            <dt class="font-semibold text-gray-200">Bcc</dt>
+            <dd class="text-gray-300">{{ email.bcc_addresses or 'None' }}</dd>
             {% if email.reviewed_at %}
               <dt class="font-semibold text-gray-200">Reviewed</dt>
               <dd class="text-gray-300">{{ email.reviewed_by or 'admin' }} / {{ email.reviewed_at|format_date('%d/%m/%Y %H:%M') }}</dd>
