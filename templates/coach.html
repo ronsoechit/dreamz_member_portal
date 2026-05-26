@@ -1,18 +1,23 @@
 {% extends "base.html" %}
 {% block title %}{{ t('my_coach') }} | Dreamz Fitness{% endblock %}
 
-{% macro option_select(name, label, values, selected, label_key, help_text=None) %}
+{% macro option_select(name, label, values, selected, label_key) %}
   <label class="block">
     <span class="text-sm font-semibold text-gray-200">{{ label }}</span>
-    {% if help_text %}
-      <span class="mt-1 block text-xs leading-5 text-gray-400">{{ help_text }}</span>
-    {% endif %}
-    <select name="{{ name }}" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white">
+    <select name="{{ name }}" data-coach-input class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" required>
       <option value="">{{ t('choose_option') }}</option>
       {% for value in values %}
         <option value="{{ value }}" {% if selected == value %}selected{% endif %}>{{ coach_label(label_key, value) }}</option>
       {% endfor %}
     </select>
+  </label>
+{% endmacro %}
+
+{% macro required_textarea(name, label, value, placeholder, rows=3) %}
+  <label class="block">
+    <span class="text-sm font-semibold text-gray-200">{{ label }}</span>
+    <textarea name="{{ name }}" data-coach-input rows="{{ rows }}" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" placeholder="{{ placeholder }}" required>{{ value or '' }}</textarea>
+    <span class="mt-1 block text-xs text-gray-400">{{ t('coach_none_hint') }}</span>
   </label>
 {% endmacro %}
 
@@ -42,17 +47,35 @@
   </a>
 </div>
 
-<form method="post" class="space-y-6" data-loading-form>
+<form id="coach-wizard" method="post" class="space-y-5" data-loading-form>
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-  <section class="rounded-lg border border-gray-700 bg-gray-800/40 p-5">
-    <h3 class="text-xl font-semibold text-yellow-400">{{ t('coach_training_profile') }}</h3>
-    <div class="mt-5 grid gap-5 md:grid-cols-2">
+  <div class="rounded-lg border border-gray-700 bg-gray-800/40 p-4">
+    <div class="mb-3 flex items-center justify-between text-sm">
+      <span class="font-semibold text-yellow-300">{{ t('coach_step') }} <span data-step-current>1</span> / 6</span>
+      <span class="text-gray-400" data-step-title>{{ t('coach_step_goal') }}</span>
+    </div>
+    <div class="h-2 overflow-hidden rounded-full bg-gray-800">
+      <div class="h-full rounded-full bg-yellow-500 transition-all" data-step-progress style="width: 16.66%;"></div>
+    </div>
+  </div>
+
+  <section data-coach-step data-title="{{ t('coach_step_goal') }}" class="rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <h3 class="text-xl font-semibold text-yellow-400">{{ t('coach_step_goal') }}</h3>
+    <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('coach_step_goal_intro') }}</p>
+    <div class="mt-5">
       {{ option_select('primary_goal', t('coach_primary_goal'), coach_goals, profile.primary_goal if profile else '', 'goal') }}
+    </div>
+  </section>
+
+  <section data-coach-step data-title="{{ t('coach_step_training') }}" class="hidden rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <h3 class="text-xl font-semibold text-yellow-400">{{ t('coach_step_training') }}</h3>
+    <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('coach_step_training_intro') }}</p>
+    <div class="mt-5 grid gap-5 md:grid-cols-2">
       {{ option_select('experience_level', t('coach_experience_level'), coach_experience_levels, profile.experience_level if profile else '', 'experience') }}
       <label class="block">
         <span class="text-sm font-semibold text-gray-200">{{ t('coach_training_days') }}</span>
-        <select name="training_days" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white">
+        <select name="training_days" data-coach-input class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" required>
           <option value="">{{ t('choose_option') }}</option>
           {% for value in coach_training_days %}
             <option value="{{ value }}" {% if profile and profile.training_days == value %}selected{% endif %}>{{ value }}</option>
@@ -61,7 +84,7 @@
       </label>
       <label class="block">
         <span class="text-sm font-semibold text-gray-200">{{ t('coach_session_minutes') }}</span>
-        <select name="session_minutes" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white">
+        <select name="session_minutes" data-coach-input class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" required>
           <option value="">{{ t('choose_option') }}</option>
           {% for value in coach_session_minutes %}
             <option value="{{ value }}" {% if profile and profile.session_minutes == value %}selected{% endif %}>{{ value }}</option>
@@ -69,39 +92,61 @@
         </select>
       </label>
       {{ option_select('training_place', t('coach_training_place'), coach_training_places, profile.training_place if profile else '', 'place') }}
-      <label class="block md:col-span-2">
-        <span class="text-sm font-semibold text-gray-200">{{ t('coach_injuries') }}</span>
-        <textarea name="injuries" rows="3" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" placeholder="{{ t('coach_injuries_placeholder') }}">{{ profile.injuries if profile and profile.injuries else '' }}</textarea>
-      </label>
     </div>
   </section>
 
-  <section class="rounded-lg border border-gray-700 bg-gray-800/40 p-5">
-    <h3 class="text-xl font-semibold text-yellow-400">{{ t('coach_body_nutrition_profile') }}</h3>
+  <section data-coach-step data-title="{{ t('coach_step_limitations') }}" class="hidden rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <h3 class="text-xl font-semibold text-yellow-400">{{ t('coach_step_limitations') }}</h3>
+    <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('coach_step_limitations_intro') }}</p>
+    <div class="mt-5">
+      {{ required_textarea('injuries', t('coach_injuries'), profile.injuries if profile else '', t('coach_injuries_placeholder')) }}
+    </div>
+  </section>
+
+  <section data-coach-step data-title="{{ t('coach_step_body') }}" class="hidden rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <h3 class="text-xl font-semibold text-yellow-400">{{ t('coach_step_body') }}</h3>
+    <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('coach_step_body_intro') }}</p>
     <div class="mt-5 grid gap-5 md:grid-cols-2">
       <label class="block">
         <span class="text-sm font-semibold text-gray-200">{{ t('coach_height_cm') }}</span>
-        <input name="height_cm" inputmode="decimal" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" value="{{ profile.height_cm if profile and profile.height_cm is not none else '' }}">
+        <input name="height_cm" data-coach-input type="number" step="0.1" min="1" inputmode="decimal" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" value="{{ profile.height_cm if profile and profile.height_cm is not none else '' }}" required>
       </label>
       <label class="block">
         <span class="text-sm font-semibold text-gray-200">{{ t('coach_weight_kg') }}</span>
-        <input name="weight_kg" inputmode="decimal" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" value="{{ profile.weight_kg if profile and profile.weight_kg is not none else '' }}">
-      </label>
-      {{ option_select('nutrition_goal', t('coach_nutrition_goal'), coach_nutrition_goals, profile.nutrition_goal if profile else '', 'nutrition') }}
-      <label class="block">
-        <span class="text-sm font-semibold text-gray-200">{{ t('coach_dietary_preferences') }}</span>
-        <textarea name="dietary_preferences" rows="3" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" placeholder="{{ t('coach_dietary_preferences_placeholder') }}">{{ profile.dietary_preferences if profile and profile.dietary_preferences else '' }}</textarea>
-      </label>
-      <label class="block md:col-span-2">
-        <span class="text-sm font-semibold text-gray-200">{{ t('coach_allergies') }}</span>
-        <textarea name="allergies" rows="2" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" placeholder="{{ t('coach_allergies_placeholder') }}">{{ profile.allergies if profile and profile.allergies else '' }}</textarea>
+        <input name="weight_kg" data-coach-input type="number" step="0.1" min="1" inputmode="decimal" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" value="{{ profile.weight_kg if profile and profile.weight_kg is not none else '' }}" required>
       </label>
     </div>
   </section>
 
-  <button type="submit" class="w-full rounded bg-yellow-500 px-4 py-3 font-semibold text-black transition hover:bg-yellow-400 disabled:cursor-not-allowed disabled:bg-gray-600 disabled:text-gray-300 md:w-auto" data-loading-text="{{ t('saving') }}">
-    {{ t('save_coach_profile') }}
-  </button>
+  <section data-coach-step data-title="{{ t('coach_step_nutrition') }}" class="hidden rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <h3 class="text-xl font-semibold text-yellow-400">{{ t('coach_step_nutrition') }}</h3>
+    <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('coach_step_nutrition_intro') }}</p>
+    <div class="mt-5 grid gap-5 md:grid-cols-2">
+      {{ option_select('nutrition_goal', t('coach_nutrition_goal'), coach_nutrition_goals, profile.nutrition_goal if profile else '', 'nutrition') }}
+      {{ required_textarea('dietary_preferences', t('coach_dietary_preferences'), profile.dietary_preferences if profile else '', t('coach_dietary_preferences_placeholder')) }}
+      <div class="md:col-span-2">
+        {{ required_textarea('allergies', t('coach_allergies'), profile.allergies if profile else '', t('coach_allergies_placeholder'), rows=2) }}
+      </div>
+    </div>
+  </section>
+
+  <section data-coach-step data-title="{{ t('coach_step_review') }}" class="hidden rounded-lg border border-green-500/30 bg-green-500/10 p-5">
+    <h3 class="text-xl font-semibold text-green-200">{{ t('coach_step_review') }}</h3>
+    <p class="mt-2 text-sm leading-6 text-green-50/90">{{ t('coach_review_intro') }}</p>
+    <div class="mt-5 grid gap-3 md:grid-cols-2" data-coach-review></div>
+  </section>
+
+  <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <button type="button" class="rounded border border-gray-700 bg-gray-800 px-4 py-3 font-semibold text-white transition hover:bg-gray-700" data-step-back>
+      {{ t('back') }}
+    </button>
+    <button type="button" class="rounded bg-yellow-500 px-4 py-3 font-semibold text-black transition hover:bg-yellow-400" data-step-next>
+      {{ t('next') }}
+    </button>
+    <button type="submit" class="hidden rounded bg-yellow-500 px-4 py-3 font-semibold text-black transition hover:bg-yellow-400 disabled:cursor-not-allowed disabled:bg-gray-600 disabled:text-gray-300" data-step-save data-loading-text="{{ t('saving') }}">
+      {{ t('save_coach_profile') }}
+    </button>
+  </div>
 </form>
 
 {% if profile %}
@@ -119,4 +164,70 @@
     <p class="mt-5 rounded border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm leading-6 text-yellow-100">{{ t('coach_ai_next_note') }}</p>
   </section>
 {% endif %}
+
+<script>
+  (() => {
+    const form = document.getElementById("coach-wizard");
+    if (!form) return;
+    const steps = Array.from(form.querySelectorAll("[data-coach-step]"));
+    const currentLabel = form.querySelector("[data-step-current]");
+    const titleLabel = form.querySelector("[data-step-title]");
+    const progress = form.querySelector("[data-step-progress]");
+    const backButton = form.querySelector("[data-step-back]");
+    const nextButton = form.querySelector("[data-step-next]");
+    const saveButton = form.querySelector("[data-step-save]");
+    const review = form.querySelector("[data-coach-review]");
+    let index = 0;
+
+    const fieldLabel = (input) => input.closest("label")?.querySelector("span")?.textContent?.trim() || input.name;
+    const fieldValue = (input) => {
+      if (input.tagName === "SELECT") {
+        return input.options[input.selectedIndex]?.textContent?.trim() || "";
+      }
+      return input.value.trim();
+    };
+
+    const buildReview = () => {
+      if (!review) return;
+      review.innerHTML = "";
+      form.querySelectorAll("[data-coach-input]").forEach((input) => {
+        const item = document.createElement("div");
+        item.className = "rounded border border-green-500/20 bg-gray-900/60 p-3";
+        const label = document.createElement("div");
+        label.className = "text-xs font-semibold uppercase text-gray-400";
+        label.textContent = fieldLabel(input);
+        const value = document.createElement("div");
+        value.className = "mt-1 text-sm text-white";
+        value.textContent = fieldValue(input) || "-";
+        item.append(label, value);
+        review.append(item);
+      });
+    };
+
+    const showStep = (nextIndex) => {
+      index = Math.max(0, Math.min(nextIndex, steps.length - 1));
+      steps.forEach((step, stepIndex) => step.classList.toggle("hidden", stepIndex !== index));
+      currentLabel.textContent = String(index + 1);
+      titleLabel.textContent = steps[index].dataset.title || "";
+      progress.style.width = `${((index + 1) / steps.length) * 100}%`;
+      backButton.classList.toggle("invisible", index === 0);
+      nextButton.classList.toggle("hidden", index === steps.length - 1);
+      saveButton.classList.toggle("hidden", index !== steps.length - 1);
+      if (index === steps.length - 1) buildReview();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+
+    const currentStepValid = () => {
+      const inputs = Array.from(steps[index].querySelectorAll("[data-coach-input]"));
+      return inputs.every((input) => input.checkValidity()) || (inputs.find((input) => !input.checkValidity())?.reportValidity(), false);
+    };
+
+    nextButton.addEventListener("click", () => {
+      if (!currentStepValid()) return;
+      showStep(index + 1);
+    });
+    backButton.addEventListener("click", () => showStep(index - 1));
+    showStep(0);
+  })();
+</script>
 {% endblock %}

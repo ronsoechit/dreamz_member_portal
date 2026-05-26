@@ -254,6 +254,32 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Starter guidance", body)
         self.assertIn("Build muscle", body)
 
+    def test_coach_profile_requires_all_fields(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+
+        response = self.client.post(
+            "/coach",
+            data=self.csrf_form_data(
+                primary_goal="build_muscle",
+                experience_level="intermediate",
+                training_days="4",
+                session_minutes="60",
+                training_place="dreamz_gym",
+                height_cm="180",
+                weight_kg="85.5",
+                injuries="none",
+                nutrition_goal="muscle_gain",
+                dietary_preferences="",
+                allergies="none",
+            ),
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(CoachProfile.query.filter_by(member_id="13659").count(), 0)
+        self.assertIn("Please complete every coach question.", response.get_data(as_text=True))
+
     def test_member_logout_clears_session(self):
         self.add_member(member_id="13659")
         self.login_as("13659")

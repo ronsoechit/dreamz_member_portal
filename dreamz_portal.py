@@ -1242,9 +1242,29 @@ def coach_profile_completion(profile):
         profile.training_place,
         profile.height_cm,
         profile.weight_kg,
+        profile.injuries,
         profile.nutrition_goal,
+        profile.dietary_preferences,
+        profile.allergies,
     ]
     return round((sum(1 for field in fields if field not in (None, "")) / len(fields)) * 100)
+
+
+def coach_profile_missing_fields(profile_data):
+    required_fields = [
+        "primary_goal",
+        "experience_level",
+        "training_days",
+        "session_minutes",
+        "training_place",
+        "height_cm",
+        "weight_kg",
+        "injuries",
+        "nutrition_goal",
+        "dietary_preferences",
+        "allergies",
+    ]
+    return [field for field in required_fields if profile_data.get(field) in (None, "")]
 
 
 def coach_starter_guidance(profile, language=None):
@@ -3163,21 +3183,29 @@ def member_coach():
     profile = coach_profile_for_member(member)
     if request.method == "POST":
         validate_csrf_token()
+        profile_data = {
+            "primary_goal": request.form.get("primary_goal", "").strip() or None,
+            "experience_level": request.form.get("experience_level", "").strip() or None,
+            "training_days": parse_optional_int(request.form.get("training_days")),
+            "session_minutes": parse_optional_int(request.form.get("session_minutes")),
+            "training_place": request.form.get("training_place", "").strip() or None,
+            "height_cm": parse_optional_float(request.form.get("height_cm")),
+            "weight_kg": parse_optional_float(request.form.get("weight_kg")),
+            "injuries": request.form.get("injuries", "").strip() or None,
+            "nutrition_goal": request.form.get("nutrition_goal", "").strip() or None,
+            "dietary_preferences": request.form.get("dietary_preferences", "").strip() or None,
+            "allergies": request.form.get("allergies", "").strip() or None,
+        }
+        if coach_profile_missing_fields(profile_data):
+            flash(translated_text("coach_complete_required", current_language()), "error")
+            return redirect(url_for("member_coach"))
+
         if not profile:
             profile = CoachProfile(member_id=member.member_id)
             db.session.add(profile)
 
-        profile.primary_goal = request.form.get("primary_goal", "").strip() or None
-        profile.experience_level = request.form.get("experience_level", "").strip() or None
-        profile.training_days = parse_optional_int(request.form.get("training_days"))
-        profile.session_minutes = parse_optional_int(request.form.get("session_minutes"))
-        profile.training_place = request.form.get("training_place", "").strip() or None
-        profile.height_cm = parse_optional_float(request.form.get("height_cm"))
-        profile.weight_kg = parse_optional_float(request.form.get("weight_kg"))
-        profile.injuries = request.form.get("injuries", "").strip() or None
-        profile.nutrition_goal = request.form.get("nutrition_goal", "").strip() or None
-        profile.dietary_preferences = request.form.get("dietary_preferences", "").strip() or None
-        profile.allergies = request.form.get("allergies", "").strip() or None
+        for key, value in profile_data.items():
+            setattr(profile, key, value)
         profile.updated_at = datetime.now()
         db.session.commit()
         flash(translated_text("coach_profile_saved", current_language()))
