@@ -216,6 +216,34 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("/coach", body)
         self.assertIn("Your personal Dreamz trainer", body)
 
+    def test_member_dashboard_shows_ready_coach_copy_when_profile_complete(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        db.session.add(
+            CoachProfile(
+                member_id="13659",
+                primary_goal="build_muscle",
+                experience_level="intermediate",
+                training_days=4,
+                session_minutes=60,
+                training_place="dreamz_gym",
+                height_cm=180,
+                weight_kg=85,
+                injuries="none",
+                nutrition_goal="muscle_gain",
+                dietary_preferences="local food",
+                allergies="none",
+            )
+        )
+        db.session.commit()
+        self.login_as("13659")
+
+        response = self.client.get("/dashboard?id=13659")
+
+        body = response.get_data(as_text=True)
+        self.assertIn("Your Dreamz plan is ready", body)
+        self.assertIn("View My Coach", body)
+        self.assertNotIn("Set your goals, training rhythm", body)
+
     def test_coach_page_requires_member_login(self):
         response = self.client.get("/coach")
 
@@ -252,6 +280,8 @@ class PortalRouteTests(unittest.TestCase):
         response = self.client.get("/coach")
         body = response.get_data(as_text=True)
         self.assertIn("Your coach profile is complete", body)
+        self.assertIn("Review your Dreamz guidance below", body)
+        self.assertNotIn("Complete your profile step by step.", body)
         self.assertIn("data-edit-coach", body)
         self.assertIn('id="coach-wizard" method="post" class="hidden space-y-5"', body)
         self.assertIn("Starter guidance", body)

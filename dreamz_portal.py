@@ -2501,6 +2501,8 @@ def member_dashboard_context(member, staff_admin_view=False):
     member.balance = member.balance or 0.0
     member.billing_amount = member.billing_amount or 0.0
     member_photo_available = bool(is_s3_uri(member.photo_path) or resolved_photo_path(member.photo_path))
+    coach_profile = coach_profile_for_member(member)
+    coach_completion = coach_profile_completion(coach_profile)
 
     return {
         "member": member,
@@ -2527,6 +2529,9 @@ def member_dashboard_context(member, staff_admin_view=False):
         "next_cancel_window_close": fmt_policy_date(policy.next_window_last_request_date, language),
         "extra_cols": extra_cols,
         "staff_admin_view": staff_admin_view,
+        "coach_profile": coach_profile,
+        "coach_completion": coach_completion,
+        "coach_complete": bool(coach_profile and coach_completion == 100),
     }
 
 
