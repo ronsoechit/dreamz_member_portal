@@ -184,17 +184,11 @@ class StaffRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
 
-    def test_staff_home_shows_tool_choices_without_login(self):
+    def test_staff_home_requires_login(self):
         response = self.client.get("/staff")
 
-        self.assertEqual(response.status_code, 200)
-        body = response.get_data(as_text=True)
-        self.assertIn("Dreamz Fitness Staff", body)
-        self.assertIn("Member Info Staff/Admin", body)
-        self.assertIn("/staff/login", body)
-        self.assertIn("FEP Manager", body)
-        self.assertIn("https://dreamz-fep.onrender.com/login", body)
-        self.assertNotIn("/staff/logout", body)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/staff/login", response.headers["Location"])
 
     def test_staff_home_shows_member_portal_and_fep_choices(self):
         with self.client.session_transaction() as sess:

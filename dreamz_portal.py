@@ -2339,12 +2339,12 @@ def staff_logout():
 def staff_home():
     staff_role = current_staff_role()
     token_access = staff_access_from_token()
+    if not staff_role and not token_access:
+        return redirect(url_for("staff_login"))
     staff_portal_url = (
         url_for("staff_data_audit")
         if staff_role
         else url_for("staff_data_audit", token=request.args.get("token", ""))
-        if token_access
-        else url_for("staff_login")
     )
     return render_template(
         "staff_home.html",

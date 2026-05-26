@@ -12,9 +12,6 @@
       <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Fitness" class="mx-auto h-16">
       <h1 class="mt-4 text-2xl font-bold">Staff Login</h1>
       <p class="mt-1 text-sm text-gray-400">Admin and manager access</p>
-      <a href="{{ url_for('staff_home') }}" class="mt-3 inline-block text-sm font-semibold text-yellow-400 hover:text-yellow-300">
-        Back to staff tools
-      </a>
     </div>
 
     {% with messages = get_flashed_messages() %}
