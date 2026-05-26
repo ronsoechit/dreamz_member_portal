@@ -255,6 +255,10 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("data-edit-coach", body)
         self.assertIn('id="coach-wizard" method="post" class="hidden space-y-5"', body)
         self.assertIn("Starter guidance", body)
+        self.assertIn("Training week", body)
+        self.assertIn("Nutrition focus", body)
+        self.assertIn("Personal notes", body)
+        self.assertIn("Session 1:", body)
         self.assertIn("Build muscle", body)
 
     def test_coach_profile_requires_all_fields(self):

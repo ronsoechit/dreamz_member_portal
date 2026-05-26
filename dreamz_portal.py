@@ -1302,6 +1302,90 @@ def coach_starter_guidance(profile, language=None):
     ]
 
 
+def coach_training_focuses(profile):
+    days = profile.training_days or 3
+    goal = profile.primary_goal or "get_fitter"
+    if days <= 2:
+        focuses = ["full_body_strength", "full_body_conditioning"]
+    elif days == 3:
+        focuses = ["full_body_strength", "upper_core", "lower_conditioning"]
+    elif days == 4:
+        focuses = ["lower_body", "upper_body", "full_body_strength", "conditioning_core"]
+    else:
+        focuses = ["lower_body", "upper_body", "conditioning_core", "full_body_strength", "mobility_recovery"]
+
+    if goal == "build_muscle":
+        focuses[0] = "muscle_lower"
+        if len(focuses) > 1:
+            focuses[1] = "muscle_upper"
+    elif goal == "lose_weight":
+        focuses[-1] = "conditioning_core"
+    elif goal == "strength":
+        focuses[0] = "strength_basics"
+
+    return focuses[:days]
+
+
+def coach_personal_plan(profile, language=None):
+    language = language or current_language()
+    if not profile:
+        return None
+
+    session_minutes = profile.session_minutes or 45
+    training_items = []
+    for index, focus_key in enumerate(coach_training_focuses(profile), start=1):
+        training_items.append(
+            translated_text(
+                "coach_plan_session_item",
+                language,
+                number=index,
+                focus=translated_text(f"coach_focus_{focus_key}", language),
+                minutes=session_minutes,
+            )
+        )
+
+    nutrition_items = [
+        translated_text(
+            f"coach_plan_nutrition_{profile.nutrition_goal or 'healthier'}",
+            language,
+        )
+    ]
+    if profile.weight_kg:
+        protein_low = round(profile.weight_kg * 1.6)
+        protein_high = round(profile.weight_kg * 2.0)
+        nutrition_items.append(
+            translated_text(
+                "coach_plan_protein_range",
+                language,
+                low=protein_low,
+                high=protein_high,
+            )
+        )
+    nutrition_items.append(translated_text("coach_plan_meal_structure", language))
+
+    habits_items = [
+        translated_text("coach_plan_train_at", language, place=coach_label("place", profile.training_place, language)),
+        translated_text("coach_plan_preferences", language, preferences=profile.dietary_preferences or translated_text("not_available", language)),
+        translated_text("coach_plan_limitations", language, limitations=profile.injuries or translated_text("not_available", language)),
+        translated_text("coach_plan_allergies", language, allergies=profile.allergies or translated_text("not_available", language)),
+    ]
+
+    return [
+        {
+            "title": translated_text("coach_plan_training_title", language),
+            "items": training_items,
+        },
+        {
+            "title": translated_text("coach_plan_nutrition_title", language),
+            "items": nutrition_items,
+        },
+        {
+            "title": translated_text("coach_plan_notes_title", language),
+            "items": habits_items,
+        },
+    ]
+
+
 def document_config_or_404(document_type):
     config = DOCUMENT_TYPES.get(document_type)
     if not config:
@@ -3217,6 +3301,7 @@ def member_coach():
         profile=profile,
         completion=coach_profile_completion(profile),
         starter_guidance=coach_starter_guidance(profile),
+        personal_plan=coach_personal_plan(profile),
         coach_goals=COACH_GOALS,
         coach_experience_levels=COACH_EXPERIENCE_LEVELS,
         coach_training_days=COACH_TRAINING_DAYS,
