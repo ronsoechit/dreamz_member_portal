@@ -220,7 +220,13 @@
       });
     };
 
-    const showStep = (nextIndex) => {
+    const scrollActiveStepIntoView = () => {
+      const activeStep = steps[index];
+      if (!activeStep) return;
+      activeStep.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+
+    const showStep = (nextIndex, { scroll = true } = {}) => {
       index = Math.max(0, Math.min(nextIndex, steps.length - 1));
       steps.forEach((step, stepIndex) => step.classList.toggle("hidden", stepIndex !== index));
       currentLabel.textContent = String(index + 1);
@@ -230,7 +236,7 @@
       nextButton.classList.toggle("hidden", index === steps.length - 1);
       saveButton.classList.toggle("hidden", index !== steps.length - 1);
       if (index === steps.length - 1) buildReview();
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      if (scroll) scrollActiveStepIntoView();
     };
 
     const currentStepValid = () => {
@@ -243,7 +249,7 @@
       showStep(index + 1);
     });
     backButton.addEventListener("click", () => showStep(index - 1));
-    showStep(0);
+    showStep(0, { scroll: false });
     editButton?.addEventListener("click", () => {
       form.classList.remove("hidden");
       editButton.classList.add("hidden");
