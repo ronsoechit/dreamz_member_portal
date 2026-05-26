@@ -2144,7 +2144,7 @@ def send_cancellation_confirmation_email(member, request_record):
 
 @app.route("/")
 def home():
-    return "Dreamz Member Portal – OK"
+    return redirect(url_for("login"))
 
 @app.get("/language")
 def set_language():

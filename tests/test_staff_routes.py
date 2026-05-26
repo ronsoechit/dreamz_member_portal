@@ -35,6 +35,12 @@ class StaffRouteTests(unittest.TestCase):
         app.config["STAFF_TOKEN"] = None
         app.config["_RUNTIME_SCHEMA_READY"] = False
 
+    def test_root_redirects_to_member_login(self):
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/login")
+
     def add_request(self, **overrides):
         data = {
             "member_id": "1206",
