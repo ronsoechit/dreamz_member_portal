@@ -1,6 +1,28 @@
 {% extends "base.html" %}
 {% block title %}Sync Status | Dreamz Fitness{% endblock %}
 
+{% macro sync_pagination(extra_class='') %}
+  {% if total_pages > 1 %}
+    <nav class="{{ extra_class }} flex flex-wrap items-center gap-2 text-sm" aria-label="Sync pages">
+      <span class="mr-2 text-gray-400">Page {{ page }} of {{ total_pages }}</span>
+      {% if page > 1 %}
+        <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_sync_status', page=page-1) }}">Previous</a>
+      {% endif %}
+      {% for page_number in sync_page_numbers %}
+        {% if page_number %}
+          <a class="rounded px-3 py-2 {% if page_number == page %}bg-yellow-500 text-black{% else %}bg-gray-700 hover:bg-gray-600{% endif %}"
+             href="{{ url_for('staff_sync_status', page=page_number) }}">{{ page_number }}</a>
+        {% else %}
+          <span class="px-2 text-gray-500">...</span>
+        {% endif %}
+      {% endfor %}
+      {% if page < total_pages %}
+        <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_sync_status', page=page+1) }}">Next</a>
+      {% endif %}
+    </nav>
+  {% endif %}
+{% endmacro %}
+
 {% block content %}
 <div class="mb-6">
   <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">Admin Dashboard</div>
@@ -51,6 +73,13 @@
     </div>
   </div>
 {% endif %}
+
+<div class="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+  <p class="text-sm text-gray-400">
+    Showing sync runs {{ start_run }}-{{ end_run }} of {{ total_runs }}. Newest syncs are shown first.
+  </p>
+  {{ sync_pagination() }}
+</div>
 
 <div class="overflow-x-auto rounded border border-gray-700">
   <table class="min-w-full text-sm">
@@ -139,6 +168,8 @@
     </tbody>
   </table>
 </div>
+
+{{ sync_pagination('mt-4') }}
 
 {% for run in runs %}
   {% set changes = run_changes.get(run.id, {}) %}

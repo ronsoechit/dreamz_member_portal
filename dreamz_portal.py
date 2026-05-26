@@ -126,6 +126,7 @@ AUDIT_ISSUE_LABELS = {
     "balance_open": "Balance Open",
 }
 AUDIT_PAGE_SIZE = 500
+SYNC_PAGE_SIZE = 20
 
 class Member(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -2489,13 +2490,41 @@ def staff_sync_status():
     require_staff_access(required_role="admin")
     ensure_runtime_schema()
     mark_stale_sync_runs()
-    runs = SyncRun.query.order_by(SyncRun.started_at.desc()).limit(50).all()
-    latest = runs[0] if runs else None
+    try:
+        page = max(int(request.args.get("page", "1")), 1)
+    except ValueError:
+        page = 1
+    query = SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc())
+    total_runs = query.count()
+    total_pages = max((total_runs + SYNC_PAGE_SIZE - 1) // SYNC_PAGE_SIZE, 1)
+    page = min(page, total_pages)
+    start_index = (page - 1) * SYNC_PAGE_SIZE
+    runs = query.offset(start_index).limit(SYNC_PAGE_SIZE).all()
+    latest = query.first()
     run_changes = {
         run.id: sync_change_summary_for_template(run)
         for run in runs
     }
-    return render_template("staff_sync_status.html", runs=runs, latest=latest, run_changes=run_changes)
+    page_numbers = []
+    last_page_number = 0
+    for page_number in range(1, total_pages + 1):
+        if page_number in {1, total_pages} or abs(page_number - page) <= 2:
+            if last_page_number and page_number - last_page_number > 1:
+                page_numbers.append(None)
+            page_numbers.append(page_number)
+            last_page_number = page_number
+    return render_template(
+        "staff_sync_status.html",
+        runs=runs,
+        latest=latest,
+        run_changes=run_changes,
+        page=page,
+        total_pages=total_pages,
+        total_runs=total_runs,
+        start_run=start_index + 1 if total_runs else 0,
+        end_run=min(start_index + len(runs), total_runs),
+        sync_page_numbers=page_numbers,
+    )
 
 
 @app.post("/staff/email-log/<int:email_id>/review")

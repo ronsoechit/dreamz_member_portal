@@ -265,6 +265,42 @@ class SyncApiTests(unittest.TestCase):
         self.assertIn("sync-status-panel", body)
         self.assertIn("Auto-refreshing every 20 seconds.", body)
         self.assertIn("setInterval(refreshSyncStatus, 20000)", body)
+        self.assertIn("Showing sync runs 1-1 of 1", body)
+
+    def test_staff_sync_status_paginates_runs_newest_first(self):
+        base_time = datetime(2026, 5, 25, 18, 0)
+        for index in range(25):
+            db.session.add(SyncRun(
+                source=f"run-{index:02d}",
+                status="success",
+                started_at=base_time + timedelta(minutes=index),
+                completed_at=base_time + timedelta(minutes=index),
+                members_received=index,
+                members_updated=index,
+                documents_received=index,
+            ))
+        db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+
+        first_page = self.client.get("/staff/sync")
+        second_page = self.client.get("/staff/sync?page=2")
+
+        self.assertEqual(first_page.status_code, 200)
+        self.assertEqual(second_page.status_code, 200)
+        first_body = first_page.get_data(as_text=True)
+        second_body = second_page.get_data(as_text=True)
+        self.assertIn("Showing sync runs 1-20 of 25", first_body)
+        self.assertIn("Page 1 of 2", first_body)
+        self.assertIn("run-24", first_body)
+        self.assertIn("run-05", first_body)
+        self.assertNotIn("run-04", first_body)
+        self.assertIn("href=\"/staff/sync?page=2\"", first_body)
+        self.assertIn("Showing sync runs 21-25 of 25", second_body)
+        self.assertIn("Page 2 of 2", second_body)
+        self.assertIn("run-04", second_body)
+        self.assertNotIn("run-24", second_body)
 
     def test_staff_sync_status_marks_stale_running_runs_interrupted(self):
         db.session.add(SyncRun(
