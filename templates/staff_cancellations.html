@@ -20,7 +20,9 @@
     <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_cancellations', status='blocked') }}">Blocked</a>
     <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_cancellations', admin_status='new') }}">New</a>
     <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_cancellations', admin_status='processed') }}">Processed</a>
-    <a class="rounded bg-yellow-500 px-3 py-2 text-black hover:bg-yellow-400" href="{{ url_for('staff_cancellations_csv', status=selected_status) }}">Export CSV</a>
+    {% if staff_role == 'admin' %}
+      <a class="rounded bg-yellow-500 px-3 py-2 text-black hover:bg-yellow-400" href="{{ url_for('staff_cancellations_csv', status=selected_status) }}">Export CSV</a>
+    {% endif %}
   </div>
 </div>
 
@@ -93,7 +95,11 @@
             {% endif %}
           </td>
           <td class="p-3">
-            {% if req.admin_status == 'processed' %}
+            {% if staff_role != 'admin' %}
+              <div class="rounded border border-gray-700 bg-gray-800/50 p-3 text-xs leading-5 text-gray-300">
+                View only. Admin processing is required to update this request.
+              </div>
+            {% elif req.admin_status == 'processed' %}
               <div class="space-y-2 opacity-60">
                 <select class="w-full rounded bg-gray-800 p-2 text-sm text-gray-300" disabled>
                   <option>Processed</option>

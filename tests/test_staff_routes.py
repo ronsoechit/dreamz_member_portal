@@ -138,6 +138,22 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("Cancellations", body)
         self.assertIn(">2</span>", body)
 
+    def test_manager_navigation_can_view_operational_pages_without_settings(self):
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "manager"
+
+        response = self.client.get("/staff/data-audit")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn(">Audit</a>", body)
+        self.assertIn(">Changes</a>", body)
+        self.assertIn(">Sync</a>", body)
+        self.assertIn("Cancellations", body)
+        self.assertIn("Email Log", body)
+        self.assertNotIn(">Settings</a>", body)
+
     def test_staff_cancellations_status_filter(self):
         self.add_request(member_id="1206", member_name="Accepted Member", status="accepted")
         self.add_request(
@@ -154,6 +170,28 @@ class StaffRouteTests(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("Blocked Member", body)
         self.assertNotIn("Accepted Member", body)
+
+    def test_manager_can_view_cancellations_but_not_update(self):
+        record = self.add_request()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "manager"
+            sess["_csrf_token"] = "token"
+
+        response = self.client.get("/staff/cancellations")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Example Member", body)
+        self.assertIn("View only", body)
+        self.assertNotIn("Export CSV", body)
+        self.assertNotIn("name=\"admin_status\"", body)
+
+        update_response = self.client.post(
+            f"/staff/cancellations/{record.id}/status",
+            data={"csrf_token": "token", "admin_status": "processed"},
+        )
+        self.assertEqual(update_response.status_code, 403)
 
     def test_staff_cancellations_csv_export(self):
         self.add_request()
@@ -465,6 +503,35 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("cancellation request received", body)
         self.assertNotIn("member portal login code", body)
 
+    def test_manager_can_view_email_log_but_not_review_or_open_settings(self):
+        db.session.add(EmailLog(
+            delivery_mode="log",
+            status="logged",
+            to_addresses="member@example.com",
+            subject="Dreamz Fitness - cancellation request received",
+            body="Cancellation",
+        ))
+        db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "manager"
+            sess["_csrf_token"] = "token"
+
+        response = self.client.get("/staff/email-log?review=open")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("cancellation request received", body)
+        self.assertIn("View only", body)
+        self.assertNotIn("Email settings", body)
+        self.assertNotIn("Mark reviewed", body)
+
+        review_response = self.client.post(
+            "/staff/email-log/1/review",
+            data={"csrf_token": "token"},
+        )
+        self.assertEqual(review_response.status_code, 403)
+
     def test_cancellation_status_update_to_processed_sends_confirmation(self):
         self.add_member(last_payment=date(2026, 5, 1), next_payment=date(2026, 6, 1))
         db.session.add(StaffUser(
@@ -548,14 +615,15 @@ class StaffRouteTests(unittest.TestCase):
         self.assertEqual(updated.staff_note, "Corrected note")
         self.assertEqual(updated.mail_status, "logged")
 
-    def test_manager_cannot_open_admin_member_detail(self):
+    def test_manager_can_open_staff_member_detail(self):
         self.add_member()
         with self.client.session_transaction() as sess:
             sess["staff_role"] = "manager"
 
         response = self.client.get("/staff/members/1206")
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Staff member view", response.get_data(as_text=True))
 
     def test_admin_can_open_member_detail(self):
         self.add_member()
@@ -565,7 +633,7 @@ class StaffRouteTests(unittest.TestCase):
         response = self.client.get("/staff/members/1206")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Admin member view", response.get_data(as_text=True))
+        self.assertIn("Staff member view", response.get_data(as_text=True))
 
     def test_no_contract_member_does_not_require_contract_or_mandate(self):
         self.add_member(

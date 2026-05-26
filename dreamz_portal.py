@@ -1440,6 +1440,10 @@ def is_staff_admin():
     return current_staff_role() == "admin"
 
 
+def is_staff_user():
+    return current_staff_role() in {"admin", "manager"}
+
+
 def staff_access_from_token():
     expected_token = app.config.get("STAFF_TOKEN") or os.getenv("STAFF_TOKEN")
     supplied_token = request.headers.get("X-Staff-Token") or request.args.get("token")
@@ -1834,8 +1838,8 @@ def inject_csrf_token():
         "current_member_id": session.get("member_id"),
         "current_staff_role": current_staff_role(),
         "current_staff_username": current_staff_username(),
-        "open_cancellation_count": open_cancellation_count() if is_staff_admin() else 0,
-        "open_email_log_count": open_email_log_count() if is_staff_admin() else 0,
+        "open_cancellation_count": open_cancellation_count() if is_staff_user() else 0,
+        "open_email_log_count": open_email_log_count() if is_staff_user() else 0,
         "t_document_title": lambda document_type: translated_document_title(document_type, current_language()),
         "t_document_explanation": lambda document_type: translated_document_explanation(document_type, current_language()),
     }
@@ -2546,7 +2550,7 @@ def staff_settings():
 
 @app.get("/staff/cancellations")
 def staff_cancellations():
-    require_staff_access(required_role="admin")
+    staff_role = require_staff_access()
     query, status = cancellation_request_query()
     admin_status = request.args.get("admin_status", "").strip()
     if admin_status:
@@ -2559,12 +2563,13 @@ def staff_cancellations():
         selected_status=status,
         selected_admin_status=admin_status,
         token=token,
+        staff_role=staff_role,
     )
 
 
 @app.get("/staff/email-log")
 def staff_email_log():
-    require_staff_access(required_role="admin")
+    staff_role = require_staff_access()
     ensure_runtime_schema()
     selected_status = request.args.get("status", "").strip()
     review_filter = request.args.get("review", "").strip()
@@ -2587,12 +2592,13 @@ def staff_email_log():
         selected_status=selected_status,
         review_filter=review_filter,
         email_log_requires_review=email_log_requires_review,
+        staff_role=staff_role,
     )
 
 
 @app.get("/staff/sync")
 def staff_sync_status():
-    require_staff_access(required_role="admin")
+    require_staff_access()
     ensure_runtime_schema()
     mark_stale_sync_runs()
     try:
@@ -2634,7 +2640,7 @@ def staff_sync_status():
 
 @app.get("/staff/changes")
 def staff_daily_changes():
-    require_staff_access(required_role="admin")
+    require_staff_access()
     ensure_runtime_schema()
     mark_stale_sync_runs()
     today = local_datetime(datetime.now(timezone.utc)).date()
@@ -2844,7 +2850,7 @@ def staff_data_audit_csv():
 
 @app.get("/staff/members/<member_id>")
 def staff_member_detail(member_id):
-    require_staff_access(required_role="admin")
+    require_staff_access()
     member = Member.query.filter_by(member_id=member_id).first_or_404()
     return render_template("dashboard.html", **member_dashboard_context(member, staff_admin_view=True))
 

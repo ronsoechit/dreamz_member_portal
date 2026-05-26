@@ -14,7 +14,9 @@
     <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_email_log', status='failed') }}">Failed</a>
     <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_email_log', status='sent') }}">Sent</a>
     <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_email_log', status='logged') }}">Logged</a>
-    <a class="rounded bg-yellow-500 px-3 py-2 text-black hover:bg-yellow-400" href="{{ url_for('staff_settings') }}">Email settings</a>
+    {% if staff_role == 'admin' %}
+      <a class="rounded bg-yellow-500 px-3 py-2 text-black hover:bg-yellow-400" href="{{ url_for('staff_settings') }}">Email settings</a>
+    {% endif %}
   </div>
 </div>
 
@@ -72,11 +74,15 @@
               <dd class="text-red-200">{{ email.error }}</dd>
             {% endif %}
           </dl>
-          {% if requires_review %}
+          {% if requires_review and staff_role == 'admin' %}
             <form method="post" action="{{ url_for('staff_email_log_review', email_id=email.id, status=selected_status, review=review_filter) }}" class="mt-4">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button type="submit" class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black hover:bg-yellow-400">Mark reviewed</button>
             </form>
+          {% elif requires_review %}
+            <div class="mt-4 rounded border border-gray-700 bg-gray-800/50 p-3 text-xs leading-5 text-gray-300">
+              View only. Admin review is required to clear this item.
+            </div>
           {% endif %}
           <pre class="mt-4 whitespace-pre-wrap rounded border border-gray-700 bg-gray-950 p-4 text-sm text-gray-100">{{ email.body }}</pre>
         </div>
