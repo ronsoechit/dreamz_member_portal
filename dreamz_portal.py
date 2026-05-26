@@ -3203,19 +3203,19 @@ def login():
                         session["dev_login_code"] = code
                     else:
                         session.pop("dev_login_code", None)
-                flash(translated_text("login_code_sent_if_registered", current_language()))
+                flash(translated_text("login_code_sent_if_registered", current_language()), "success")
                 return redirect(url_for("login", step="code"))
 
             session.pop("pending_login_email", None)
             session.pop("dev_login_code", None)
-            flash(translated_text("login_not_verified", current_language()))
+            flash(translated_text("login_not_verified", current_language()), "error")
             return redirect(url_for("login"))
 
         pending_email = session.get("pending_login_email")
         supplied_code = request.form.get("code", "").strip()
         login_code = latest_member_login_code(pending_email)
         if not login_code:
-            flash(translated_text("request_new_login_code", current_language()))
+            flash(translated_text("request_new_login_code", current_language()), "error")
             return redirect(url_for("login"))
 
         login_code.attempts += 1
@@ -3223,13 +3223,13 @@ def login():
             db.session.commit()
             session.pop("pending_login_email", None)
             session.pop("dev_login_code", None)
-            flash(translated_text("login_code_expired", current_language()))
+            flash(translated_text("login_code_expired", current_language()), "error")
             return redirect(url_for("login"))
 
         if check_password_hash(login_code.code_hash, supplied_code):
             member = Member.query.filter_by(member_id=login_code.member_id).first()
             if not member:
-                flash(translated_text("login_not_verified", current_language()))
+                flash(translated_text("login_not_verified", current_language()), "error")
                 return redirect(url_for("login"))
             login_code.used_at = datetime.now()
             db.session.commit()
@@ -3245,7 +3245,7 @@ def login():
             return redirect(url_for("dashboard", id=member.member_id))
 
         db.session.commit()
-        flash(translated_text("invalid_login_code", current_language()))
+        flash(translated_text("invalid_login_code", current_language()), "error")
         return redirect(url_for("login", step="code"))
 
     # GET

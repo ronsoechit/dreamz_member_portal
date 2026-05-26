@@ -166,6 +166,33 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(MemberLoginCode.query.filter_by(email="member@example.com").count(), 1)
         self.assertEqual(EmailLog.query.filter_by(to_addresses="member@example.com").count(), 1)
 
+    def test_login_code_sent_message_uses_success_style(self):
+        self.add_member(member_id="1206", email="member@example.com")
+        token = self.get_login_csrf_token()
+
+        response = self.client.post(
+            "/login",
+            data={"step": "email", "email": "member@example.com", "csrf_token": token},
+            follow_redirects=True,
+        )
+
+        body = response.get_data(as_text=True)
+        self.assertIn("If this email is registered, we sent a login code.", body)
+        self.assertIn("text-green-200", body)
+
+    def test_unknown_email_message_uses_error_style(self):
+        token = self.get_login_csrf_token()
+
+        response = self.client.post(
+            "/login",
+            data={"step": "email", "email": "unknown@example.com", "csrf_token": token},
+            follow_redirects=True,
+        )
+
+        body = response.get_data(as_text=True)
+        self.assertIn("We could not verify this login. Please contact Dreamz Fitness.", body)
+        self.assertIn("text-red-200", body)
+
     def test_member_dashboard_shows_logout_link(self):
         self.add_member(member_id="13659", name="Ron Soechit")
         self.client.get("/language?lang=pap&next=/login")

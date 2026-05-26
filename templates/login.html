@@ -25,9 +25,12 @@
       </div>
     </div>
 
-    {% with messages = get_flashed_messages() %}
+    {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
-        <div class="mb-4 text-red-400 text-sm">{{ messages[0] }}</div>
+        {% set category, message = messages[0] %}
+        <div class="mb-4 rounded border px-3 py-2 text-sm {% if category == 'success' %}border-green-500/40 bg-green-500/10 text-green-200{% else %}border-red-500/40 bg-red-500/10 text-red-200{% endif %}">
+          {{ message }}
+        </div>
       {% endif %}
     {% endwith %}
 
