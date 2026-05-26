@@ -132,6 +132,42 @@ class SyncAgentTests(unittest.TestCase):
         self.assertIn("101", member_ids)
         self.assertIn("Data/Temp Files/Member Updates/EditMembers 2026-05-25.txt", [item.path for item in scan.files])
 
+    def test_partial_live_member_log_preserves_existing_contact_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            backup_dir = data_dir / "Backup"
+            backup_dir.mkdir(parents=True)
+            backup = backup_dir / "GABackup-test.gbu"
+            members_text = "\n".join([
+                "MN=34848",
+                "LN=Alvarez Sanchez",
+                "FN=Claudia",
+                "MTN=no contract 1 month Dreamz",
+                "EM=claudia03752011@hotmail.com",
+                "PM=795-6175",
+                "$B=0",
+                "-",
+                "",
+            ])
+            with zipfile.ZipFile(backup, "w") as backup_file:
+                backup_file.writestr("Members.btx", members_text)
+            log_file = data_dir / "Temp Files" / "Member Updates" / "EditMembers 2026-05-26.txt"
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            log_file.write_text(
+                "2026/05/26 10:20:00|FRONTDESK|Gym Assistant|MN=34848\t$B=500\t-\t\n",
+                encoding="latin-1",
+            )
+            os.utime(backup, (1000, 1000))
+            os.utime(log_file, (2000, 2000))
+
+            payload = build_sync_payload(root)
+
+        member = next(member for member in payload["members"] if member["member_id"] == "34848")
+        self.assertEqual(member["email"], "claudia03752011@hotmail.com")
+        self.assertEqual(member["mobile"], "795-6175")
+        self.assertEqual(member["balance"], 5.0)
+
     def test_manifest_diff_detects_added_changed_and_removed_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "Gym Assistant 2.6"

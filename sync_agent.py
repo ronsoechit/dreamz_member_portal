@@ -137,7 +137,11 @@ def parse_members_with_live_logs(member_source: Path) -> ImportResult:
             log_result = parse_member_log(log_file)
             issues.extend(log_result.issues)
             for member in log_result.members:
-                member_map[str(member["member_id"])] = dict(member)
+                member_id = str(member["member_id"])
+                if member_id in member_map:
+                    member_map[member_id].update(dict(member))
+                else:
+                    member_map[member_id] = dict(member)
     return ImportResult(list(member_map.values()), issues)
 
 

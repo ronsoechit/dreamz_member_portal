@@ -238,6 +238,52 @@ def normalize_backup_record(fields: dict[str, str], record_number: int) -> tuple
     return record, issues
 
 
+def normalize_backup_update_record(fields: dict[str, str], record_number: int) -> tuple[dict | None, list[ImportIssue]]:
+    """Normalize a partial GymAssistant member update without inventing missing fields."""
+    full_record, issues = normalize_backup_record(fields, record_number)
+    if not full_record:
+        return None, issues
+
+    record: dict = {"member_id": full_record["member_id"]}
+    if "LN" in fields or "FN" in fields:
+        record["name"] = full_record.get("name")
+    if "MTN" in fields:
+        record["plan_type"] = full_record.get("plan_type")
+        record["contract_type"] = full_record.get("contract_type")
+    if "BT" in fields:
+        record["billing_option"] = full_record.get("billing_option")
+        record["billing_type"] = full_record.get("billing_type")
+    if "R$" in fields:
+        record["billing_amount"] = parse_backup_money(fields.get("R$"))
+    if "N$" in fields:
+        record["last_payment_amount"] = parse_backup_money(fields.get("N$"))
+    if "$B" in fields:
+        record["balance"] = parse_backup_money(fields.get("$B"))
+    if "EM" in fields:
+        record["email"] = (fields.get("EM") or "").strip() or None
+    if "PH" in fields:
+        record["phone"] = (fields.get("PH") or "").strip() or None
+    if "PM" in fields:
+        record["mobile"] = (fields.get("PM") or "").strip() or None
+    if "ST" in fields:
+        record["billing_status"] = full_record.get("billing_status")
+        record["is_active"] = full_record.get("is_active")
+    if "TV" in fields and "visits" in full_record:
+        record["visits"] = full_record.get("visits")
+    if "BD" in fields:
+        record["birthdate"] = full_record.get("birthdate")
+
+    for backup_key, record_key in BACKUP_DATE_FIELDS.items():
+        if backup_key not in fields:
+            continue
+        record[record_key] = full_record.get(record_key)
+        record[f"{record_key}_raw"] = full_record.get(f"{record_key}_raw")
+        if record_key == "due_date":
+            record["next_payment"] = full_record.get("due_date")
+
+    return record, issues
+
+
 def _cell_text(cell: ET.Element) -> str:
     for child in cell:
         if child.tag.endswith("Data"):
@@ -375,7 +421,7 @@ def _parse_member_log_text(text: str) -> ImportResult:
         if not fields:
             continue
 
-        member, row_issues = normalize_backup_record(fields, line_number)
+        member, row_issues = normalize_backup_update_record(fields, line_number)
         issues.extend(row_issues)
         if member:
             members.append(member)
