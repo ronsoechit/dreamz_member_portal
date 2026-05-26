@@ -2254,6 +2254,11 @@ def member_dashboard_context(member, staff_admin_view=False):
         and not staff_admin_view
         and not cancellation_request
     )
+    staff_member_can_request_cancel = (
+        staff_admin_view
+        and policy.can_request
+        and not cancellation_request
+    )
 
     def fmt_value(val, typ):
         if val in (None, "", 0, 0.0):
@@ -2297,6 +2302,7 @@ def member_dashboard_context(member, staff_admin_view=False):
         "cancellation_request_message": cancellation_request_message,
         "show_cancellation_section": show_cancellation_section,
         "show_cancel": show_cancel,
+        "staff_member_can_request_cancel": staff_member_can_request_cancel,
         "cancel_window_open": fmt_policy_date(policy.window_open, language),
         "cancel_window_close": fmt_policy_date(policy.last_request_date, language),
         "next_cancel_window_open": fmt_policy_date(policy.next_window_open, language),

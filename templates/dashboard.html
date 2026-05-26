@@ -234,6 +234,13 @@
         cancelReason.addEventListener("change", updateOtherReason);
         updateOtherReason();
       </script>
+    {% elif staff_member_can_request_cancel %}
+      <div class="mt-4 rounded border border-yellow-500/50 bg-yellow-500/10 p-4 text-sm leading-6 text-yellow-100">
+        <div class="font-semibold text-yellow-300">Member action available</div>
+        <p class="mt-1">
+          This cancellation window is open. The cancellation request button is only shown when this member logs in through the member portal with their own e-mail code.
+        </p>
+      </div>
     {% endif %}
   </div>
 {% endif %}

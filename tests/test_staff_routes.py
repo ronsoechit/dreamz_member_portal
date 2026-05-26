@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import csv
 import importlib.util
 import io
@@ -646,6 +646,26 @@ class StaffRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Staff member view", response.get_data(as_text=True))
+
+    def test_staff_member_detail_explains_member_only_cancellation_button(self):
+        today = date.today()
+        self.add_member(
+            plan_type="contract Dreamz 6 months",
+            contract_type="6-months",
+            start_date=today - timedelta(days=153),
+            end_date=today + timedelta(days=30),
+            signup_date=today - timedelta(days=153),
+        )
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+
+        response = self.client.get("/staff/members/1206")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Member action available", body)
+        self.assertIn("member logs in through the member portal", body)
+        self.assertNotIn("I want to cancel my contract", body)
 
     def test_manager_can_view_staff_member_document(self):
         self.add_member()
