@@ -116,12 +116,8 @@
       {% for row in rows %}
         <tr class="bg-gray-900/40" data-search="{{ (row.name ~ ' ' ~ row.raw_name ~ ' ' ~ row.member_id ~ ' ' ~ row.email ~ ' ' ~ row.plan_type ~ ' ' ~ row.contract_type ~ ' ' ~ row.issues|join(' '))|lower }}">
           <td class="p-3 align-top">
-            {% if staff_role == 'admin' %}
-              <a class="font-semibold text-white underline decoration-gray-600 underline-offset-4 hover:text-yellow-300"
-                 href="{{ url_for('staff_member_detail', member_id=row.member_id) }}">{{ row.name or row.raw_name or 'Unknown' }}</a>
-            {% else %}
-              <div class="font-semibold">{{ row.name or row.raw_name or 'Unknown' }}</div>
-            {% endif %}
+            <a class="font-semibold text-white underline decoration-gray-600 underline-offset-4 hover:text-yellow-300"
+               href="{{ url_for('staff_member_detail', member_id=row.member_id) }}">{{ row.name or row.raw_name or 'Unknown' }}</a>
             <div class="text-gray-400">{{ row.member_id }}{% if row.email %} / {{ row.email }}{% endif %}</div>
           </td>
           <td class="p-3 align-top">

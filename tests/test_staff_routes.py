@@ -139,6 +139,7 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn(">2</span>", body)
 
     def test_manager_navigation_can_view_operational_pages_without_settings(self):
+        self.add_member()
         with self.client.session_transaction() as sess:
             sess["staff_role"] = "manager"
             sess["staff_username"] = "manager"
@@ -153,6 +154,7 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("Cancellations", body)
         self.assertIn("Email Log", body)
         self.assertNotIn(">Settings</a>", body)
+        self.assertIn("/staff/members/1206", body)
 
     def test_staff_cancellations_status_filter(self):
         self.add_request(member_id="1206", member_name="Accepted Member", status="accepted")
@@ -260,6 +262,15 @@ class StaffRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Dreamz Fitness Staff", response.get_data(as_text=True))
+
+    def test_staff_login_shows_loading_state_script(self):
+        response = self.client.get("/staff/login")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("data-loading-form", body)
+        self.assertIn("Logging in...", body)
+        self.assertIn("button.disabled = true", body)
 
     def test_staff_data_audit_lists_member_issues(self):
         self.add_member(email="", mobile="", photo_path=None)

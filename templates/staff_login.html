@@ -20,7 +20,7 @@
       {% endif %}
     {% endwith %}
 
-    <form method="POST" class="space-y-4">
+    <form method="POST" class="space-y-4" data-loading-form>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <label class="block">
         <span class="mb-1 block text-sm font-semibold text-gray-200">Username</span>
@@ -42,10 +42,28 @@
           required
         >
       </label>
-      <button type="submit" class="w-full rounded bg-yellow-500 py-2 font-bold text-black hover:bg-yellow-400">
+      <button type="submit" data-loading-text="Logging in..." class="w-full rounded bg-yellow-500 py-2 font-bold text-black hover:bg-yellow-400">
         Log in
       </button>
     </form>
   </div>
+  <script>
+    document.querySelectorAll("[data-loading-form]").forEach((form) => {
+      form.addEventListener("submit", (event) => {
+        if (form.dataset.submitting === "true") {
+          event.preventDefault();
+          return;
+        }
+        form.dataset.submitting = "true";
+        const button = form.querySelector("button[type='submit']");
+        if (button) {
+          button.textContent = button.dataset.loadingText || "Loading...";
+          button.disabled = true;
+          button.setAttribute("aria-busy", "true");
+          button.classList.add("opacity-60", "cursor-wait");
+        }
+      });
+    });
+  </script>
 </body>
 </html>

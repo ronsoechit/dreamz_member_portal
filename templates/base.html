@@ -78,5 +78,48 @@
     &copy; {{ current_year or 2025 }} Dreamz Fitness Bonaire
   </footer>
 
+  <script>
+    (() => {
+      const setBusy = (element, text) => {
+        if (!element || element.dataset.loadingActive === "true") return false;
+        element.dataset.loadingActive = "true";
+        element.setAttribute("aria-busy", "true");
+        element.classList.add("opacity-60", "cursor-wait", "pointer-events-none");
+        if (text && !element.dataset.originalText) {
+          element.dataset.originalText = element.textContent.trim();
+          element.textContent = text;
+        }
+        return true;
+      };
+
+      document.addEventListener("submit", (event) => {
+        const form = event.target;
+        if (!(form instanceof HTMLFormElement)) return;
+        if (form.dataset.submitting === "true") {
+          event.preventDefault();
+          return;
+        }
+        form.dataset.submitting = "true";
+        const button = form.querySelector("button[type='submit'], button:not([type])");
+        if (button) {
+          setBusy(button, button.dataset.loadingText || "Loading...");
+          button.disabled = true;
+        }
+      }, true);
+
+      document.addEventListener("click", (event) => {
+        if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        const link = event.target.closest("a[href]");
+        if (!link || link.dataset.noLoading === "true" || link.target === "_blank" || link.hasAttribute("download")) return;
+        const href = link.getAttribute("href") || "";
+        if (!href || href.startsWith("#") || href.startsWith("javascript:") || href.startsWith("mailto:") || href.startsWith("tel:")) return;
+        if (link.dataset.loadingActive === "true") {
+          event.preventDefault();
+          return;
+        }
+        setBusy(link);
+      }, true);
+    })();
+  </script>
 </body>
 </html>
