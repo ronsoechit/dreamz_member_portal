@@ -1,20 +1,31 @@
 {% extends "base.html" %}
 {% block title %}Cancellation Requests | Dreamz Fitness{% endblock %}
 
+{% macro status_badge(label, tone='gray') %}
+  {% set colors = {
+    'yellow': 'bg-yellow-500/15 text-yellow-200 border-yellow-500/30',
+    'green': 'bg-green-500/15 text-green-200 border-green-500/30',
+    'red': 'bg-red-500/15 text-red-200 border-red-500/30',
+    'blue': 'bg-blue-500/15 text-blue-200 border-blue-500/30',
+    'gray': 'bg-gray-700/70 text-gray-200 border-gray-600'
+  } %}
+  <span class="inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold {{ colors.get(tone, colors['gray']) }}">{{ label }}</span>
+{% endmacro %}
+
 {% block content %}
-<div class="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+<div class="mb-6 grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
   <div>
-    <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">Admin Dashboard</div>
+    <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ staff_role|title }} Dashboard</div>
     <h2 class="text-2xl font-semibold">Cancellation Requests</h2>
     <p class="text-sm text-gray-400">Showing the latest 500 requests.</p>
-    <div class="mt-3 grid gap-2 text-xs text-gray-300 md:grid-cols-4">
-      <div><span class="font-semibold text-white">New:</span> received, not reviewed yet.</div>
-      <div><span class="font-semibold text-white">Reviewed:</span> checked by admin/staff, still open.</div>
-      <div><span class="font-semibold text-white">Processed:</span> handled in GymAssistant; sends the confirmation email.</div>
-      <div><span class="font-semibold text-white">Rejected:</span> not accepted; add a staff note.</div>
+    <div class="mt-4 grid gap-2 text-xs text-gray-300 md:grid-cols-2 xl:grid-cols-4">
+      <div class="rounded border border-gray-700 bg-gray-800/40 p-3"><span class="font-semibold text-white">New:</span> received, not reviewed yet.</div>
+      <div class="rounded border border-gray-700 bg-gray-800/40 p-3"><span class="font-semibold text-white">Reviewed:</span> checked by admin/staff, still open.</div>
+      <div class="rounded border border-gray-700 bg-gray-800/40 p-3"><span class="font-semibold text-white">Processed:</span> handled in GymAssistant; sends the confirmation email.</div>
+      <div class="rounded border border-gray-700 bg-gray-800/40 p-3"><span class="font-semibold text-white">Rejected:</span> not accepted; add a staff note.</div>
     </div>
   </div>
-  <div class="flex flex-wrap gap-2 text-sm">
+  <div class="flex flex-wrap gap-2 text-sm lg:max-w-xs lg:justify-end">
     <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_cancellations') }}">All</a>
     <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_cancellations', status='accepted') }}">Accepted</a>
     <a class="rounded bg-gray-700 px-3 py-2 hover:bg-gray-600" href="{{ url_for('staff_cancellations', status='blocked') }}">Blocked</a>
@@ -26,96 +37,100 @@
   </div>
 </div>
 
-<div class="overflow-x-auto rounded border border-gray-700">
-  <table class="min-w-full text-sm">
-    <thead class="bg-gray-800 text-gray-200">
-      <tr>
-        <th class="p-3 text-left">Requested</th>
-        <th class="p-3 text-left">Member</th>
-        <th class="p-3 text-left">Request</th>
-        <th class="p-3 text-left">Admin Status</th>
-        <th class="p-3 text-left">Mail</th>
-        <th class="p-3 text-left">Window</th>
-        <th class="p-3 text-left">Reason / Notes</th>
-        <th class="p-3 text-left">Action</th>
-      </tr>
-    </thead>
-    <tbody class="divide-y divide-gray-800">
-      {% for req in requests %}
-        <tr class="bg-gray-900/40 align-top">
-          <td class="whitespace-nowrap p-3">{{ req.requested_at|format_date('%d/%m/%Y %H:%M') }}</td>
-          <td class="p-3">
-            <a class="font-semibold underline decoration-gray-600 underline-offset-4 hover:text-yellow-300"
+<div class="space-y-4">
+  {% for req in requests %}
+    {% set admin_status = req.admin_status or 'new' %}
+    {% set admin_tone = 'green' if admin_status == 'processed' else 'red' if admin_status == 'rejected' else 'yellow' if admin_status == 'new' else 'blue' %}
+    {% set request_tone = 'green' if req.status == 'accepted' else 'red' if req.status == 'blocked' else 'gray' %}
+    <section class="rounded-lg border border-gray-700 bg-gray-900/50 p-4 shadow-sm">
+      <div class="flex flex-col gap-3 border-b border-gray-800 pb-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div class="text-xs uppercase tracking-wide text-gray-500">Requested</div>
+          <div class="mt-1 font-semibold">{{ req.requested_at|format_date('%d/%m/%Y %H:%M') }}</div>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          {{ status_badge(req.status|title, request_tone) }}
+          {{ status_badge(admin_status|title, admin_tone) }}
+          {{ status_badge(req.mail_status|title, 'green' if req.mail_status == 'sent' else 'red' if req.mail_status == 'failed' else 'gray') }}
+        </div>
+      </div>
+
+      <div class="grid gap-5 pt-4 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]">
+        <div class="grid gap-4 lg:grid-cols-3">
+          <div>
+            <div class="text-xs uppercase tracking-wide text-gray-500">Member</div>
+            <a class="mt-1 inline-block font-semibold underline decoration-gray-600 underline-offset-4 hover:text-yellow-300"
                href="{{ url_for('staff_member_detail', member_id=req.member_id) }}">{{ req.member_name or 'Unknown' }}</a>
-            <div class="text-gray-400">{{ req.member_id }}{% if req.member_email %} / {{ req.member_email }}{% endif %}</div>
-          </td>
-          <td class="whitespace-nowrap p-3">
-            <div>{{ req.status }}</div>
-            <div class="text-xs text-gray-400">{{ req.policy_status }}</div>
-          </td>
-          <td class="whitespace-nowrap p-3">
-            <span class="rounded bg-gray-700 px-2 py-1 text-xs">{{ req.admin_status or 'new' }}</span>
-            {% if req.handled_by %}
-              <div class="mt-1 text-xs text-gray-400">{{ req.handled_by }}{% if req.handled_at %} / {{ req.handled_at|format_date('%d/%m/%Y %H:%M') }}{% endif %}</div>
+            <div class="text-sm text-gray-400">{{ req.member_id }}</div>
+            {% if req.member_email %}
+              <div class="mt-1 break-words text-sm text-gray-300">{{ req.member_email }}</div>
             {% endif %}
-          </td>
-          <td class="p-3">
-            <div>{{ req.mail_status }}</div>
+          </div>
+
+          <div>
+            <div class="text-xs uppercase tracking-wide text-gray-500">Cancellation Window</div>
+            <div class="mt-1 font-semibold">
+              {% if req.window_open and req.last_request_date %}
+                {{ req.window_open|format_date('%d/%m/%Y') }} - {{ req.last_request_date|format_date('%d/%m/%Y') }}
+              {% else %}
+                N/A
+              {% endif %}
+            </div>
+            {% if req.current_term_end %}
+              <div class="text-sm text-gray-400">Term ends {{ req.current_term_end|format_date('%d/%m/%Y') }}</div>
+            {% endif %}
+            <div class="mt-2 text-xs text-gray-500">{{ req.policy_status }}</div>
+          </div>
+
+          <div>
+            <div class="text-xs uppercase tracking-wide text-gray-500">Mail</div>
+            <div class="mt-1 font-semibold">{{ req.mail_status|title }}</div>
             {% if req.notification_to %}
-              <div class="mt-1 text-xs text-gray-400">To: {{ req.notification_to }}</div>
+              <div class="mt-1 break-words text-xs text-gray-400">To: {{ req.notification_to }}</div>
             {% endif %}
             {% if req.notification_cc %}
-              <div class="text-xs text-gray-400">Cc: {{ req.notification_cc }}</div>
+              <div class="break-words text-xs text-gray-400">Cc: {{ req.notification_cc }}</div>
             {% endif %}
             {% if req.mail_error %}
-              <div class="mt-1 text-xs text-red-300">{{ req.mail_error }}</div>
+              <div class="mt-2 rounded border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-200">{{ req.mail_error }}</div>
             {% endif %}
-          </td>
-          <td class="whitespace-nowrap p-3">
-            {% if req.window_open and req.last_request_date %}
-              {{ req.window_open|format_date('%d/%m/%Y') }} - {{ req.last_request_date|format_date('%d/%m/%Y') }}
-            {% else %}
-              N/A
-            {% endif %}
-            {% if req.current_term_end %}
-              <div class="text-xs text-gray-400">Term ends {{ req.current_term_end|format_date('%d/%m/%Y') }}</div>
-            {% endif %}
-          </td>
-          <td class="max-w-sm p-3">
-            <div>{{ req.reason or '' }}</div>
+          </div>
+        </div>
+
+        <div class="space-y-3">
+          <div>
+            <div class="text-xs uppercase tracking-wide text-gray-500">Reason / Notes</div>
+            <div class="mt-1 rounded border border-gray-700 bg-gray-950/40 p-3 text-sm">{{ req.reason or 'No reason recorded.' }}</div>
             {% if req.staff_note %}
-              <div class="mt-2 rounded bg-gray-800 p-2 text-xs text-gray-300">{{ req.staff_note }}</div>
+              <div class="mt-2 rounded border border-gray-700 bg-gray-800 p-3 text-xs text-gray-300">{{ req.staff_note }}</div>
             {% endif %}
             {% if req.admin_status == 'processed' %}
-              <div class="mt-2 rounded bg-green-500/10 p-2 text-xs text-green-100">
-                Confirmed{% if req.confirmed_at %} {{ req.confirmed_at|format_date('%d/%m/%Y %H:%M') }}{% endif %}.
-                Final payment: {{ req.last_paid_date|format_date('%d/%m/%Y') or 'N/A' }}.
+              <div class="mt-2 rounded border border-green-500/30 bg-green-500/10 p-3 text-xs leading-5 text-green-100">
+                Confirmed{% if req.confirmed_at %} {{ req.confirmed_at|format_date('%d/%m/%Y %H:%M') }}{% endif %}.<br>
+                Final payment: {{ req.last_paid_date|format_date('%d/%m/%Y') or 'N/A' }}.<br>
                 Access until: {{ req.access_until|format_date('%d/%m/%Y') or 'N/A' }}.
               </div>
             {% endif %}
-          </td>
-          <td class="p-3">
+          </div>
+
+          <div>
             {% if staff_role != 'admin' %}
               <div class="rounded border border-gray-700 bg-gray-800/50 p-3 text-xs leading-5 text-gray-300">
                 View only. Admin processing is required to update this request.
               </div>
             {% elif req.admin_status == 'processed' %}
-              <div class="space-y-2 opacity-60">
-                <select class="w-full rounded bg-gray-800 p-2 text-sm text-gray-300" disabled>
-                  <option>Processed</option>
-                </select>
-                <textarea rows="2" class="w-full rounded bg-gray-800 p-2 text-sm text-gray-400 placeholder-gray-500" disabled>{{ req.staff_note or '' }}</textarea>
-                <button type="button" class="cursor-not-allowed rounded bg-gray-700 px-3 py-2 text-sm font-semibold text-gray-400" disabled>Locked</button>
+              <div class="rounded border border-gray-700 bg-gray-800/50 p-3 text-xs leading-5 text-gray-300">
+                This request is processed and locked.
               </div>
               <details class="mt-3 text-xs text-gray-300">
                 <summary class="cursor-pointer text-yellow-300 hover:text-yellow-200">Admin correction</summary>
-                <form method="post" action="{{ url_for('staff_cancellation_status', request_id=req.id, admin_status=selected_admin_status) }}" class="mt-2 space-y-2">
+                <form method="post" action="{{ url_for('staff_cancellation_status', request_id=req.id, admin_status=selected_admin_status) }}" class="mt-3 space-y-2">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   <input type="hidden" name="admin_override" value="1">
                   <label class="sr-only" for="admin_status_override_{{ req.id }}">Correction status</label>
                   <select id="admin_status_override_{{ req.id }}" name="admin_status" class="w-full rounded bg-gray-800 p-2 text-sm text-white">
                     {% for status in ['processed', 'reviewed', 'new', 'rejected'] %}
-                      <option value="{{ status }}" {% if (req.admin_status or 'new') == status %}selected{% endif %}>{{ status|title }}</option>
+                      <option value="{{ status }}" {% if admin_status == status %}selected{% endif %}>{{ status|title }}</option>
                     {% endfor %}
                   </select>
                   <textarea name="staff_note" rows="2" placeholder="Reason for correction" class="w-full rounded bg-gray-800 p-2 text-sm text-white placeholder-gray-500">{{ req.staff_note or '' }}</textarea>
@@ -128,21 +143,19 @@
                 <label class="sr-only" for="admin_status_{{ req.id }}">Action status</label>
                 <select id="admin_status_{{ req.id }}" name="admin_status" class="w-full rounded bg-gray-800 p-2 text-sm text-white">
                   {% for status in ['new', 'reviewed', 'processed', 'rejected'] %}
-                    <option value="{{ status }}" {% if (req.admin_status or 'new') == status %}selected{% endif %}>{{ status|title }}</option>
+                    <option value="{{ status }}" {% if admin_status == status %}selected{% endif %}>{{ status|title }}</option>
                   {% endfor %}
                 </select>
                 <textarea name="staff_note" rows="2" placeholder="Staff note" class="w-full rounded bg-gray-800 p-2 text-sm text-white placeholder-gray-500">{{ req.staff_note or '' }}</textarea>
-                <button type="submit" class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black hover:bg-yellow-400">Update</button>
+                <button type="submit" class="w-full rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black hover:bg-yellow-400">Update</button>
               </form>
             {% endif %}
-          </td>
-        </tr>
-      {% else %}
-        <tr>
-          <td class="p-6 text-center text-gray-400" colspan="8">No cancellation requests found.</td>
-        </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  {% else %}
+    <div class="rounded border border-gray-700 bg-gray-900/50 p-8 text-center text-gray-400">No cancellation requests found.</div>
+  {% endfor %}
 </div>
 {% endblock %}
