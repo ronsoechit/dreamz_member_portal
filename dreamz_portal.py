@@ -1202,6 +1202,33 @@ COACH_TRAINING_DAYS = [2, 3, 4, 5, 6]
 COACH_SESSION_MINUTES = [30, 45, 60, 75, 90]
 COACH_TRAINING_PLACES = ["dreamz_gym", "home", "both"]
 COACH_NUTRITION_GOALS = ["fat_loss", "muscle_gain", "maintenance", "healthier"]
+COACH_EXERCISE_LIBRARY = {
+    "leg_press": ("machine", "3", "10-12", "90 sec", "moderate"),
+    "goblet_squat": ("dumbbell", "3", "8-10", "90 sec", "moderate"),
+    "chest_press": ("machine", "3", "8-12", "90 sec", "moderate"),
+    "lat_pulldown": ("machine", "3", "10-12", "75 sec", "moderate"),
+    "seated_row": ("machine", "3", "10-12", "75 sec", "moderate"),
+    "shoulder_press": ("machine", "2-3", "8-10", "75 sec", "light_moderate"),
+    "treadmill_intervals": ("cardio", "6", "1 min work / 1 min easy", "as needed", "controlled"),
+    "plank": ("bodyweight", "3", "30-45 sec", "60 sec", "controlled"),
+    "cable_woodchop": ("cable", "3", "10 each side", "60 sec", "light_moderate"),
+    "hip_thrust": ("machine_or_bar", "3", "10-12", "90 sec", "moderate"),
+    "dumbbell_rdl": ("dumbbell", "3", "8-10", "90 sec", "moderate"),
+    "incline_walk": ("cardio", "1", "12-20 min", "as needed", "comfortable"),
+}
+COACH_FOCUS_EXERCISES = {
+    "full_body_strength": ["leg_press", "chest_press", "seated_row"],
+    "full_body_conditioning": ["goblet_squat", "lat_pulldown", "incline_walk"],
+    "upper_core": ["chest_press", "lat_pulldown", "plank"],
+    "lower_conditioning": ["leg_press", "dumbbell_rdl", "treadmill_intervals"],
+    "lower_body": ["leg_press", "dumbbell_rdl", "hip_thrust"],
+    "upper_body": ["chest_press", "lat_pulldown", "shoulder_press"],
+    "conditioning_core": ["treadmill_intervals", "plank", "cable_woodchop"],
+    "mobility_recovery": ["incline_walk", "plank", "cable_woodchop"],
+    "muscle_lower": ["leg_press", "hip_thrust", "dumbbell_rdl"],
+    "muscle_upper": ["chest_press", "lat_pulldown", "seated_row"],
+    "strength_basics": ["leg_press", "chest_press", "lat_pulldown"],
+}
 
 
 def coach_profile_for_member(member):
@@ -1332,16 +1359,29 @@ def coach_personal_plan(profile, language=None):
         return None
 
     session_minutes = profile.session_minutes or 45
-    training_items = []
+    sessions = []
     for index, focus_key in enumerate(coach_training_focuses(profile), start=1):
-        training_items.append(
-            translated_text(
-                "coach_plan_session_item",
-                language,
-                number=index,
-                focus=translated_text(f"coach_focus_{focus_key}", language),
-                minutes=session_minutes,
+        exercises = []
+        for exercise_key in COACH_FOCUS_EXERCISES.get(focus_key, COACH_FOCUS_EXERCISES["full_body_strength"]):
+            equipment_key, sets, reps, rest, load_key = COACH_EXERCISE_LIBRARY[exercise_key]
+            exercises.append(
+                {
+                    "name": translated_text(f"coach_exercise_{exercise_key}", language),
+                    "equipment": translated_text(f"coach_equipment_{equipment_key}", language),
+                    "sets": sets,
+                    "reps": reps,
+                    "rest": rest,
+                    "load": translated_text(f"coach_load_{load_key}", language),
+                    "cue": translated_text(f"coach_cue_{exercise_key}", language),
+                }
             )
+        sessions.append(
+            {
+                "number": index,
+                "focus": translated_text(f"coach_focus_{focus_key}", language),
+                "minutes": session_minutes,
+                "exercises": exercises,
+            }
         )
 
     nutrition_items = [
@@ -1373,7 +1413,7 @@ def coach_personal_plan(profile, language=None):
     return [
         {
             "title": translated_text("coach_plan_training_title", language),
-            "items": training_items,
+            "sessions": sessions,
         },
         {
             "title": translated_text("coach_plan_nutrition_title", language),

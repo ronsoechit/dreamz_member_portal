@@ -288,7 +288,10 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Training week", body)
         self.assertIn("Nutrition focus", body)
         self.assertIn("Personal notes", body)
-        self.assertIn("Session 1:", body)
+        self.assertIn("Session 1", body)
+        self.assertIn("Sets", body)
+        self.assertIn("Reps", body)
+        self.assertIn("Use a controlled weight", body)
         self.assertIn("Build muscle", body)
 
     def test_coach_profile_requires_all_fields(self):
