@@ -15,7 +15,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
-from dreamz_portal import CancellationRequest, CoachProfile, CoachWorkoutExerciseLog, CoachWorkoutSession, EmailLog, Member, MemberDocument, MemberLoginCode, app, cancellation_message, db  # noqa: E402
+from dreamz_portal import CancellationRequest, CoachInteraction, CoachProfile, CoachWorkoutExerciseLog, CoachWorkoutSession, EmailLog, Member, MemberDocument, MemberLoginCode, app, cancellation_message, db  # noqa: E402
 
 
 class FakeS3Body:
@@ -342,8 +342,10 @@ class PortalRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        self.assertIn("coach_reply", response.get_json())
         self.assertEqual(CoachWorkoutSession.query.filter_by(member_id="13659").count(), 1)
         self.assertEqual(CoachWorkoutExerciseLog.query.filter_by(member_id="13659").count(), 2)
+        self.assertEqual(CoachInteraction.query.filter_by(member_id="13659", category="workout_feedback").count(), 1)
         log = CoachWorkoutExerciseLog.query.filter_by(exercise_name="Leg press").one()
         self.assertEqual(log.weight_used, "50")
         self.assertEqual(log.reps_completed, "12")
@@ -365,6 +367,41 @@ class PortalRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(CoachWorkoutSession.query.count(), 0)
+
+    def test_coach_question_can_be_answered_and_logged(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        db.session.add(
+            CoachProfile(
+                member_id="13659",
+                primary_goal="build_muscle",
+                experience_level="intermediate",
+                training_days=2,
+                session_minutes=45,
+                training_place="dreamz_gym",
+                height_cm=165,
+                weight_kg=68,
+                injuries="none",
+                nutrition_goal="muscle_gain",
+                dietary_preferences="none",
+                allergies="none",
+            )
+        )
+        db.session.commit()
+        self.login_as("13659")
+        with self.client.session_transaction() as browser_session:
+            browser_session["_csrf_token"] = "csrf-test-token"
+
+        response = self.client.post(
+            "/coach/message",
+            json={"message": "Leg press felt easy. What should I do?"},
+            headers={"X-CSRF-Token": "csrf-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual(body["status"], "success")
+        self.assertIn("reply", body)
+        self.assertEqual(CoachInteraction.query.filter_by(member_id="13659").count(), 2)
 
     def test_coach_profile_requires_all_fields(self):
         self.add_member(member_id="13659", name="Ron Soechit")

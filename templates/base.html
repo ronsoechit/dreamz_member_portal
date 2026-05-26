@@ -20,6 +20,7 @@
             <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_data_audit' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_data_audit') }}">Audit</a>
             <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_daily_changes' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_daily_changes') }}">Changes</a>
             <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_sync_status' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_sync_status') }}">Sync</a>
+            <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_coach_activity' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_coach_activity') }}">Coach</a>
             <a class="relative rounded px-3 py-2 {% if request.endpoint == 'staff_cancellations' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_cancellations') }}">
               Cancellations
               {% if open_cancellation_count %}

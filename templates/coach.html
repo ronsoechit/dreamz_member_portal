@@ -306,6 +306,19 @@
       </div>
     {% endif %}
     <p class="mt-5 rounded border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm leading-6 text-yellow-100">{{ t('coach_plan_progress_note') }}</p>
+    <section class="mt-5 rounded-lg border border-green-400/30 bg-gray-950/50 p-4" data-coach-chat data-message-url="{{ url_for('coach_message') }}" data-csrf-token="{{ csrf_token() }}">
+      <h4 class="text-lg font-semibold text-green-200">{{ t('coach_chat_title') }}</h4>
+      <p class="mt-1 text-sm leading-6 text-gray-300">{{ t('coach_chat_intro') }}</p>
+      <div class="mt-4 hidden rounded border border-green-400/30 bg-green-500/10 p-3 text-sm leading-6 text-green-50" data-coach-chat-reply></div>
+      <label class="mt-4 block">
+        <span class="text-sm font-semibold text-gray-200">{{ t('coach_chat_question') }}</span>
+        <textarea rows="3" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" data-coach-chat-input placeholder="{{ t('coach_chat_placeholder') }}"></textarea>
+      </label>
+      <button type="button" class="mt-3 w-full rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400 sm:w-auto" data-coach-chat-send>
+        {{ t('coach_chat_send') }}
+      </button>
+      <p class="mt-2 hidden rounded border border-red-500/40 bg-red-500/10 p-2 text-xs font-semibold text-red-100" data-coach-chat-error></p>
+    </section>
   </section>
 {% endif %}
 
@@ -460,6 +473,12 @@
             const result = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(result.message || "{{ t('coach_workout_save_error') }}");
             if (saveStatus) saveStatus.textContent = result.message || "{{ t('coach_workout_saved') }}";
+            if (result.coach_reply && saveStatus) {
+              const reply = document.createElement("div");
+              reply.className = "mt-3 rounded border border-green-400/30 bg-gray-950/50 p-3 text-sm leading-6 text-green-50";
+              reply.textContent = result.coach_reply;
+              saveStatus.after(reply);
+            }
           } catch (error) {
             if (saveStatus) saveStatus.textContent = error.message || "{{ t('coach_workout_save_error') }}";
           }
@@ -507,6 +526,55 @@
           });
         });
         updateNextButtons();
+      });
+    });
+
+    document.querySelectorAll("[data-coach-chat]").forEach((chat) => {
+      const input = chat.querySelector("[data-coach-chat-input]");
+      const button = chat.querySelector("[data-coach-chat-send]");
+      const reply = chat.querySelector("[data-coach-chat-reply]");
+      const errorBox = chat.querySelector("[data-coach-chat-error]");
+      button?.addEventListener("click", async () => {
+        const message = input?.value?.trim() || "";
+        if (!message) {
+          if (errorBox) {
+            errorBox.textContent = "{{ t('coach_question_required') }}";
+            errorBox.classList.remove("hidden");
+          }
+          return;
+        }
+        errorBox?.classList.add("hidden");
+        button.disabled = true;
+        button.classList.add("opacity-60", "cursor-wait");
+        const originalText = button.textContent;
+        button.textContent = "{{ t('coach_chat_thinking') }}";
+        try {
+          const response = await fetch(chat.dataset.messageUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-CSRF-Token": chat.dataset.csrfToken || "",
+            },
+            body: JSON.stringify({ message }),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(result.message || "{{ t('coach_chat_error') }}");
+          if (reply) {
+            reply.textContent = result.reply || "";
+            reply.classList.remove("hidden");
+            reply.scrollIntoView({ behavior: "smooth", block: "center" });
+          }
+          if (input) input.value = "";
+        } catch (error) {
+          if (errorBox) {
+            errorBox.textContent = error.message || "{{ t('coach_chat_error') }}";
+            errorBox.classList.remove("hidden");
+          }
+        } finally {
+          button.disabled = false;
+          button.classList.remove("opacity-60", "cursor-wait");
+          button.textContent = originalText;
+        }
       });
     });
   })();

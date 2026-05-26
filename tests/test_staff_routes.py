@@ -14,7 +14,7 @@ if importlib.util.find_spec("flask") is None or importlib.util.find_spec("flask_
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
-from dreamz_portal import AppSetting, CancellationRequest, EmailLog, Member, MemberDocument, StaffUser, SyncRun, app, db, deliver_email, payment_status_for_member  # noqa: E402
+from dreamz_portal import AppSetting, CancellationRequest, CoachInteraction, EmailLog, Member, MemberDocument, StaffUser, SyncRun, app, db, deliver_email, payment_status_for_member  # noqa: E402
 
 
 class FakeS3Body:
@@ -159,10 +159,35 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn(">Audit</a>", body)
         self.assertIn(">Changes</a>", body)
         self.assertIn(">Sync</a>", body)
+        self.assertIn(">Coach</a>", body)
         self.assertIn("Cancellations", body)
         self.assertIn("Email Log", body)
         self.assertNotIn(">Settings</a>", body)
         self.assertIn("/staff/members/1206", body)
+
+    def test_staff_coach_activity_lists_coach_interactions(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        db.session.add(CoachInteraction(
+            member_id="13659",
+            actor="coach",
+            category="answer",
+            source="fallback",
+            language="en",
+            message="Keep the next session controlled.",
+            context_summary="goal=build_muscle",
+        ))
+        db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "manager"
+
+        response = self.client.get("/staff/coach")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Coach Activity", body)
+        self.assertIn("Ron Soechit", body)
+        self.assertIn("Keep the next session controlled.", body)
 
     def test_staff_cancellations_status_filter(self):
         self.add_request(member_id="1206", member_name="Accepted Member", status="accepted")

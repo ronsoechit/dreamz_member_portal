@@ -36,6 +36,8 @@ from storage_backend import is_s3_uri, open_s3_object, parse_s3_uri, s3_client, 
 
 import csv
 import secrets
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from io import StringIO
 from pathlib import Path
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -73,6 +75,9 @@ app.config["STAFF_MANAGER_USERNAME"] = os.getenv("STAFF_MANAGER_USERNAME", "mana
 app.config["STAFF_MANAGER_PASSWORD"] = os.getenv("STAFF_MANAGER_PASSWORD", "dreamz-manager-dev")
 app.config["STAFF_ADMIN_EMAIL"] = os.getenv("STAFF_ADMIN_EMAIL", "ron@dreamzfitness.com")
 app.config["FEP_MANAGER_URL"] = os.getenv("FEP_MANAGER_URL", "https://dreamz-fep.onrender.com/login")
+app.config["COACH_AI_MODE"] = os.getenv("COACH_AI_MODE", "fallback")
+app.config["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY", "")
+app.config["OPENAI_MODEL"] = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 app.config["EMAIL_DELIVERY_MODE"] = os.getenv("EMAIL_DELIVERY_MODE", "log")
 app.config["MEMBER_LOGIN_CODE_TTL_MINUTES"] = int(os.getenv("MEMBER_LOGIN_CODE_TTL_MINUTES", "15"))
 app.config["DIRECT_DEBIT_DAY"] = int(os.getenv("DIRECT_DEBIT_DAY", "28"))
@@ -322,6 +327,18 @@ class CoachWorkoutExerciseLog(db.Model):
     reps_completed = db.Column(db.String)
     completed = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+
+class CoachInteraction(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.String, nullable=False, index=True)
+    actor = db.Column(db.String, nullable=False)
+    category = db.Column(db.String, default="conversation", nullable=False, index=True)
+    source = db.Column(db.String, default="portal", nullable=False)
+    language = db.Column(db.String, default=DEFAULT_LANGUAGE)
+    message = db.Column(db.Text, nullable=False)
+    context_summary = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
 
 
 DEFAULT_SETTINGS = {
@@ -1456,6 +1473,129 @@ def coach_personal_plan(profile, language=None):
             "items": habits_items,
         },
     ]
+
+
+def recent_coach_workout_summary(member_id, limit=3):
+    sessions = (
+        CoachWorkoutSession.query
+        .filter_by(member_id=member_id)
+        .order_by(CoachWorkoutSession.completed_at.desc(), CoachWorkoutSession.id.desc())
+        .limit(limit)
+        .all()
+    )
+    summaries = []
+    for workout in sessions:
+        logs = (
+            CoachWorkoutExerciseLog.query
+            .filter_by(workout_session_id=workout.id)
+            .order_by(CoachWorkoutExerciseLog.exercise_order.asc())
+            .all()
+        )
+        exercise_text = ", ".join(
+            f"{log.exercise_name}: {log.weight_used or '-'} x {log.reps_completed or '-'}"
+            for log in logs
+        )
+        summaries.append(f"{workout.completed_at.date()}: session {workout.session_number or '-'} {workout.focus or ''}; {exercise_text}")
+    return summaries
+
+
+def coach_context_summary(member, profile):
+    if not profile:
+        return f"Member {member.member_id}: no coach profile yet."
+    return (
+        f"Member {member.member_id}, goal={profile.primary_goal}, experience={profile.experience_level}, "
+        f"days={profile.training_days}, minutes={profile.session_minutes}, place={profile.training_place}, "
+        f"height={profile.height_cm}, weight={profile.weight_kg}, injuries={profile.injuries or 'none'}, "
+        f"nutrition={profile.nutrition_goal}, food={profile.dietary_preferences or 'none'}, allergies={profile.allergies or 'none'}"
+    )
+
+
+def save_coach_interaction(member_id, actor, message, category="conversation", source="portal", context_summary=None, language=None):
+    interaction = CoachInteraction(
+        member_id=member_id,
+        actor=actor,
+        category=category,
+        source=source,
+        language=language or current_language(),
+        message=(message or "").strip(),
+        context_summary=context_summary,
+    )
+    db.session.add(interaction)
+    return interaction
+
+
+def fallback_coach_reply(member, profile, user_message=None, workout_logs=None, language=None):
+    language = language or current_language()
+    goal = coach_label("goal", profile.primary_goal, language).lower() if profile else translated_text("coach_goal_get_fitter", language).lower()
+    if workout_logs:
+        completed = [log for log in workout_logs if log.completed]
+        heavy_sets = [log for log in completed if log.weight_used]
+        if heavy_sets:
+            return translated_text("coach_auto_feedback_with_load", language, goal=goal)
+        return translated_text("coach_auto_feedback_basic", language, goal=goal)
+    if user_message:
+        return translated_text("coach_question_fallback_answer", language, goal=goal)
+    return translated_text("coach_auto_feedback_basic", language, goal=goal)
+
+
+def openai_text_from_response(data):
+    if isinstance(data, dict) and isinstance(data.get("output_text"), str):
+        return data["output_text"].strip()
+    parts = []
+    for item in data.get("output", []) if isinstance(data, dict) else []:
+        for content in item.get("content", []) if isinstance(item, dict) else []:
+            if isinstance(content, dict):
+                text = content.get("text") or content.get("output_text")
+                if text:
+                    parts.append(str(text))
+    return "\n".join(parts).strip()
+
+
+def generate_coach_reply(member, profile, user_message=None, workout_logs=None, category="conversation"):
+    language = current_language()
+    context = coach_context_summary(member, profile)
+    recent_workouts = "\n".join(recent_coach_workout_summary(member.member_id)) or "No previous workouts logged."
+    workout_text = ""
+    if workout_logs:
+        workout_text = "\n".join(
+            f"- {log.exercise_name}: planned {log.planned_sets} sets x {log.planned_reps}, actual {log.weight_used or '-'} x {log.reps_completed or '-'}"
+            for log in workout_logs
+        )
+    prompt = (
+        "You are the Dreamz Fitness member coach. Reply in the member's selected language. "
+        "Be practical, encouraging and concise. Do not diagnose medical issues. "
+        "If there is pain, injury, dizziness, pregnancy or a medical concern, tell the member to ask Dreamz staff or a qualified professional. "
+        "Use Bonaire-friendly, realistic training and nutrition advice.\n\n"
+        f"Language: {language}\n"
+        f"Profile: {context}\n"
+        f"Recent workouts:\n{recent_workouts}\n"
+        f"Current workout:\n{workout_text or 'N/A'}\n"
+        f"Member question:\n{user_message or 'Give short feedback after this completed workout.'}"
+    )
+    api_key = app.config.get("OPENAI_API_KEY")
+    mode = app.config.get("COACH_AI_MODE", "fallback")
+    if api_key and mode == "openai":
+        try:
+            request = Request(
+                "https://api.openai.com/v1/responses",
+                data=json.dumps({
+                    "model": app.config.get("OPENAI_MODEL", "gpt-4.1-mini"),
+                    "input": prompt,
+                    "max_output_tokens": 450,
+                }).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with urlopen(request, timeout=25) as response:
+                reply = openai_text_from_response(json.loads(response.read().decode("utf-8")))
+            if reply:
+                return reply, "openai", context
+        except (HTTPError, URLError, TimeoutError, ValueError, OSError):
+            pass
+    return fallback_coach_reply(member, profile, user_message=user_message, workout_logs=workout_logs, language=language), "fallback", context
 
 
 def document_config_or_404(document_type):
@@ -2972,6 +3112,30 @@ def staff_daily_changes():
     )
 
 
+@app.get("/staff/coach")
+def staff_coach_activity():
+    require_staff_access()
+    ensure_runtime_schema()
+    interactions = (
+        CoachInteraction.query
+        .order_by(CoachInteraction.created_at.desc(), CoachInteraction.id.desc())
+        .limit(100)
+        .all()
+    )
+    member_ids = {interaction.member_id for interaction in interactions}
+    members = {}
+    if member_ids:
+        members = {
+            member.member_id: member
+            for member in Member.query.filter(Member.member_id.in_(member_ids)).all()
+        }
+    return render_template(
+        "staff_coach_activity.html",
+        interactions=interactions,
+        members=members,
+    )
+
+
 @app.post("/staff/email-log/<int:email_id>/review")
 def staff_email_log_review(email_id):
     validate_csrf_token()
@@ -3421,6 +3585,7 @@ def save_coach_workout_log():
     db.session.add(workout)
     db.session.flush()
 
+    workout_logs = []
     for index, exercise in enumerate(exercises, start=1):
         log = CoachWorkoutExerciseLog(
             workout_session_id=workout.id,
@@ -3436,15 +3601,61 @@ def save_coach_workout_log():
             completed=bool(exercise.get("done")),
         )
         db.session.add(log)
+        workout_logs.append(log)
 
+    profile = coach_profile_for_member(member)
+    reply, source, context = generate_coach_reply(member, profile, workout_logs=workout_logs, category="workout_feedback")
+    save_coach_interaction(
+        member.member_id,
+        "coach",
+        reply,
+        category="workout_feedback",
+        source=source,
+        context_summary=context,
+    )
     db.session.commit()
     return jsonify(
         {
             "status": "success",
             "message": translated_text("coach_workout_saved", current_language()),
             "workout_id": workout.id,
+            "coach_reply": reply,
         }
     )
+
+
+@app.route("/coach/message", methods=["POST"])
+def coach_message():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return jsonify({"status": "error", "message": "Login required."}), 401
+    validate_request_csrf_token()
+    payload = request.get_json(silent=True) or {}
+    question = str(payload.get("message") or "").strip()
+    if not question:
+        return jsonify({"status": "error", "message": translated_text("coach_question_required", current_language())}), 400
+
+    profile = coach_profile_for_member(member)
+    context = coach_context_summary(member, profile)
+    save_coach_interaction(
+        member.member_id,
+        "member",
+        question,
+        category="question",
+        source="member",
+        context_summary=context,
+    )
+    reply, source, context = generate_coach_reply(member, profile, user_message=question, category="question")
+    save_coach_interaction(
+        member.member_id,
+        "coach",
+        reply,
+        category="answer",
+        source=source,
+        context_summary=context,
+    )
+    db.session.commit()
+    return jsonify({"status": "success", "reply": reply, "source": source})
 
 
 @app.post("/cancel")
