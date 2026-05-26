@@ -20,7 +20,7 @@
       {% endif %}
     {% endwith %}
 
-    <form method="POST" class="space-y-4" data-loading-form>
+    <form method="POST" action="{{ form_action or url_for('staff_login') }}" class="space-y-4" data-loading-form>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <label class="block">
         <span class="mb-1 block text-sm font-semibold text-gray-200">Username</span>

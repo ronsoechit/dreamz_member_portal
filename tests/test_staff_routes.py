@@ -235,8 +235,11 @@ class StaffRouteTests(unittest.TestCase):
     def test_staff_home_requires_login(self):
         response = self.client.get("/staff")
 
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("/staff/login", response.headers["Location"])
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Staff Login", body)
+        self.assertIn('action="/staff/login"', body)
+        self.assertNotIn("FEP Manager", body)
 
     def test_staff_home_shows_member_portal_and_fep_choices(self):
         with self.client.session_transaction() as sess:
