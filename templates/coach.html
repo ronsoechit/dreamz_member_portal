@@ -22,6 +22,7 @@
 {% endmacro %}
 
 {% block content %}
+{% set coach_complete = profile and completion == 100 %}
 <div class="mb-6">
   <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('my_coach') }}</div>
   <h2 class="mt-1 text-2xl font-semibold">{{ t('coach_title') }}</h2>
@@ -47,7 +48,21 @@
   </a>
 </div>
 
-<form id="coach-wizard" method="post" class="space-y-5" data-loading-form>
+{% if coach_complete %}
+  <section class="mb-6 rounded-lg border border-green-500/30 bg-green-500/10 p-5">
+    <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      <div>
+        <h3 class="text-xl font-semibold text-green-200">{{ t('coach_profile_ready_title') }}</h3>
+        <p class="mt-2 text-sm leading-6 text-green-50/90">{{ t('coach_profile_ready_body') }}</p>
+      </div>
+      <button type="button" class="rounded bg-yellow-500 px-4 py-3 font-semibold text-black transition hover:bg-yellow-400" data-edit-coach>
+        {{ t('coach_profile_edit') }}
+      </button>
+    </div>
+  </section>
+{% endif %}
+
+<form id="coach-wizard" method="post" class="{% if coach_complete %}hidden {% endif %}space-y-5" data-loading-form>
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
   <div class="rounded-lg border border-gray-700 bg-gray-800/40 p-4">
@@ -169,6 +184,7 @@
   (() => {
     const form = document.getElementById("coach-wizard");
     if (!form) return;
+    const editButton = document.querySelector("[data-edit-coach]");
     const steps = Array.from(form.querySelectorAll("[data-coach-step]"));
     const currentLabel = form.querySelector("[data-step-current]");
     const titleLabel = form.querySelector("[data-step-title]");
@@ -228,6 +244,11 @@
     });
     backButton.addEventListener("click", () => showStep(index - 1));
     showStep(0);
+    editButton?.addEventListener("click", () => {
+      form.classList.remove("hidden");
+      editButton.classList.add("hidden");
+      form.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   })();
 </script>
 {% endblock %}

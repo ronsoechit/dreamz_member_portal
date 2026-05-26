@@ -251,6 +251,9 @@ class PortalRouteTests(unittest.TestCase):
 
         response = self.client.get("/coach")
         body = response.get_data(as_text=True)
+        self.assertIn("Your coach profile is complete", body)
+        self.assertIn("data-edit-coach", body)
+        self.assertIn('id="coach-wizard" method="post" class="hidden space-y-5"', body)
         self.assertIn("Starter guidance", body)
         self.assertIn("Build muscle", body)
 
