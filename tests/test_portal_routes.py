@@ -240,7 +240,7 @@ class PortalRouteTests(unittest.TestCase):
         response = self.client.get("/dashboard?id=13659")
 
         body = response.get_data(as_text=True)
-        self.assertIn("Your Dreamz plan is ready", body)
+        self.assertIn("Continue your Dreamz training", body)
         self.assertIn("View My Coach", body)
         self.assertNotIn("Set your goals, training rhythm", body)
 
@@ -285,9 +285,12 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("data-edit-coach", body)
         self.assertIn('id="coach-wizard" method="post" class="hidden space-y-5"', body)
         self.assertIn("Your Dreamz coach plan", body)
+        self.assertIn("Your training cockpit", body)
         self.assertIn("Training week", body)
         self.assertIn("Nutrition focus", body)
         self.assertIn("Personal notes", body)
+        self.assertIn("Training history", body)
+        self.assertIn("Coach conversation", body)
         self.assertIn("Session 1", body)
         self.assertIn("Sets", body)
         self.assertIn("Reps", body)

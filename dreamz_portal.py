@@ -75,8 +75,8 @@ app.config["STAFF_MANAGER_USERNAME"] = os.getenv("STAFF_MANAGER_USERNAME", "mana
 app.config["STAFF_MANAGER_PASSWORD"] = os.getenv("STAFF_MANAGER_PASSWORD", "dreamz-manager-dev")
 app.config["STAFF_ADMIN_EMAIL"] = os.getenv("STAFF_ADMIN_EMAIL", "ron@dreamzfitness.com")
 app.config["FEP_MANAGER_URL"] = os.getenv("FEP_MANAGER_URL", "https://dreamz-fep.onrender.com/login")
-app.config["COACH_AI_MODE"] = os.getenv("COACH_AI_MODE", "fallback")
 app.config["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY", "")
+app.config["COACH_AI_MODE"] = os.getenv("COACH_AI_MODE") or ("openai" if app.config["OPENAI_API_KEY"] else "fallback")
 app.config["OPENAI_MODEL"] = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 app.config["EMAIL_DELIVERY_MODE"] = os.getenv("EMAIL_DELIVERY_MODE", "log")
 app.config["MEMBER_LOGIN_CODE_TTL_MINUTES"] = int(os.getenv("MEMBER_LOGIN_CODE_TTL_MINUTES", "15"))
@@ -1499,6 +1499,73 @@ def recent_coach_workout_summary(member_id, limit=3):
     return summaries
 
 
+def coach_workout_history(member_id, limit=6):
+    sessions = (
+        CoachWorkoutSession.query
+        .filter_by(member_id=member_id)
+        .order_by(CoachWorkoutSession.completed_at.desc(), CoachWorkoutSession.id.desc())
+        .limit(limit)
+        .all()
+    )
+    history = []
+    for workout in sessions:
+        logs = (
+            CoachWorkoutExerciseLog.query
+            .filter_by(workout_session_id=workout.id)
+            .order_by(CoachWorkoutExerciseLog.exercise_order.asc())
+            .all()
+        )
+        history.append(
+            {
+                "workout": workout,
+                "logs": logs,
+                "completed_count": sum(1 for log in logs if log.completed),
+            }
+        )
+    return history
+
+
+def coach_latest_workout(member_id):
+    history = coach_workout_history(member_id, limit=1)
+    return history[0] if history else None
+
+
+def coach_next_session_context(profile, member_id, language=None):
+    language = language or current_language()
+    if not profile:
+        return None
+    plan = coach_personal_plan(profile, language=language)
+    if not plan or not plan[0].get("sessions"):
+        return None
+    sessions = plan[0]["sessions"]
+    latest = (
+        CoachWorkoutSession.query
+        .filter_by(member_id=member_id)
+        .order_by(CoachWorkoutSession.completed_at.desc(), CoachWorkoutSession.id.desc())
+        .first()
+    )
+    if latest and latest.session_number:
+        next_index = latest.session_number % len(sessions)
+    else:
+        next_index = 0
+    next_session = sessions[next_index]
+    return {
+        "session": next_session,
+        "latest": latest,
+        "count": CoachWorkoutSession.query.filter_by(member_id=member_id).count(),
+    }
+
+
+def coach_recent_interactions(member_id, limit=8):
+    return (
+        CoachInteraction.query
+        .filter_by(member_id=member_id)
+        .order_by(CoachInteraction.created_at.desc(), CoachInteraction.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+
 def coach_context_summary(member, profile):
     if not profile:
         return f"Member {member.member_id}: no coach profile yet."
@@ -1562,10 +1629,13 @@ def generate_coach_reply(member, profile, user_message=None, workout_logs=None, 
             for log in workout_logs
         )
     prompt = (
-        "You are the Dreamz Fitness member coach. Reply in the member's selected language. "
-        "Be practical, encouraging and concise. Do not diagnose medical issues. "
-        "If there is pain, injury, dizziness, pregnancy or a medical concern, tell the member to ask Dreamz staff or a qualified professional. "
-        "Use Bonaire-friendly, realistic training and nutrition advice.\n\n"
+        "You are the Dreamz Fitness digital coach and part of the Dreamz coaching service. "
+        "Reply in the member's selected language. Give direct, practical coaching that uses the profile, recent workouts and current plan. "
+        "Be specific about next training actions, weights/reps progression, food choices, recovery and what to log next. "
+        "Do not say you are an AI. Do not refer routine questions to Dreamz staff. "
+        "For serious red flags such as chest pain, fainting, severe injury, severe dizziness or medical emergencies, tell the member to stop and seek qualified medical help. "
+        "Use Bonaire-friendly, realistic and budget-aware training and nutrition advice. "
+        "Format the reply with short sections and concrete next steps.\n\n"
         f"Language: {language}\n"
         f"Profile: {context}\n"
         f"Recent workouts:\n{recent_workouts}\n"
@@ -2723,6 +2793,8 @@ def member_dashboard_context(member, staff_admin_view=False):
     member_photo_available = bool(is_s3_uri(member.photo_path) or resolved_photo_path(member.photo_path))
     coach_profile = coach_profile_for_member(member)
     coach_completion = coach_profile_completion(coach_profile)
+    coach_next_session = coach_next_session_context(coach_profile, member.member_id, language=language)
+    coach_latest = coach_latest_workout(member.member_id)
 
     return {
         "member": member,
@@ -2752,6 +2824,8 @@ def member_dashboard_context(member, staff_admin_view=False):
         "coach_profile": coach_profile,
         "coach_completion": coach_completion,
         "coach_complete": bool(coach_profile and coach_completion == 100),
+        "coach_next_session": coach_next_session,
+        "coach_latest_workout": coach_latest,
     }
 
 
@@ -3558,6 +3632,9 @@ def member_coach():
         coach_training_places=COACH_TRAINING_PLACES,
         coach_nutrition_goals=COACH_NUTRITION_GOALS,
         coach_label=coach_label,
+        workout_history=coach_workout_history(member.member_id),
+        coach_interactions=coach_recent_interactions(member.member_id),
+        coach_next_session=coach_next_session_context(profile, member.member_id),
     )
 
 

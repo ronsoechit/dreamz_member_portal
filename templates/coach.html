@@ -30,7 +30,7 @@
 </div>
 
 {% if coach_complete %}
-  <div class="mb-5 flex flex-col gap-3 rounded-lg border border-green-500/30 bg-green-500/10 p-4 md:flex-row md:items-center md:justify-between">
+  <div class="mb-4 flex flex-col gap-3 rounded-lg border border-green-500/30 bg-green-500/10 p-4 md:flex-row md:items-center md:justify-between">
     <div>
       <div class="text-xs font-semibold uppercase tracking-wide text-green-200">{{ t('coach_profile_status') }}</div>
       <div class="mt-1 text-sm leading-6 text-green-50/90">{{ t('coach_profile_status_ready_intro') }}</div>
@@ -48,6 +48,29 @@
       </a>
     </div>
   </div>
+  <section class="mb-5 grid gap-3 lg:grid-cols-[1.2fr_1fr_1fr]">
+    <a href="#coach-plan" class="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4 transition hover:border-yellow-300 hover:bg-yellow-500/15">
+      <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('coach_next_session_title') }}</div>
+      <div class="mt-2 text-lg font-semibold text-white">{{ coach_next_session.session.focus if coach_next_session else t('coach_plan_training_title') }}</div>
+      {% if coach_next_session %}
+        <div class="mt-2 text-sm text-yellow-50/80">{{ t('coach_plan_session') }} {{ coach_next_session.session.number }} · {{ coach_next_session.session.minutes }} {{ t('minutes_short') }}</div>
+      {% endif %}
+    </a>
+    <a href="#coach-history" class="rounded-lg border border-gray-700 bg-gray-800/50 p-4 transition hover:border-green-300">
+      <div class="text-xs font-semibold uppercase tracking-wide text-green-200">{{ t('coach_history_title') }}</div>
+      {% if workout_history %}
+        <div class="mt-2 text-lg font-semibold text-white">{{ workout_history[0].workout.focus }}</div>
+        <div class="mt-2 text-sm text-gray-300">{{ workout_history[0].workout.completed_at|format_date('%d/%m/%Y %H:%M') }}</div>
+      {% else %}
+        <div class="mt-2 text-sm text-gray-300">{{ t('coach_history_empty') }}</div>
+      {% endif %}
+    </a>
+    <a href="#coach-chat" class="rounded-lg border border-gray-700 bg-gray-800/50 p-4 transition hover:border-green-300">
+      <div class="text-xs font-semibold uppercase tracking-wide text-green-200">{{ t('coach_chat_thread_title') }}</div>
+      <div class="mt-2 text-lg font-semibold text-white">{{ t('coach_reply_label') }}</div>
+      <div class="mt-2 text-sm text-gray-300">{{ t('coach_chat_intro') }}</div>
+    </a>
+  </section>
 {% else %}
   <div class="mb-6 grid gap-4 lg:grid-cols-[1fr_18rem]">
     <div class="rounded-lg border border-gray-700 bg-gray-800/40 p-5">
@@ -172,11 +195,12 @@
 </form>
 
 {% if profile %}
-  <section class="mt-6 rounded-lg border border-green-500/30 bg-green-500/10 p-4 sm:p-5">
+  <section id="coach-plan" class="mt-6 rounded-lg border border-green-500/30 bg-gray-900/60 p-4 sm:p-5">
     <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
       <div>
-        <h3 class="text-xl font-semibold text-green-200">{{ t('coach_plan_ready_title') }}</h3>
-        <p class="mt-2 text-sm leading-6 text-green-50/90">{{ t('coach_plan_ready_intro') }}</p>
+        <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('coach_plan_ready_title') }}</div>
+        <h3 class="mt-1 text-xl font-semibold text-green-200">{{ t('coach_plan_focus_title') }}</h3>
+        <p class="mt-2 text-sm leading-6 text-green-50/90">{{ t('coach_plan_focus_intro') }}</p>
       </div>
     </div>
     {% if personal_plan %}
@@ -306,9 +330,56 @@
       </div>
     {% endif %}
     <p class="mt-5 rounded border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm leading-6 text-yellow-100">{{ t('coach_plan_progress_note') }}</p>
-    <section class="mt-5 rounded-lg border border-green-400/30 bg-gray-950/50 p-4" data-coach-chat data-message-url="{{ url_for('coach_message') }}" data-csrf-token="{{ csrf_token() }}">
+
+    <section id="coach-history" class="mt-5 rounded-lg border border-gray-700 bg-gray-950/50 p-4">
+      <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h4 class="text-lg font-semibold text-green-200">{{ t('coach_history_title') }}</h4>
+          <p class="mt-1 text-sm leading-6 text-gray-300">{{ t('coach_history_intro') }}</p>
+        </div>
+      </div>
+      <div class="mt-4 grid gap-3 lg:grid-cols-2">
+        {% for item in workout_history %}
+          <article class="rounded border border-gray-700 bg-gray-900/70 p-3">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('coach_plan_session') }} {{ item.workout.session_number or '-' }}</div>
+                <h5 class="mt-1 font-semibold text-white">{{ item.workout.focus or t('coach_plan_training_title') }}</h5>
+                <div class="mt-1 text-xs text-gray-400">{{ item.workout.completed_at|format_date('%d/%m/%Y %H:%M') }}</div>
+              </div>
+              <span class="rounded-full border border-green-500/30 bg-green-500/10 px-2 py-1 text-xs text-green-100">{{ t('coach_history_logged')|replace('{count}', item.completed_count|string) }}</span>
+            </div>
+            <dl class="mt-3 grid gap-2 text-xs">
+              {% for log in item.logs %}
+                <div class="grid grid-cols-[1fr_auto] gap-3 rounded bg-gray-950/50 p-2">
+                  <dt class="font-semibold text-gray-100">{{ log.exercise_name }}</dt>
+                  <dd class="text-right text-yellow-100">{{ log.weight_used or '-' }} · {{ log.reps_completed or '-' }}</dd>
+                </div>
+              {% endfor %}
+            </dl>
+          </article>
+        {% else %}
+          <div class="rounded border border-gray-700 bg-gray-900/70 p-4 text-sm text-gray-300">{{ t('coach_history_empty') }}</div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section id="coach-chat" class="mt-5 rounded-lg border border-green-400/30 bg-gray-950/50 p-4" data-coach-chat data-message-url="{{ url_for('coach_message') }}" data-csrf-token="{{ csrf_token() }}">
       <h4 class="text-lg font-semibold text-green-200">{{ t('coach_chat_title') }}</h4>
       <p class="mt-1 text-sm leading-6 text-gray-300">{{ t('coach_chat_intro') }}</p>
+      <div class="mt-4 max-h-[26rem] space-y-3 overflow-y-auto rounded border border-gray-700 bg-gray-900/60 p-3" data-coach-chat-thread>
+        {% for item in coach_interactions|reverse %}
+          <article class="max-w-[92%] rounded-lg border p-3 text-sm leading-6 {% if item.actor == 'member' %}ml-auto border-yellow-500/30 bg-yellow-500/10 text-yellow-50{% else %}border-green-500/30 bg-green-500/10 text-green-50{% endif %}">
+            <div class="mb-1 flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-wide {% if item.actor == 'member' %}text-yellow-200{% else %}text-green-200{% endif %}">
+              <span>{{ t('coach_member_label') if item.actor == 'member' else t('coach_reply_label') }}</span>
+              <span>{{ item.created_at|format_date('%d/%m/%Y %H:%M') }}</span>
+            </div>
+            <div class="whitespace-pre-wrap">{{ item.message }}</div>
+          </article>
+        {% else %}
+          <div class="rounded border border-gray-700 bg-gray-950/50 p-3 text-sm text-gray-300" data-empty-chat>{{ t('coach_chat_empty') }}</div>
+        {% endfor %}
+      </div>
       <div class="mt-4 hidden rounded border border-green-400/30 bg-green-500/10 p-3 text-sm leading-6 text-green-50" data-coach-chat-reply></div>
       <label class="mt-4 block">
         <span class="text-sm font-semibold text-gray-200">{{ t('coach_chat_question') }}</span>
@@ -398,6 +469,28 @@
       form.scrollIntoView({ behavior: "smooth", block: "start" });
     });
 
+    const appendCoachMessage = (actor, message) => {
+      const thread = document.querySelector("[data-coach-chat-thread]");
+      if (!thread || !message) return;
+      thread.querySelector("[data-empty-chat]")?.remove();
+      const card = document.createElement("article");
+      const isMember = actor === "member";
+      card.className = `max-w-[92%] rounded-lg border p-3 text-sm leading-6 ${isMember ? "ml-auto border-yellow-500/30 bg-yellow-500/10 text-yellow-50" : "border-green-500/30 bg-green-500/10 text-green-50"}`;
+      const header = document.createElement("div");
+      header.className = `mb-1 flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-wide ${isMember ? "text-yellow-200" : "text-green-200"}`;
+      const label = document.createElement("span");
+      label.textContent = isMember ? "{{ t('coach_member_label') }}" : "{{ t('coach_reply_label') }}";
+      const time = document.createElement("span");
+      time.textContent = new Date().toLocaleString();
+      const body = document.createElement("div");
+      body.className = "whitespace-pre-wrap";
+      body.textContent = message;
+      header.append(label, time);
+      card.append(header, body);
+      thread.append(card);
+      card.scrollIntoView({ behavior: "smooth", block: "center" });
+    };
+
     document.querySelectorAll("[data-coach-plan]").forEach((plan) => {
       const tabs = Array.from(plan.querySelectorAll("[data-session-tab]"));
       const panels = Array.from(plan.querySelectorAll("[data-session-panel]"));
@@ -478,6 +571,7 @@
               reply.className = "mt-3 rounded border border-green-400/30 bg-gray-950/50 p-3 text-sm leading-6 text-green-50";
               reply.textContent = result.coach_reply;
               saveStatus.after(reply);
+              appendCoachMessage("coach", result.coach_reply);
             }
           } catch (error) {
             if (saveStatus) saveStatus.textContent = error.message || "{{ t('coach_workout_save_error') }}";
@@ -544,6 +638,7 @@
           return;
         }
         errorBox?.classList.add("hidden");
+        appendCoachMessage("member", message);
         button.disabled = true;
         button.classList.add("opacity-60", "cursor-wait");
         const originalText = button.textContent;
@@ -562,8 +657,8 @@
           if (reply) {
             reply.textContent = result.reply || "";
             reply.classList.remove("hidden");
-            reply.scrollIntoView({ behavior: "smooth", block: "center" });
           }
+          appendCoachMessage("coach", result.reply || "");
           if (input) input.value = "";
         } catch (error) {
           if (errorBox) {
