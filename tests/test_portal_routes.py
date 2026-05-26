@@ -15,7 +15,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
-from dreamz_portal import CancellationRequest, CoachProfile, EmailLog, Member, MemberDocument, MemberLoginCode, app, cancellation_message, db  # noqa: E402
+from dreamz_portal import CancellationRequest, CoachProfile, CoachWorkoutExerciseLog, CoachWorkoutSession, EmailLog, Member, MemberDocument, MemberLoginCode, app, cancellation_message, db  # noqa: E402
 
 
 class FakeS3Body:
@@ -297,10 +297,74 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Finish session", body)
         self.assertIn("Mark this exercise as done before continuing.", body)
         self.assertIn("Bonaire-friendly basics", body)
+        self.assertIn("data-save-url", body)
         self.assertIn("data-session-tab", body)
         self.assertIn("data-exercise-toggle", body)
         self.assertIn("Use a controlled weight", body)
         self.assertIn("Build muscle", body)
+
+    def test_coach_workout_log_can_be_saved(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+        with self.client.session_transaction() as browser_session:
+            browser_session["_csrf_token"] = "csrf-test-token"
+
+        response = self.client.post(
+            "/coach/workout-log",
+            json={
+                "sessionNumber": 1,
+                "focus": "lower body muscle building",
+                "minutes": 45,
+                "exercises": [
+                    {
+                        "name": "Leg press",
+                        "equipment": "Machine",
+                        "sets": "3",
+                        "reps": "10-12",
+                        "rest": "90 sec",
+                        "weightUsed": "50",
+                        "repsCompleted": "12",
+                        "done": True,
+                    },
+                    {
+                        "name": "Hip thrust",
+                        "equipment": "Machine or barbell",
+                        "sets": "3",
+                        "reps": "10-12",
+                        "rest": "90 sec",
+                        "weightUsed": "40",
+                        "repsCompleted": "10",
+                        "done": True,
+                    },
+                ],
+            },
+            headers={"X-CSRF-Token": "csrf-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(CoachWorkoutSession.query.filter_by(member_id="13659").count(), 1)
+        self.assertEqual(CoachWorkoutExerciseLog.query.filter_by(member_id="13659").count(), 2)
+        log = CoachWorkoutExerciseLog.query.filter_by(exercise_name="Leg press").one()
+        self.assertEqual(log.weight_used, "50")
+        self.assertEqual(log.reps_completed, "12")
+
+    def test_coach_workout_log_requires_completed_exercises(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+        with self.client.session_transaction() as browser_session:
+            browser_session["_csrf_token"] = "csrf-test-token"
+
+        response = self.client.post(
+            "/coach/workout-log",
+            json={
+                "sessionNumber": 1,
+                "exercises": [{"name": "Leg press", "done": False}],
+            },
+            headers={"X-CSRF-Token": "csrf-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(CoachWorkoutSession.query.count(), 0)
 
     def test_coach_profile_requires_all_fields(self):
         self.add_member(member_id="13659", name="Ron Soechit")

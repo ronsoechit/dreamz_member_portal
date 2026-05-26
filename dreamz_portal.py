@@ -14,7 +14,7 @@ if os.name == "nt":
 
 from flask import (
     Flask, render_template, request, abort,
-    redirect, url_for, flash, session, Response, send_file, send_from_directory
+    redirect, url_for, flash, session, Response, send_file, send_from_directory, jsonify
 )
 
 from flask_sqlalchemy import SQLAlchemy
@@ -295,6 +295,33 @@ class CoachProfile(db.Model):
     allergies = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+
+class CoachWorkoutSession(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.String, nullable=False, index=True)
+    session_number = db.Column(db.Integer)
+    focus = db.Column(db.String)
+    planned_minutes = db.Column(db.Integer)
+    language = db.Column(db.String, default=DEFAULT_LANGUAGE)
+    started_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    completed_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+
+
+class CoachWorkoutExerciseLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    workout_session_id = db.Column(db.Integer, db.ForeignKey("coach_workout_session.id"), nullable=False, index=True)
+    member_id = db.Column(db.String, nullable=False, index=True)
+    exercise_order = db.Column(db.Integer, nullable=False)
+    exercise_name = db.Column(db.String, nullable=False)
+    equipment = db.Column(db.String)
+    planned_sets = db.Column(db.String)
+    planned_reps = db.Column(db.String)
+    planned_rest = db.Column(db.String)
+    weight_used = db.Column(db.String)
+    reps_completed = db.Column(db.String)
+    completed = db.Column(db.Boolean, default=False, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
 
 
 DEFAULT_SETTINGS = {
@@ -2085,6 +2112,14 @@ def validate_csrf_token():
     if not expected or not supplied or not secrets.compare_digest(expected, supplied):
         abort(400, "Invalid CSRF token.")
 
+
+def validate_request_csrf_token():
+    expected = session.get("_csrf_token", "")
+    supplied = request.form.get("csrf_token", "") or request.headers.get("X-CSRF-Token", "")
+    if not expected or not supplied or not secrets.compare_digest(expected, supplied):
+        abort(400, "Invalid CSRF token.")
+
+
 @app.context_processor
 def inject_csrf_token():
     return {
@@ -3361,61 +3396,54 @@ def member_coach():
         coach_label=coach_label,
     )
 
-    policy = cancellation_policy_for_member(member)
-    language = current_language()
-    policy_text = cancellation_message(policy, language=language)
-    policy_summary, policy_detail = cancellation_message_parts(policy, language=language)
-    payment_status = payment_status_for_member(member)
-    show_cancel = policy.can_request
 
-    # ------------------------------------------------------------------
-    #  alle extra kolommen bijeenrapen voor tabel-weergave
-    # ------------------------------------------------------------------
-    def fmt_value(val, typ):
-        if val in (None, "", 0, 0.0):
-            return "Not available" if typ != "money" else "$0"
-        if typ == "date":
-            return val.strftime("%d %b %Y") if isinstance(val, date) else "Not available"
-        if typ == "money":
-            return f"${val:,.2f}"
-        return val
+@app.route("/coach/workout-log", methods=["POST"])
+def save_coach_workout_log():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return jsonify({"status": "error", "message": "Login required."}), 401
+    validate_request_csrf_token()
 
-    extra_cols = [
-        (label, fmt_value(getattr(member, key, None), typ))
-        for _, label, key, typ in GA_FIELDS
-    ]
+    payload = request.get_json(silent=True) or {}
+    exercises = payload.get("exercises") if isinstance(payload.get("exercises"), list) else []
+    completed_exercises = [exercise for exercise in exercises if exercise.get("done")]
+    if not exercises or len(completed_exercises) != len(exercises):
+        return jsonify({"status": "error", "message": translated_text("coach_done_required", current_language())}), 400
 
-    info, sub, pay = grouped_fields(member)
+    workout = CoachWorkoutSession(
+        member_id=member.member_id,
+        session_number=parse_optional_int(payload.get("sessionNumber")),
+        focus=str(payload.get("focus") or "")[:255],
+        planned_minutes=parse_optional_int(payload.get("minutes")),
+        language=current_language(),
+        completed_at=datetime.now(),
+    )
+    db.session.add(workout)
+    db.session.flush()
 
-    # ▸ vul ontbrekende velden logisch aan --------------------------
-    # Bereken next_payment als hij ontbreekt
-    if not member.next_payment:
-        member.next_payment = compute_next_payment(member)
+    for index, exercise in enumerate(exercises, start=1):
+        log = CoachWorkoutExerciseLog(
+            workout_session_id=workout.id,
+            member_id=member.member_id,
+            exercise_order=index,
+            exercise_name=str(exercise.get("name") or "")[:255],
+            equipment=str(exercise.get("equipment") or "")[:255],
+            planned_sets=str(exercise.get("sets") or "")[:50],
+            planned_reps=str(exercise.get("reps") or "")[:80],
+            planned_rest=str(exercise.get("rest") or "")[:80],
+            weight_used=str(exercise.get("weightUsed") or "")[:80],
+            reps_completed=str(exercise.get("repsCompleted") or "")[:80],
+            completed=bool(exercise.get("done")),
+        )
+        db.session.add(log)
 
-    # Zorg dat numeric velden nooit None zijn (handig voor template-format)
-    member.last_payment_amount = member.last_payment_amount or 0.0
-    member.balance             = member.balance or 0.0
-    member.billing_amount      = member.billing_amount or 0.0
-    member_photo_available = bool(is_s3_uri(member.photo_path) or resolved_photo_path(member.photo_path))
-
-    return render_template(
-        "dashboard.html",
-        member=member,
-        display_name=display_member_name(member.name),
-        member_photo_available=member_photo_available,
-        documents=member_documents(member),
-        payment_status=payment_status,
-        info=info, sub=sub, pay=pay,
-        cancellation_info=policy_text,
-        cancellation_summary=policy_summary,
-        cancellation_detail=policy_detail,
-        cancellation_policy=policy,
-        show_cancel=show_cancel,
-        cancel_window_open=fmt_policy_date(policy.window_open, language),
-        cancel_window_close=fmt_policy_date(policy.last_request_date, language),
-        next_cancel_window_open=fmt_policy_date(policy.next_window_open, language),
-        next_cancel_window_close=fmt_policy_date(policy.next_window_last_request_date, language),
-        extra_cols=extra_cols,
+    db.session.commit()
+    return jsonify(
+        {
+            "status": "success",
+            "message": translated_text("coach_workout_saved", current_language()),
+            "workout_id": workout.id,
+        }
     )
 
 
