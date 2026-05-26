@@ -245,6 +245,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("/documents/contract", body)
         self.assertIn("/documents/mandate", body)
         self.assertIn(">View</a>", body)
+        self.assertNotIn('target="_blank"', body)
 
     def test_document_viewer_requires_login(self):
         response = self.client.get("/documents/contract")
@@ -277,6 +278,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Group PT / Personal Training", body)
         self.assertIn("Group PT 2022-04-27.pdf", body)
         self.assertIn(f"/documents/item/{document.id}", body)
+        self.assertNotIn('target="_blank"', body)
 
     def test_dashboard_groups_repeated_document_types(self):
         self.add_member(member_id="80")

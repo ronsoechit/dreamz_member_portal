@@ -117,7 +117,7 @@
             <ul class="space-y-2">
               {% for document in group.documents %}
                 <li class="min-w-0">
-                  <a class="text-green-400 underline" href="{{ url_for('view_member_document', document_id=document.id) }}" target="_blank" rel="noopener">{{ t('view') }}</a>
+                  <a class="text-green-400 underline" href="{{ url_for('view_member_document', document_id=document.id) }}">{{ t('view') }}</a>
                   {% if document.source_filename %}
                     <span class="ml-2 text-xs text-gray-400 break-words">{{ document.source_filename }}</span>
                   {% endif %}
@@ -133,7 +133,7 @@
         <dt class="pr-4 font-semibold text-gray-200">{{ t('signup_form') }}:</dt>
         <dd>
           {% if member.form_path %}
-            <a class="text-green-400 underline" href="{{ url_for('view_document', document_type='signup-form') }}" target="_blank" rel="noopener">{{ t('view') }}</a>
+            <a class="text-green-400 underline" href="{{ url_for('view_document', document_type='signup-form') }}">{{ t('view') }}</a>
           {% else %}{{ t('not_available') }}{% endif %}
           <p class="mt-1 text-xs leading-relaxed text-gray-400">{{ t_document_explanation('signup_form') }}</p>
         </dd>
@@ -141,7 +141,7 @@
         <dt class="pr-4 font-semibold text-gray-200">{{ t('contract') }}:</dt>
         <dd>
           {% if member.contract_path %}
-            <a class="text-green-400 underline" href="{{ url_for('view_document', document_type='contract') }}" target="_blank" rel="noopener">{{ t('view') }}</a>
+            <a class="text-green-400 underline" href="{{ url_for('view_document', document_type='contract') }}">{{ t('view') }}</a>
           {% else %}{{ t('not_available') }}{% endif %}
           <p class="mt-1 text-xs leading-relaxed text-gray-400">{{ t_document_explanation('contract') }}</p>
         </dd>
@@ -149,7 +149,7 @@
         <dt class="pr-4 font-semibold text-gray-200">{{ t('direct_debit_mandate') }}:</dt>
         <dd>
           {% if member.mandate_path %}
-            <a class="text-green-400 underline" href="{{ url_for('view_document', document_type='mandate') }}" target="_blank" rel="noopener">{{ t('view') }}</a>
+            <a class="text-green-400 underline" href="{{ url_for('view_document', document_type='mandate') }}">{{ t('view') }}</a>
           {% else %}{{ t('not_available') }}{% endif %}
           <p class="mt-1 text-xs leading-relaxed text-gray-400">{{ t_document_explanation('direct_debit_mandate') }}</p>
         </dd>
