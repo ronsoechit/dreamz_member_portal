@@ -17,6 +17,14 @@ os.environ["SECRET_KEY"] = "test-secret"
 from dreamz_portal import AppSetting, CancellationRequest, EmailLog, Member, MemberDocument, StaffUser, SyncRun, app, db, deliver_email, payment_status_for_member  # noqa: E402
 
 
+class FakeS3Body:
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def iter_chunks(self):
+        return iter(self._chunks)
+
+
 class StaffRouteTests(unittest.TestCase):
     def setUp(self):
         app.config["TESTING"] = True
@@ -635,6 +643,34 @@ class StaffRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Staff member view", response.get_data(as_text=True))
+
+    def test_manager_can_view_staff_member_document(self):
+        self.add_member()
+        document = self.add_document(path="s3://dreamz-test/portal/Data/Attachments/0001206/contract.pdf")
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+
+        viewer_response = self.client.get(f"/documents/item/{document.id}")
+        self.assertEqual(viewer_response.status_code, 200)
+        self.assertIn(f"/documents/item/{document.id}/file", viewer_response.get_data(as_text=True))
+
+        with patch("dreamz_portal.open_s3_object", return_value=FakeS3Body([b"%PDF staff"])):
+            file_response = self.client.get(f"/documents/item/{document.id}/file")
+
+        self.assertEqual(file_response.status_code, 200)
+        self.assertEqual(file_response.mimetype, "application/pdf")
+        self.assertEqual(file_response.get_data(), b"%PDF staff")
+
+    def test_manager_can_view_staff_member_photo(self):
+        self.add_member(member_id="1206", photo_path="s3://dreamz-test/portal/Data/Pictures/0001206.jpg")
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+
+        with patch("dreamz_portal.open_s3_object", return_value=FakeS3Body([b"photo"])):
+            response = self.client.get("/member-photo/1206")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_data(), b"photo")
 
     def test_admin_can_open_member_detail(self):
         self.add_member()

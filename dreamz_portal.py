@@ -1229,7 +1229,7 @@ def member_document_or_404(document_id):
     if not document:
         abort(404, "Document not found.")
 
-    if is_staff_admin():
+    if is_staff_user():
         member = Member.query.filter_by(member_id=document.member_id).first_or_404()
         return (member, document), None
 
@@ -2945,7 +2945,7 @@ def view_member_document(document_id):
         download_url=url_for("member_document_file", document_id=document.id, download="1"),
         close_url=(
             url_for("staff_member_detail", member_id=member.member_id)
-            if is_staff_admin()
+            if is_staff_user()
             else url_for("dashboard", id=member.member_id)
         ),
     )
@@ -2980,7 +2980,7 @@ def member_document_file(document_id):
 
 @app.get("/member-photo/<member_id>")
 def member_photo(member_id):
-    if not is_staff_admin() and ("member_id" not in session or session["member_id"] != member_id):
+    if not is_staff_user() and ("member_id" not in session or session["member_id"] != member_id):
         abort(404)
 
     member = Member.query.filter_by(member_id=member_id).first_or_404()
