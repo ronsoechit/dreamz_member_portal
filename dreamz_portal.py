@@ -1380,6 +1380,9 @@ def coach_personal_plan(profile, language=None):
                 "number": index,
                 "focus": translated_text(f"coach_focus_{focus_key}", language),
                 "minutes": session_minutes,
+                "warmup": translated_text("coach_session_warmup", language),
+                "main": translated_text("coach_session_main", language),
+                "cooldown": translated_text("coach_session_cooldown", language),
                 "exercises": exercises,
             }
         )
@@ -1402,6 +1405,8 @@ def coach_personal_plan(profile, language=None):
             )
         )
     nutrition_items.append(translated_text("coach_plan_meal_structure", language))
+    nutrition_items.append(translated_text("coach_plan_budget_bonaire", language))
+    nutrition_items.append(translated_text("coach_plan_local_simple", language))
 
     habits_items = [
         translated_text("coach_plan_train_at", language, place=coach_label("place", profile.training_place, language)),
