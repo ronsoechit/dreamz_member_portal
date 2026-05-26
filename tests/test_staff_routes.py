@@ -184,11 +184,17 @@ class StaffRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
 
-    def test_staff_home_requires_login(self):
+    def test_staff_home_shows_tool_choices_without_login(self):
         response = self.client.get("/staff")
 
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("/staff/login", response.headers["Location"])
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Dreamz Fitness Staff", body)
+        self.assertIn("Member Info Staff/Admin", body)
+        self.assertIn("/staff/login", body)
+        self.assertIn("FEP Manager", body)
+        self.assertIn("https://dreamz-fep.onrender.com/login", body)
+        self.assertNotIn("/staff/logout", body)
 
     def test_staff_home_shows_member_portal_and_fep_choices(self):
         with self.client.session_transaction() as sess:
@@ -207,6 +213,21 @@ class StaffRouteTests(unittest.TestCase):
         self.assertNotIn(">Audit</a>", body)
         self.assertNotIn(">Sync</a>", body)
         self.assertIn("/staff/logout", body)
+
+    def test_staff_login_username_is_case_insensitive(self):
+        app.config["STAFF_MANAGER_USERNAME"] = "manager"
+        app.config["STAFF_MANAGER_PASSWORD"] = "manager-pass"
+
+        with self.client.session_transaction() as sess:
+            sess["_csrf_token"] = "token"
+        response = self.client.post(
+            "/staff/login",
+            data={"username": "Manager", "password": "manager-pass", "csrf_token": "token"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Dreamz Fitness Staff", response.get_data(as_text=True))
 
     def test_staff_data_audit_lists_member_issues(self):
         self.add_member(email="", mobile="", photo_path=None)

@@ -1306,8 +1306,9 @@ def resolved_photo_path(photo_path):
 def configured_staff_users():
     ensure_runtime_schema()
     return {
-        user.username: user
+        user.username.strip().lower(): user
         for user in StaffUser.query.filter_by(is_active=True).all()
+        if user.username
     }
 
 
@@ -2305,7 +2306,7 @@ def member_dashboard_context(member, staff_admin_view=False):
 def staff_login():
     if request.method == "POST":
         validate_csrf_token()
-        username = request.form.get("username", "").strip()
+        username = request.form.get("username", "").strip().lower()
         password = request.form.get("password", "")
         user = configured_staff_users().get(username)
         if user and check_password_hash(user.password_hash, password):
@@ -2336,12 +2337,20 @@ def staff_logout():
 
 @app.get("/staff")
 def staff_home():
-    if not current_staff_role() and not staff_access_from_token():
-        return redirect(url_for("staff_login"))
-    staff_role = require_staff_access()
+    staff_role = current_staff_role()
+    token_access = staff_access_from_token()
+    staff_portal_url = (
+        url_for("staff_data_audit")
+        if staff_role
+        else url_for("staff_data_audit", token=request.args.get("token", ""))
+        if token_access
+        else url_for("staff_login")
+    )
     return render_template(
         "staff_home.html",
-        staff_role=staff_role,
+        staff_role=staff_role or ("admin" if token_access else None),
+        staff_portal_url=staff_portal_url,
+        staff_is_authenticated=bool(staff_role or token_access),
         fep_manager_url=app.config["FEP_MANAGER_URL"],
     )
 
