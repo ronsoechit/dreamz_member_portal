@@ -157,6 +157,10 @@
     {% endif %}
 
     {% if show_cancel %}
+      <div class="mt-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4">
+        <div class="text-sm font-semibold text-yellow-200">{{ t('manage_cancellation_request') }}</div>
+        <p class="mt-1 text-sm leading-6 text-yellow-50/90">{{ t('manage_cancellation_intro') }}</p>
+      </div>
       <form action="{{ url_for('cancel') }}" method="post" class="mt-4 space-y-3">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="member_id" value="{{ member.member_id }}">
@@ -185,7 +189,7 @@
         <button type="submit"
                 onclick="return confirm('{{ t('confirm_cancel') }}');"
                 class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-white">
-          {{ t('cancel_contract') }}
+          {{ t('submit_cancellation_request') }}
         </button>
       </form>
       <script>

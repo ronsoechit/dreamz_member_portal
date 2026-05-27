@@ -552,6 +552,33 @@ class PortalRouteTests(unittest.TestCase):
         self.assertNotIn("Medical clearance first", page)
         self.assertNotIn("Medical check advised", page)
 
+    def test_female_coach_profile_requires_pregnancy_status(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+
+        response = self.client.post(
+            "/coach",
+            data=self.csrf_form_data(
+                primary_goal="get_fitter",
+                sex="female",
+                experience_level="beginner",
+                training_days="2",
+                session_minutes="45",
+                training_place="dreamz_gym",
+                height_cm="165",
+                weight_kg="70",
+                injuries="none",
+                nutrition_goal="healthier",
+                dietary_preferences="local food",
+                allergies="none",
+            ),
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(CoachProfile.query.filter_by(member_id="13659").count(), 0)
+        self.assertIn("Please complete every coach question", response.get_data(as_text=True))
+
     def test_pregnancy_profile_requires_consent_and_weeks(self):
         self.add_member(member_id="13659", name="Ron Soechit")
         self.login_as("13659")

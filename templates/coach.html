@@ -42,11 +42,17 @@
     {% endif %}
   </div>
   {% if coach_complete %}
-    <div class="flex flex-wrap items-center gap-2">
+    <div class="flex flex-wrap items-center gap-2 lg:justify-end">
+      <a href="#coach-plan" data-open-coach-view="training" class="rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400">
+        {{ t('coach_start_session') if next_session_startable else t('coach_review_guidance') }}
+      </a>
+      <a href="#coach-plan" data-open-coach-view="chat" class="rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">
+        {{ t('ask_coach') }}
+      </a>
       <span class="rounded-full border border-green-500/30 bg-green-500/10 px-3 py-2 text-sm font-semibold text-green-100">
         {{ t('coach_profile_status') }} &middot; {{ completion }}% {{ t('coach_profile_complete') }}
       </span>
-      <button type="button" class="rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400" data-edit-coach>
+      <button type="button" class="rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400" data-edit-coach>
         {{ t('coach_profile_edit') }}
       </button>
     </div>
@@ -183,8 +189,9 @@
           <label class="block">
             <span class="text-sm font-semibold text-gray-200">{{ t('coach_pregnancy_status_label') }}</span>
             <select name="pregnancy_status" data-coach-input data-pregnancy-status class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white">
+              <option value="">{{ t('choose_option') }}</option>
               {% for value in pregnancy_statuses %}
-                <option value="{{ value }}" {% if (profile.pregnancy_status if profile and profile.pregnancy_status else 'not_pregnant') == value %}selected{% endif %}>{{ t('coach_pregnancy_status_' ~ value) }}</option>
+                <option value="{{ value }}" {% if profile and profile.pregnancy_status == value %}selected{% endif %}>{{ t('coach_pregnancy_status_' ~ value) }}</option>
               {% endfor %}
             </select>
           </label>
@@ -201,6 +208,7 @@
           <label class="block">
             <span class="text-sm font-semibold text-gray-200">{{ t('coach_pre_pregnancy_weight') }}</span>
             <input name="pre_pregnancy_weight_kg" data-coach-input type="number" step="0.1" min="1" inputmode="decimal" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" value="{{ profile.pre_pregnancy_weight_kg if profile and profile.pre_pregnancy_weight_kg is not none else '' }}">
+            <span class="mt-1 block text-xs text-yellow-100">{{ t('coach_pre_pregnancy_weight_hint') }}</span>
           </label>
           <label class="block">
             <span class="text-sm font-semibold text-gray-200">{{ t('coach_multiple_pregnancy') }}</span>

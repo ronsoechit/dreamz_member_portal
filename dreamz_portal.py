@@ -1342,7 +1342,7 @@ COACH_SESSION_MINUTES = [30, 45, 60, 75, 90]
 COACH_TRAINING_PLACES = ["dreamz_gym", "home", "both"]
 COACH_NUTRITION_GOALS = ["fat_loss", "muscle_gain", "maintenance", "healthier"]
 COACH_SEX_VALUES = ["male", "female"]
-PREGNANCY_STATUSES = ["not_pregnant", "pregnant", "prefer_not_to_say"]
+PREGNANCY_STATUSES = ["not_pregnant", "pregnant"]
 PREGNANCY_MULTIPLE_VALUES = ["no", "yes", "unknown"]
 PREGNANCY_PROVIDER_CLEARANCE_VALUES = ["yes", "no", "unknown"]
 PREGNANCY_WARNING_SYMPTOMS = [
@@ -1461,15 +1461,14 @@ def pregnancy_safety_status(profile):
 def pregnancy_context_summary(profile):
     if not is_pregnant_profile(profile):
         if not profile:
-            return "sex=unknown, pregnancy_status=unknown"
-        status = profile.pregnancy_status or "not_pregnant"
-        if profile.sex != "female":
-            status = "not_applicable"
-        return f"sex={profile.sex or 'unknown'}, pregnancy_status={status}"
+            return "biological_sex=unknown"
+        if profile.sex == "female":
+            return f"biological_sex=female, pregnancy_status={profile.pregnancy_status or 'unknown'}"
+        return f"biological_sex={profile.sex or 'unknown'}"
     symptoms = pregnancy_symptom_list(profile)
     trimester = pregnancy_trimester(profile)
     return (
-        "sex=female, pregnancy_status=pregnant, "
+        "biological_sex=female, pregnancy_status=pregnant, "
         f"gestational_weeks={profile.gestational_weeks}, trimester={trimester or 'unknown'}, "
         f"expected_due_date={profile.expected_due_date or 'unknown'}, "
         f"pre_pregnancy_weight={profile.pre_pregnancy_weight_kg or 'unknown'}, current_weight={profile.weight_kg or 'unknown'}, "
@@ -1530,6 +1529,8 @@ def coach_profile_missing_fields(profile_data):
     ]
     if profile_data.get("training_place") in ("home", "both"):
         required_fields.append("home_equipment")
+    if profile_data.get("sex") == "female":
+        required_fields.append("pregnancy_status")
     if profile_data.get("sex") == "female" and profile_data.get("pregnancy_status") == "pregnant":
         required_fields.extend(["gestational_weeks", "multiple_pregnancy", "provider_cleared_exercise", "pregnancy_consent"])
     return [field for field in required_fields if profile_data.get(field) in (None, "")]
@@ -1896,7 +1897,8 @@ def generate_openai_coach_plan(member, profile, fallback_plan, language=None):
     recent_workouts = "\n".join(recent_coach_workout_summary(member.member_id)) or "No previous workouts logged."
     context = coach_context_summary(member, profile)
     pregnancy_rules = (
-        "Pregnancy safety rules: if pregnancy_status=pregnant, never prescribe aggressive fat loss, cutting, crash diets, max effort, PR attempts, high-impact/contact sport, high fall-risk exercises, overheating, dehydration, or prolonged supine exercises after 16 weeks. "
+        "Biological sex is required for training safety. Never mention pregnancy, prenatal training, pregnancy_status, pregnancy weight, or prenatal nutrition unless biological_sex=female and pregnancy_status=pregnant. "
+        "Pregnancy safety rules only apply when biological_sex=female and pregnancy_status=pregnant: never prescribe aggressive fat loss, cutting, crash diets, max effort, PR attempts, high-impact/contact sport, high fall-risk exercises, overheating, dehydration, or prolonged supine exercises after 16 weeks. "
         "Use low-to-moderate intensity, talk-test pacing, hydration, safe strength, mobility, posture, breathing and pelvic floor focus. Provider restrictions always override the plan. "
         "If warning_symptoms are present or provider_cleared_exercise=no, do not generate a workout; advise the member to contact their doctor, midwife or healthcare provider before exercise. "
         "If provider_cleared_exercise=unknown, keep guidance cautious and low/moderate while advising medical clearance. Distinguish current_weight from pre_pregnancy_weight."
@@ -2355,9 +2357,10 @@ def generate_coach_reply(member, profile, user_message=None, workout_logs=None, 
         "Be specific about next training actions, weights/reps progression, food choices, recovery and what to log next. "
         "Do not say you are an AI. Do not refer routine questions to Dreamz staff. "
         "For serious red flags such as chest pain, fainting, severe injury, severe dizziness or medical emergencies, tell the member to stop and seek qualified medical help. "
-        "Pregnancy safety rules: if pregnancy_status=pregnant, do not advise aggressive fat loss/cutting, max-effort/PR training, high-impact/contact sport, high fall-risk exercises, overheating, dehydration, or prolonged supine exercises after 16 weeks. Use talk-test moderate intensity, safe strength, mobility, breathing, pelvic floor and hydration guidance. Provider restrictions always override. If warning symptoms are present or provider_cleared_exercise=no, do not give a workout progression; advise contacting doctor/midwife/healthcare provider before exercise. If clearance is unknown, keep advice cautious and low/moderate while recommending clearance. "
+        "Never mention pregnancy, prenatal training, pregnancy_status, pregnancy weight, or prenatal nutrition unless biological_sex=female and pregnancy_status=pregnant. "
+        "Pregnancy safety rules only apply when biological_sex=female and pregnancy_status=pregnant: do not advise aggressive fat loss/cutting, max-effort/PR training, high-impact/contact sport, high fall-risk exercises, overheating, dehydration, or prolonged supine exercises after 16 weeks. Use talk-test moderate intensity, safe strength, mobility, breathing, pelvic floor and hydration guidance. Provider restrictions always override. If warning symptoms are present or provider_cleared_exercise=no, do not give a workout progression; advise contacting doctor/midwife/healthcare provider before exercise. If clearance is unknown, keep advice cautious and low/moderate while recommending clearance. "
         "Use Bonaire-friendly, realistic and budget-aware training and nutrition advice. "
-        "Format the reply with short sections and concrete next steps.\n\n"
+        "Format the reply for a mobile app: start with a short Coach Summary, then 3-5 concrete action bullets, then an optional Details section. Keep it concise and avoid long essays.\n\n"
         f"Language: {language}\n"
         f"Profile: {context}\n"
         f"Recent workouts:\n{recent_workouts}\n"
@@ -4433,6 +4436,7 @@ def member_progress():
         member=member,
         display_name=display_member_name(member.name),
         member_photo_available=bool(is_s3_uri(member.photo_path) or resolved_photo_path(member.photo_path)),
+        profile=coach_profile_for_member(member),
         workout_history=coach_workout_history(member.member_id),
         progress_entries=coach_progress_history(member.member_id),
     )
@@ -4450,10 +4454,10 @@ def member_coach():
         sex = request.form.get("sex", "").strip() or None
         if sex not in COACH_SEX_VALUES:
             sex = None
-        pregnancy_status = request.form.get("pregnancy_status", "not_pregnant").strip() or "not_pregnant"
-        if pregnancy_status not in PREGNANCY_STATUSES:
-            pregnancy_status = "not_pregnant"
-        if sex != "female":
+        raw_pregnancy_status = request.form.get("pregnancy_status", "").strip()
+        if sex == "female":
+            pregnancy_status = raw_pregnancy_status if raw_pregnancy_status in PREGNANCY_STATUSES else None
+        else:
             pregnancy_status = "not_pregnant"
         is_pregnant = sex == "female" and pregnancy_status == "pregnant"
         gestational_weeks = parse_optional_int(request.form.get("gestational_weeks"))

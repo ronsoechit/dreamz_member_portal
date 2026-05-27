@@ -14,6 +14,8 @@
 </section>
 
 <section class="progress-summary-grid mb-5 grid gap-3 md:grid-cols-3">
+  {% set weight_entry = progress_entries|selectattr('weight_kg')|list|first %}
+  {% set latest_weight_value = weight_entry.weight_kg if weight_entry else (profile.weight_kg if profile else none) %}
   <article class="summary-card">
     <span class="summary-label">{{ t('workouts') }}</span>
     <strong>{{ workout_history|length }}</strong>
@@ -25,9 +27,11 @@
   <article class="summary-card">
     <span class="summary-label">{{ t('latest_weight') }}</span>
     <strong>
-      {% set weight_entry = progress_entries|selectattr('weight_kg')|list|first %}
-      {{ ('%.1f kg'|format(weight_entry.weight_kg)) if weight_entry else t('not_available') }}
+      {{ ('%.1f kg'|format(latest_weight_value)) if latest_weight_value else t('not_available') }}
     </strong>
+    {% if not weight_entry and latest_weight_value %}
+      <span class="mt-1 block text-xs text-gray-400">{{ t('profile_weight') }}</span>
+    {% endif %}
   </article>
 </section>
 
