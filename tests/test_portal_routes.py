@@ -19,7 +19,7 @@ os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
 from translations import LANGUAGES, TRANSLATIONS  # noqa: E402
-from dreamz_portal import CancellationRequest, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, EmailLog, GroupClassOccurrence, GroupClassSchedule, GroupClassType, Member, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, ScheduleChangeNotification, app, cancellation_message, coach_context_summary, coach_plan_for_member, coach_profile_completion, db, next_date_for_group_class, seed_group_class_schedule  # noqa: E402
+from dreamz_portal import AppSetting, CancellationRequest, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, EmailLog, GroupClassOccurrence, GroupClassSchedule, GroupClassType, Member, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, PricingCategory, PricingItem, ScheduleChangeNotification, app, cancellation_message, coach_context_summary, coach_plan_for_member, coach_profile_completion, db, next_date_for_group_class, pricing_visibility_list, seed_group_class_schedule, seed_pricing_catalog  # noqa: E402
 
 
 class FakeS3Body:
@@ -1718,6 +1718,58 @@ class PortalRouteTests(unittest.TestCase):
         edited = db.session.get(GroupClassOccurrence, occurrence.id)
         self.assertEqual(edited.room, "MAIN ROOM")
         self.assertEqual(edited.capacity, 18)
+
+    def test_pricing_catalog_seed_creates_initial_data(self):
+        seed_pricing_catalog()
+
+        self.assertEqual(PricingCategory.query.count(), 9)
+        self.assertEqual(PricingItem.query.count(), 22)
+        self.assertEqual(
+            AppSetting.query.filter_by(key="pricing_catalog_global_rule").one().value,
+            "All prices and fees are non-negotiable.",
+        )
+        no_contract = PricingItem.query.filter_by(seed_key="membership-no-contract-1-month").one()
+        self.assertEqual(no_contract.price_amount, 80)
+        self.assertEqual(no_contract.currency, "USD")
+        self.assertEqual(no_contract.billing_interval, "per_month")
+        self.assertEqual(pricing_visibility_list(no_contract), ["public", "members"])
+        self.assertFalse(no_contract.online_payment_available)
+        self.assertTrue(no_contract.requires_front_desk_handling)
+        self.assertIn("front desk", " ".join(json.loads(no_contract.terms)).lower())
+
+    def test_pricing_catalog_seed_preserves_admin_edits(self):
+        seed_pricing_catalog()
+        no_contract = PricingItem.query.filter_by(seed_key="membership-no-contract-1-month").one()
+        no_contract.price_amount = 88
+        no_contract.name = "Custom monthly membership"
+        no_contract.visibility = "members"
+        db.session.commit()
+
+        seed_pricing_catalog()
+
+        self.assertEqual(PricingItem.query.count(), 22)
+        edited = PricingItem.query.filter_by(seed_key="membership-no-contract-1-month").one()
+        self.assertEqual(edited.price_amount, 88)
+        self.assertEqual(edited.name, "Custom monthly membership")
+        self.assertEqual(edited.visibility, "members")
+
+    def test_pricing_catalog_seed_sets_b2b_and_mcb_rules(self):
+        seed_pricing_catalog()
+
+        external = PricingItem.query.filter_by(seed_key="b2b-external-personal-trainer-package").one()
+        self.assertEqual(external.category_key, "external_trainer_b2b")
+        self.assertEqual(external.price_amount, 250)
+        self.assertEqual(pricing_visibility_list(external), ["public_business", "staff_only"])
+        self.assertFalse(external.member_eligible)
+        external_terms = " ".join(json.loads(external.terms))
+        self.assertIn("not a membership product", external_terms)
+        self.assertIn("responsible for their own clients", external_terms)
+
+        mcb = PricingItem.query.filter_by(seed_key="mcb-direct-debit-12-month-contract").one()
+        mcb_terms = " ".join(json.loads(mcb.terms))
+        self.assertIn("Current MCB Bank Bonaire accounts only", mcb_terms)
+        self.assertIn("Direct Debit only", mcb_terms)
+        self.assertIn("No exceptions", mcb_terms)
 
     def test_group_class_member_plan_attendance_and_notifications_models(self):
         self.add_member(member_id="13659", name="Ron Soechit")

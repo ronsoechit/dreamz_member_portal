@@ -514,6 +514,59 @@ class ScheduleChangeNotification(db.Model):
     plan = db.relationship("MemberClassPlan")
 
 
+class PricingCategory(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String, unique=True, nullable=False, index=True)
+    name = db.Column(db.String, nullable=False)
+    description = db.Column(db.Text)
+    sort_order = db.Column(db.Integer, default=0, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+
+class PricingItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    seed_key = db.Column(db.String, unique=True, index=True)
+    name = db.Column(db.String, nullable=False, index=True)
+    category_key = db.Column(db.String, db.ForeignKey("pricing_category.key"), nullable=False, index=True)
+    description = db.Column(db.Text)
+    price_amount = db.Column(db.Float, default=0.0, nullable=False)
+    currency = db.Column(db.String, default="USD", nullable=False)
+    billing_interval = db.Column(db.String, nullable=False)
+    duration = db.Column(db.String)
+    visibility = db.Column(db.String, default="public", nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False, index=True)
+    effective_from = db.Column(db.Date)
+    effective_to = db.Column(db.Date)
+    sort_order = db.Column(db.Integer, default=0, nullable=False, index=True)
+    terms = db.Column(db.Text)
+    requires_front_desk_handling = db.Column(db.Boolean, default=True, nullable=False)
+    online_payment_available = db.Column(db.Boolean, default=False, nullable=False)
+    member_eligible = db.Column(db.Boolean, default=True, nullable=False)
+    contract_only = db.Column(db.Boolean, default=False, nullable=False)
+    source = db.Column(db.String)
+    notes = db.Column(db.Text)
+    internal_notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    category = db.relationship("PricingCategory", primaryjoin="PricingItem.category_key == PricingCategory.key")
+
+
+class PricingChangeLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    pricing_item_id = db.Column(db.Integer, db.ForeignKey("pricing_item.id"), nullable=False, index=True)
+    changed_by = db.Column(db.String)
+    change_type = db.Column(db.String, nullable=False, index=True)
+    old_value = db.Column(db.Text)
+    new_value = db.Column(db.Text)
+    note = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+
+    pricing_item = db.relationship("PricingItem")
+
+
 DEFAULT_SETTINGS = {
     "admin_email": "ron@dreamzfitness.com",
     "notification_to": "ron@dreamzfitness.com",
@@ -539,6 +592,312 @@ GROUP_CLASS_DAY_KEYS = {
     6: "sunday",
 }
 GROUP_CLASS_OCCURRENCE_STATUSES = {"scheduled", "cancelled", "reserved"}
+PRICING_CATALOG_SOURCE = "current Dreamz Fitness printed price list"
+PRICING_CATALOG_INITIAL_SEED_DATE = date(2026, 5, 27)
+PRICING_CATALOG_CURRENCY = "USD"
+PRICING_CATALOG_GLOBAL_RULE = "All prices and fees are non-negotiable."
+PRICING_CATEGORY_SEED = [
+    ("memberships", "Memberships"),
+    ("mcb_direct_debit_contracts", "MCB Direct Debit Contracts"),
+    ("day_week_passes", "Day & Week Passes"),
+    ("group_class_add_ons", "Group Class Add-ons"),
+    ("delfins_resort_guests", "Delfins Resort Guests"),
+    ("fees_other", "Fees & Other"),
+    ("under_18", "Under 18"),
+    ("external_trainer_b2b", "External Trainer Packages / B2B Services"),
+    ("personal_training", "Personal Training"),
+]
+PRICING_ITEM_SEED = [
+    {
+        "seed_key": "membership-no-contract-1-month",
+        "name": "No contract / 1 month",
+        "category_key": "memberships",
+        "description": "Flexible one month Dreamz Fitness membership.",
+        "price_amount": 80,
+        "billing_interval": "per_month",
+        "duration": "1 month",
+        "visibility": ["public", "members"],
+        "terms": [
+            "No long-term contract.",
+            "Payment and membership changes are handled at the front desk.",
+        ],
+    },
+    {
+        "seed_key": "membership-6-month-contract",
+        "name": "6 months contract",
+        "category_key": "memberships",
+        "description": "Six month Dreamz Fitness membership contract.",
+        "price_amount": 420,
+        "billing_interval": "one_time",
+        "duration": "6 months",
+        "visibility": ["public", "members"],
+        "contract_only": True,
+        "terms": [
+            "6 months contract.",
+            "Payment and membership changes are handled at the front desk.",
+        ],
+    },
+    {
+        "seed_key": "membership-12-month-contract",
+        "name": "12 months contract",
+        "category_key": "memberships",
+        "description": "Twelve month Dreamz Fitness membership contract.",
+        "price_amount": 720,
+        "billing_interval": "one_time",
+        "duration": "12 months",
+        "visibility": ["public", "members"],
+        "contract_only": True,
+        "terms": [
+            "12 months contract.",
+            "Payment and membership changes are handled at the front desk.",
+        ],
+    },
+    {
+        "seed_key": "mcb-direct-debit-6-month-contract",
+        "name": "6 months contract - MCB Direct Debit",
+        "category_key": "mcb_direct_debit_contracts",
+        "description": "Six month monthly MCB direct debit contract.",
+        "price_amount": 70,
+        "billing_interval": "per_month",
+        "duration": "6 months",
+        "visibility": ["public", "members"],
+        "contract_only": True,
+        "terms": [
+            "MCB Bank Bonaire current account holders only.",
+            "Direct Debit only.",
+            "Current MCB Bank Bonaire accounts only.",
+            "No savings accounts.",
+            "No non-MCB bank accounts.",
+            "No exceptions.",
+            "Payment and contract setup are handled at the front desk.",
+        ],
+    },
+    {
+        "seed_key": "mcb-direct-debit-12-month-contract",
+        "name": "12 months contract - MCB Direct Debit",
+        "category_key": "mcb_direct_debit_contracts",
+        "description": "Twelve month monthly MCB direct debit contract.",
+        "price_amount": 60,
+        "billing_interval": "per_month",
+        "duration": "12 months",
+        "visibility": ["public", "members"],
+        "contract_only": True,
+        "terms": [
+            "MCB Bank Bonaire current account holders only.",
+            "Direct Debit only.",
+            "Current MCB Bank Bonaire accounts only.",
+            "No savings accounts.",
+            "No non-MCB bank accounts.",
+            "No exceptions.",
+            "Payment and contract setup are handled at the front desk.",
+        ],
+    },
+    {
+        "seed_key": "group-pt-addon-5x-week",
+        "name": "Add-on Group PT 5x a week",
+        "category_key": "group_class_add_ons",
+        "description": "Monthly group personal training add-on.",
+        "price_amount": 85,
+        "billing_interval": "per_month",
+        "visibility": ["public", "members"],
+        "terms": [
+            "Add-on for group personal training.",
+            "Payment and changes are handled at the front desk.",
+        ],
+    },
+    {
+        "seed_key": "personal-training-1-on-1",
+        "name": "1-on-1 Personal Training",
+        "category_key": "personal_training",
+        "description": "One personal training session.",
+        "price_amount": 35,
+        "billing_interval": "per_session",
+        "visibility": ["public", "members"],
+        "terms": [
+            "Per personal training session.",
+            "Booking and payment are handled at the front desk or directly according to Dreamz Fitness procedures.",
+        ],
+    },
+    {
+        "seed_key": "pass-1-day",
+        "name": "1 Day Pass",
+        "category_key": "day_week_passes",
+        "description": "Single day Dreamz Fitness access pass.",
+        "price_amount": 20,
+        "billing_interval": "one_time",
+        "duration": "1 day",
+        "visibility": ["public"],
+        "terms": ["Valid for one day."],
+    },
+    {
+        "seed_key": "pass-1-week",
+        "name": "1 Week Pass",
+        "category_key": "day_week_passes",
+        "description": "One week Dreamz Fitness access pass.",
+        "price_amount": 45,
+        "billing_interval": "one_time",
+        "duration": "1 week",
+        "visibility": ["public"],
+        "terms": ["A week pass is valid for 6 consecutive entry days."],
+    },
+    {
+        "seed_key": "pass-2-week",
+        "name": "2 Week Pass",
+        "category_key": "day_week_passes",
+        "description": "Two week Dreamz Fitness access pass.",
+        "price_amount": 60,
+        "billing_interval": "one_time",
+        "duration": "2 weeks",
+        "visibility": ["public"],
+        "terms": ["Week passes are based on consecutive entry days."],
+    },
+    {
+        "seed_key": "pass-3-week",
+        "name": "3 Week Pass",
+        "category_key": "day_week_passes",
+        "description": "Three week Dreamz Fitness access pass.",
+        "price_amount": 70,
+        "billing_interval": "one_time",
+        "duration": "3 weeks",
+        "visibility": ["public"],
+        "terms": ["Week passes are based on consecutive entry days."],
+    },
+    {
+        "seed_key": "under-18-all-inclusive",
+        "name": "Under 18 All Inclusive",
+        "category_key": "under_18",
+        "description": "All inclusive membership for members under 18.",
+        "price_amount": 55,
+        "billing_interval": "per_month",
+        "visibility": ["public", "members"],
+        "terms": ["Under 18 years old.", "All inclusive membership."],
+    },
+    {
+        "seed_key": "delfins-unlimited-fitness-no-classes",
+        "name": "Delfins Resort Guests - Unlimited Fitness, no classes",
+        "category_key": "delfins_resort_guests",
+        "description": "Included fitness access for Delfins Resort guests, without classes.",
+        "price_amount": 0,
+        "billing_interval": "included_free",
+        "visibility": ["public"],
+        "terms": [
+            "Delfins Resort guests have unlimited fitness access without classes.",
+            "Classes are not included.",
+        ],
+    },
+    {
+        "seed_key": "delfins-classes-day-pass",
+        "name": "Delfins Resort Guests - Add-on classes day pass",
+        "category_key": "delfins_resort_guests",
+        "description": "Day class add-on for Delfins Resort guests.",
+        "price_amount": 10,
+        "billing_interval": "one_time",
+        "duration": "1 day",
+        "visibility": ["public"],
+        "terms": ["Add-on for classes for Delfins Resort guests."],
+    },
+    {
+        "seed_key": "delfins-classes-1-week-pass",
+        "name": "Delfins Resort Guests - Add-on classes 1 week pass",
+        "category_key": "delfins_resort_guests",
+        "description": "One week class add-on for Delfins Resort guests.",
+        "price_amount": 35,
+        "billing_interval": "one_time",
+        "duration": "1 week",
+        "visibility": ["public"],
+        "terms": ["Add-on classes for Delfins Resort guests."],
+    },
+    {
+        "seed_key": "delfins-classes-2-week-pass",
+        "name": "Delfins Resort Guests - Add-on classes 2 week pass",
+        "category_key": "delfins_resort_guests",
+        "description": "Two week class add-on for Delfins Resort guests.",
+        "price_amount": 50,
+        "billing_interval": "one_time",
+        "duration": "2 weeks",
+        "visibility": ["public"],
+        "terms": ["Add-on classes for Delfins Resort guests."],
+    },
+    {
+        "seed_key": "delfins-classes-3-week-pass",
+        "name": "Delfins Resort Guests - Add-on classes 3 week pass",
+        "category_key": "delfins_resort_guests",
+        "description": "Three week class add-on for Delfins Resort guests.",
+        "price_amount": 60,
+        "billing_interval": "one_time",
+        "duration": "3 weeks",
+        "visibility": ["public"],
+        "terms": ["Add-on classes for Delfins Resort guests."],
+    },
+    {
+        "seed_key": "fee-first-time-registration",
+        "name": "First-time registration fee",
+        "category_key": "fees_other",
+        "description": "Registration fee for new memberships.",
+        "price_amount": 20,
+        "billing_interval": "one_time",
+        "visibility": ["public", "members"],
+        "terms": ["Applies to contract and no-contract memberships."],
+    },
+    {
+        "seed_key": "fee-rfid-key-tag-upgrade",
+        "name": "Upgrade RFID entry key-tag",
+        "category_key": "fees_other",
+        "description": "RFID entry key-tag upgrade fee.",
+        "price_amount": 10,
+        "billing_interval": "one_time",
+        "visibility": ["public", "members"],
+        "terms": ["Upgrade fee for RFID entry key-tag."],
+    },
+    {
+        "seed_key": "fee-towel-rental",
+        "name": "Towel rental",
+        "category_key": "fees_other",
+        "description": "Front desk towel rental.",
+        "price_amount": 3,
+        "billing_interval": "one_time",
+        "visibility": ["public", "members"],
+        "terms": [
+            "Use of a towel is mandatory.",
+            "Towel rental is available at the front desk.",
+        ],
+    },
+    {
+        "seed_key": "fee-dreamz-towel-sale",
+        "name": "Dreamz Fitness towel sale",
+        "category_key": "fees_other",
+        "description": "Dreamz Fitness towel purchase.",
+        "price_amount": 25,
+        "billing_interval": "one_time",
+        "visibility": ["public", "members"],
+        "terms": ["Dreamz Fitness towel purchase."],
+    },
+    {
+        "seed_key": "b2b-external-personal-trainer-package",
+        "name": "External Personal Trainer Package",
+        "category_key": "external_trainer_b2b",
+        "description": "B2B facility access package for external personal trainers.",
+        "price_amount": 250,
+        "billing_interval": "per_month",
+        "visibility": ["public_business", "staff_only"],
+        "member_eligible": False,
+        "terms": [
+            "This is not a membership product for regular Dreamz Fitness members.",
+            "This is not a member add-on.",
+            "This is a B2B / external trainer access package.",
+            "External personal trainers can pay Dreamz Fitness $250 per month to use the Dreamz Fitness facilities for themselves and for training their own clients.",
+            "The external personal trainer is responsible for their own clients.",
+            "Dreamz Fitness is not responsible for the external trainer's coaching quality, training advice, payment collection, cancellations, disputes or client relationship.",
+            "The external trainer handles their own personal training session pricing and payment directly with their own clients.",
+            "Every client trained by the external trainer must either be an active Dreamz Fitness member, regardless of membership type, or purchase a valid Dreamz Fitness day pass.",
+            "For training Delfins Resort guests, Dreamz Fitness charges $10 per guest.",
+            "This package does not include a Dreamz Fitness membership for the trainer's clients.",
+            "This package should not be shown as a normal member upgrade or member add-on.",
+            "It can be shown in a public/business info section such as Are you a personal trainer? if enabled.",
+            "Staff/admin must be able to manage this item.",
+        ],
+    },
+]
 
 GROUP_CLASS_TYPE_SEED = {
     "BODYPUMP": {
@@ -755,6 +1114,7 @@ def ensure_runtime_schema():
     seed_default_settings()
     seed_default_staff_users()
     seed_group_class_schedule()
+    seed_pricing_catalog()
     app.config["_RUNTIME_SCHEMA_READY"] = True
 
 
@@ -887,6 +1247,90 @@ def seed_group_class_schedule():
 
     db.session.commit()
     return schedule
+
+
+def pricing_terms_json(terms):
+    return json.dumps(terms or [], ensure_ascii=True)
+
+
+def pricing_visibility_value(visibility):
+    if isinstance(visibility, str):
+        return visibility
+    return ",".join(visibility or [])
+
+
+def pricing_visibility_list(item):
+    if not item or not item.visibility:
+        return []
+    return [value.strip() for value in item.visibility.split(",") if value.strip()]
+
+
+def seed_pricing_catalog():
+    metadata = {
+        "pricing_catalog_source": PRICING_CATALOG_SOURCE,
+        "pricing_catalog_initial_seed_date": PRICING_CATALOG_INITIAL_SEED_DATE.isoformat(),
+        "pricing_catalog_currency": PRICING_CATALOG_CURRENCY,
+        "pricing_catalog_global_rule": PRICING_CATALOG_GLOBAL_RULE,
+    }
+    for key, value in metadata.items():
+        if not AppSetting.query.filter_by(key=key).first():
+            db.session.add(AppSetting(key=key, value=value))
+
+    for sort_order, (category_key, name) in enumerate(PRICING_CATEGORY_SEED, start=10):
+        category = PricingCategory.query.filter_by(key=category_key).first()
+        if not category:
+            category = PricingCategory(
+                key=category_key,
+                name=name,
+                sort_order=sort_order,
+                is_active=True,
+            )
+            db.session.add(category)
+        else:
+            if not category.name:
+                category.name = name
+            if category.sort_order in (None, 0):
+                category.sort_order = sort_order
+        category.updated_at = datetime.now()
+
+    db.session.flush()
+
+    for sort_order, defaults in enumerate(PRICING_ITEM_SEED, start=10):
+        item = PricingItem.query.filter_by(seed_key=defaults["seed_key"]).first()
+        if not item:
+            item = PricingItem(
+                seed_key=defaults["seed_key"],
+                name=defaults["name"],
+                category_key=defaults["category_key"],
+                price_amount=float(defaults["price_amount"]),
+                billing_interval=defaults["billing_interval"],
+                visibility=pricing_visibility_value(defaults.get("visibility", ["public"])),
+                sort_order=sort_order,
+                effective_from=PRICING_CATALOG_INITIAL_SEED_DATE,
+                source=PRICING_CATALOG_SOURCE,
+            )
+            db.session.add(item)
+
+        optional_defaults = {
+            "description": defaults.get("description"),
+            "currency": PRICING_CATALOG_CURRENCY,
+            "duration": defaults.get("duration"),
+            "terms": pricing_terms_json(defaults.get("terms", [])),
+            "requires_front_desk_handling": defaults.get("requires_front_desk_handling", True),
+            "online_payment_available": defaults.get("online_payment_available", False),
+            "member_eligible": defaults.get("member_eligible", True),
+            "contract_only": defaults.get("contract_only", False),
+            "notes": defaults.get("notes"),
+            "internal_notes": defaults.get("internal_notes"),
+        }
+        for field, value in optional_defaults.items():
+            current = getattr(item, field, None)
+            if current in (None, ""):
+                setattr(item, field, value)
+        item.updated_at = datetime.now()
+
+    db.session.commit()
+    return PricingItem.query.order_by(PricingItem.sort_order.asc(), PricingItem.name.asc()).all()
 
 
 def group_class_day_label(day_of_week, language=None):
