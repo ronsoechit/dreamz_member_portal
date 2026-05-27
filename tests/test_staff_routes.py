@@ -14,7 +14,7 @@ if importlib.util.find_spec("flask") is None or importlib.util.find_spec("flask_
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
-from dreamz_portal import AppSetting, CancellationRequest, CoachInteraction, EmailLog, GroupClassOccurrence, GroupClassType, Member, MemberClassAttendance, MemberClassPlan, MemberDocument, ScheduleChangeNotification, StaffUser, SyncRun, app, db, deliver_email, payment_status_for_member, seed_group_class_schedule  # noqa: E402
+from dreamz_portal import AppSetting, CancellationRequest, CoachInteraction, EmailLog, GroupClassOccurrence, GroupClassType, Member, MemberClassAttendance, MemberClassPlan, MemberDocument, PricingChangeLog, PricingItem, ScheduleChangeNotification, StaffUser, SyncRun, app, db, deliver_email, payment_status_for_member, pricing_visibility_list, seed_group_class_schedule, seed_pricing_catalog  # noqa: E402
 
 
 class FakeS3Body:
@@ -216,6 +216,138 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("BODYPUMP", body)
         self.assertIn("RESERVED", body)
         self.assertIn("AEROBICS ROOM", body)
+
+    def test_staff_pricing_requires_staff_access(self):
+        response = self.client.get("/staff/pricing-products")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_staff_pricing_lists_seeded_catalog(self):
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "manager"
+
+        response = self.client.get("/staff/pricing-products")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Pricing &amp; Product Management", body)
+        self.assertIn("No contract / 1 month", body)
+        self.assertIn("External Personal Trainer Package", body)
+        self.assertIn("All prices and fees are non-negotiable.", body)
+        self.assertIn("Changing active prices can affect public and member information.", body)
+
+    def test_staff_can_update_pricing_item_and_log_change(self):
+        seed_pricing_catalog()
+        item = PricingItem.query.filter_by(seed_key="membership-no-contract-1-month").one()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+            sess["_csrf_token"] = "token"
+
+        response = self.client.post(
+            "/staff/pricing-products/items",
+            data={
+                "csrf_token": "token",
+                "item_id": str(item.id),
+                "name": item.name,
+                "category_key": item.category_key,
+                "description": item.description or "",
+                "price_amount": "82.50",
+                "currency": "USD",
+                "billing_interval": item.billing_interval,
+                "duration": item.duration or "",
+                "visibility_public": "1",
+                "visibility_members": "1",
+                "is_active": "1",
+                "requires_front_desk_handling": "1",
+                "member_eligible": "1",
+                "sort_order": str(item.sort_order),
+                "terms": "\n".join(json.loads(item.terms)),
+                "internal_notes": "Adjusted by staff",
+                "change_note": "monthly price update",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        updated = db.session.get(PricingItem, item.id)
+        self.assertEqual(updated.price_amount, 82.50)
+        self.assertEqual(updated.internal_notes, "Adjusted by staff")
+        self.assertEqual(PricingChangeLog.query.filter_by(pricing_item_id=item.id).count(), 1)
+
+    def test_staff_pricing_enforces_external_trainer_not_member_upgrade(self):
+        seed_pricing_catalog()
+        item = PricingItem.query.filter_by(seed_key="b2b-external-personal-trainer-package").one()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+            sess["_csrf_token"] = "token"
+
+        response = self.client.post(
+            "/staff/pricing-products/items",
+            data={
+                "csrf_token": "token",
+                "item_id": str(item.id),
+                "name": item.name,
+                "category_key": "external_trainer_b2b",
+                "description": item.description or "",
+                "price_amount": "250",
+                "currency": "USD",
+                "billing_interval": "per_month",
+                "visibility_members": "1",
+                "is_active": "1",
+                "requires_front_desk_handling": "1",
+                "member_eligible": "1",
+                "sort_order": str(item.sort_order),
+                "terms": "\n".join(json.loads(item.terms)),
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        updated = db.session.get(PricingItem, item.id)
+        self.assertFalse(updated.member_eligible)
+        self.assertNotIn("members", pricing_visibility_list(updated))
+        self.assertTrue({"public_business", "staff_only"} & set(pricing_visibility_list(updated)))
+
+    def test_staff_pricing_preserves_mcb_required_terms(self):
+        seed_pricing_catalog()
+        item = PricingItem.query.filter_by(seed_key="mcb-direct-debit-6-month-contract").one()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+            sess["_csrf_token"] = "token"
+
+        response = self.client.post(
+            "/staff/pricing-products/items",
+            data={
+                "csrf_token": "token",
+                "item_id": str(item.id),
+                "name": item.name,
+                "category_key": item.category_key,
+                "description": item.description or "",
+                "price_amount": "70",
+                "currency": "USD",
+                "billing_interval": "per_month",
+                "duration": item.duration or "",
+                "visibility_public": "1",
+                "visibility_members": "1",
+                "is_active": "1",
+                "requires_front_desk_handling": "1",
+                "member_eligible": "1",
+                "contract_only": "1",
+                "sort_order": str(item.sort_order),
+                "terms": "Custom MCB note",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        terms = " ".join(json.loads(db.session.get(PricingItem, item.id).terms))
+        self.assertIn("Current MCB Bank Bonaire accounts only", terms)
+        self.assertIn("Direct Debit only", terms)
+        self.assertIn("No exceptions", terms)
 
     def test_staff_can_create_group_class_type(self):
         with self.client.session_transaction() as sess:

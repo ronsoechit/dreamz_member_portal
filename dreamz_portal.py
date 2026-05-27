@@ -592,6 +592,8 @@ GROUP_CLASS_DAY_KEYS = {
     6: "sunday",
 }
 GROUP_CLASS_OCCURRENCE_STATUSES = {"scheduled", "cancelled", "reserved"}
+PRICING_BILLING_INTERVALS = ["one_time", "per_month", "per_session", "per_pass", "included_free"]
+PRICING_VISIBILITY_OPTIONS = ["public", "members", "staff_only", "public_business"]
 PRICING_CATALOG_SOURCE = "current Dreamz Fitness printed price list"
 PRICING_CATALOG_INITIAL_SEED_DATE = date(2026, 5, 27)
 PRICING_CATALOG_CURRENCY = "USD"
@@ -1263,6 +1265,102 @@ def pricing_visibility_list(item):
     if not item or not item.visibility:
         return []
     return [value.strip() for value in item.visibility.split(",") if value.strip()]
+
+
+def pricing_terms_list(item):
+    if not item or not item.terms:
+        return []
+    try:
+        terms = json.loads(item.terms)
+    except (TypeError, ValueError):
+        return [line.strip() for line in str(item.terms).splitlines() if line.strip()]
+    return terms if isinstance(terms, list) else []
+
+
+def pricing_terms_from_form(value):
+    return pricing_terms_json([line.strip() for line in str(value or "").splitlines() if line.strip()])
+
+
+def pricing_item_snapshot(item):
+    return {
+        "name": item.name,
+        "category_key": item.category_key,
+        "price_amount": item.price_amount,
+        "currency": item.currency,
+        "billing_interval": item.billing_interval,
+        "duration": item.duration,
+        "visibility": item.visibility,
+        "is_active": item.is_active,
+        "effective_from": item.effective_from.isoformat() if item.effective_from else None,
+        "effective_to": item.effective_to.isoformat() if item.effective_to else None,
+        "sort_order": item.sort_order,
+        "requires_front_desk_handling": item.requires_front_desk_handling,
+        "online_payment_available": item.online_payment_available,
+        "member_eligible": item.member_eligible,
+        "contract_only": item.contract_only,
+        "terms": pricing_terms_list(item),
+    }
+
+
+def ensure_pricing_business_rules(item):
+    visibility = set(pricing_visibility_list(item))
+    if item.category_key == "external_trainer_b2b" or item.seed_key == "b2b-external-personal-trainer-package":
+        item.member_eligible = False
+        visibility.discard("members")
+        if not visibility:
+            visibility.update(["public_business", "staff_only"])
+        if "public" in visibility:
+            visibility.discard("public")
+            visibility.add("public_business")
+        if "public_business" not in visibility and "staff_only" not in visibility:
+            visibility.update(["public_business", "staff_only"])
+
+    if item.category_key == "mcb_direct_debit_contracts" or "mcb direct debit" in (item.name or "").lower():
+        required_terms = [
+            "Current MCB Bank Bonaire accounts only.",
+            "Direct Debit only.",
+            "No exceptions.",
+        ]
+        terms = pricing_terms_list(item)
+        terms_lower = " ".join(terms).lower()
+        for required in required_terms:
+            if required.lower() not in terms_lower:
+                terms.append(required)
+        item.terms = pricing_terms_json(terms)
+
+    item.visibility = ",".join(option for option in PRICING_VISIBILITY_OPTIONS if option in visibility)
+
+
+def pricing_admin_context():
+    ensure_runtime_schema()
+    category_filter = request.args.get("category", "").strip()
+    status_filter = request.args.get("status", "").strip()
+    visibility_filter = request.args.get("visibility", "").strip()
+    query = PricingItem.query
+    if category_filter:
+        query = query.filter(PricingItem.category_key == category_filter)
+    if status_filter == "active":
+        query = query.filter(PricingItem.is_active.is_(True))
+    elif status_filter == "inactive":
+        query = query.filter(PricingItem.is_active.is_(False))
+    if visibility_filter:
+        query = query.filter(PricingItem.visibility.like(f"%{visibility_filter}%"))
+    categories = PricingCategory.query.order_by(PricingCategory.sort_order.asc(), PricingCategory.name.asc()).all()
+    items = query.order_by(PricingItem.sort_order.asc(), PricingItem.name.asc()).all()
+    changes = PricingChangeLog.query.order_by(PricingChangeLog.created_at.desc()).limit(25).all()
+    return {
+        "pricing_items": items,
+        "pricing_categories": categories,
+        "pricing_changes": changes,
+        "pricing_billing_intervals": PRICING_BILLING_INTERVALS,
+        "pricing_visibility_options": PRICING_VISIBILITY_OPTIONS,
+        "selected_category": category_filter,
+        "selected_status": status_filter,
+        "selected_visibility": visibility_filter,
+        "pricing_global_rule": setting_value("pricing_catalog_global_rule", PRICING_CATALOG_GLOBAL_RULE),
+        "pricing_terms_list": pricing_terms_list,
+        "pricing_visibility_list": pricing_visibility_list,
+    }
 
 
 def seed_pricing_catalog():
@@ -5312,6 +5410,87 @@ def staff_group_class_publish():
     db.session.commit()
     flash(translated_text("group_class_schedule_published", current_language()))
     return redirect(url_for("staff_group_classes"))
+
+
+@app.get("/staff/pricing-products")
+def staff_pricing_products():
+    staff_role = require_staff_access()
+    return render_template(
+        "staff_pricing_products.html",
+        staff_role=staff_role,
+        **pricing_admin_context(),
+    )
+
+
+@app.post("/staff/pricing-products/items")
+def staff_pricing_item_save():
+    validate_csrf_token()
+    require_staff_access()
+    ensure_runtime_schema()
+
+    item_id = parse_optional_int(request.form.get("item_id"))
+    item = db.session.get(PricingItem, item_id) if item_id else None
+    is_new = item is None
+    if is_new:
+        item = PricingItem(
+            seed_key=None,
+            source="staff/admin",
+            effective_from=date.today(),
+        )
+        db.session.add(item)
+
+    old_snapshot = pricing_item_snapshot(item) if not is_new else None
+    name = request.form.get("name", "").strip()
+    category_key = request.form.get("category_key", "").strip()
+    category = PricingCategory.query.filter_by(key=category_key).first()
+    price_amount = parse_optional_float(request.form.get("price_amount"))
+    billing_interval = request.form.get("billing_interval", "").strip()
+    visibility = [
+        option for option in PRICING_VISIBILITY_OPTIONS
+        if request.form.get(f"visibility_{option}") == "1"
+    ]
+    if not name or not category or price_amount is None or billing_interval not in PRICING_BILLING_INTERVALS:
+        abort(400, translated_text("pricing_required_fields", current_language()))
+    if not visibility:
+        visibility = ["staff_only"]
+
+    item.name = name
+    item.category_key = category_key
+    item.description = request.form.get("description", "").strip() or None
+    item.price_amount = price_amount
+    item.currency = (request.form.get("currency", "").strip().upper() or PRICING_CATALOG_CURRENCY)[:8]
+    item.billing_interval = billing_interval
+    item.duration = request.form.get("duration", "").strip() or None
+    item.visibility = pricing_visibility_value(visibility)
+    item.is_active = request.form.get("is_active") == "1"
+    item.effective_from = parse_optional_date(request.form.get("effective_from"))
+    item.effective_to = parse_optional_date(request.form.get("effective_to"))
+    item.sort_order = parse_optional_int(request.form.get("sort_order")) or 0
+    item.terms = pricing_terms_from_form(request.form.get("terms"))
+    item.requires_front_desk_handling = request.form.get("requires_front_desk_handling") == "1"
+    item.online_payment_available = request.form.get("online_payment_available") == "1"
+    item.member_eligible = request.form.get("member_eligible") == "1"
+    item.contract_only = request.form.get("contract_only") == "1"
+    item.notes = request.form.get("notes", "").strip() or None
+    item.internal_notes = request.form.get("internal_notes", "").strip() or None
+    item.updated_at = datetime.now()
+    ensure_pricing_business_rules(item)
+
+    db.session.flush()
+    new_snapshot = pricing_item_snapshot(item)
+    if is_new or old_snapshot != new_snapshot:
+        db.session.add(PricingChangeLog(
+            pricing_item_id=item.id,
+            changed_by=current_staff_username() or "staff",
+            change_type="created" if is_new else "updated",
+            old_value=json.dumps(old_snapshot, ensure_ascii=True) if old_snapshot else None,
+            new_value=json.dumps(new_snapshot, ensure_ascii=True),
+            note=request.form.get("change_note", "").strip() or None,
+        ))
+
+    db.session.commit()
+    flash(translated_text("pricing_item_saved", current_language()))
+    return redirect(url_for("staff_pricing_products"))
 
 
 @app.post("/staff/email-log/<int:email_id>/review")

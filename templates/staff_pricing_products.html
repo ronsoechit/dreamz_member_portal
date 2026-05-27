@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+{% block title %}{{ t('staff_pricing_title') }} | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+  <div>
+    <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('staff_pricing_label') }}</div>
+    <h2 class="text-2xl font-semibold">{{ t('staff_pricing_title') }}</h2>
+    <p class="mt-1 max-w-3xl text-sm leading-6 text-gray-400">{{ t('staff_pricing_intro') }}</p>
+  </div>
+  <div class="rounded border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm font-semibold text-yellow-100">
+    {{ pricing_global_rule }}
+  </div>
+</div>
+
+<section class="mb-6 rounded border border-gray-700 bg-gray-800/50 p-5">
+  <h3 class="text-lg font-semibold text-white">{{ t('pricing_add_item') }}</h3>
+  <form method="post" action="{{ url_for('staff_pricing_item_save') }}" class="mt-4 grid gap-3 lg:grid-cols-6">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label class="block lg:col-span-2">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_name') }}</span>
+      <input name="name" required class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_category') }}</span>
+      <select name="category_key" required class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+        {% for category in pricing_categories %}
+          <option value="{{ category.key }}">{{ category.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_price') }}</span>
+      <input name="price_amount" type="number" min="0" step="0.01" required class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_billing_interval') }}</span>
+      <select name="billing_interval" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+        {% for interval in pricing_billing_intervals %}
+          <option value="{{ interval }}">{{ t('pricing_interval_' ~ interval) }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="flex items-end">
+      <button type="submit" class="w-full rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black hover:bg-yellow-400">{{ t('pricing_add_item') }}</button>
+    </div>
+    <label class="block lg:col-span-2">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_description') }}</span>
+      <textarea name="description" rows="2" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white"></textarea>
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_duration') }}</span>
+      <input name="duration" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_sort_order') }}</span>
+      <input name="sort_order" type="number" value="0" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_effective_from') }}</span>
+      <input name="effective_from" type="date" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_effective_to') }}</span>
+      <input name="effective_to" type="date" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+    </label>
+    <label class="block lg:col-span-3">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_terms') }}</span>
+      <textarea name="terms" rows="4" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white" placeholder="{{ t('pricing_terms_placeholder') }}"></textarea>
+    </label>
+    <label class="block lg:col-span-3">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_internal_notes') }}</span>
+      <textarea name="internal_notes" rows="4" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white"></textarea>
+    </label>
+    <div class="lg:col-span-6 flex flex-wrap gap-4 text-sm text-gray-200">
+      {% for option in pricing_visibility_options %}
+        <label class="flex items-center gap-2"><input name="visibility_{{ option }}" value="1" type="checkbox" {% if option == 'public' %}checked{% endif %} class="h-4 w-4 accent-yellow-500">{{ t('pricing_visibility_' ~ option) }}</label>
+      {% endfor %}
+      <label class="flex items-center gap-2"><input name="is_active" value="1" type="checkbox" checked class="h-4 w-4 accent-yellow-500">{{ t('pricing_active') }}</label>
+      <label class="flex items-center gap-2"><input name="requires_front_desk_handling" value="1" type="checkbox" checked class="h-4 w-4 accent-yellow-500">{{ t('pricing_frontdesk_required') }}</label>
+      <label class="flex items-center gap-2"><input name="online_payment_available" value="1" type="checkbox" class="h-4 w-4 accent-yellow-500">{{ t('pricing_online_payment_available') }}</label>
+      <label class="flex items-center gap-2"><input name="member_eligible" value="1" type="checkbox" checked class="h-4 w-4 accent-yellow-500">{{ t('pricing_member_eligible') }}</label>
+      <label class="flex items-center gap-2"><input name="contract_only" value="1" type="checkbox" class="h-4 w-4 accent-yellow-500">{{ t('pricing_contract_only') }}</label>
+    </div>
+  </form>
+</section>
+
+<section class="mb-6">
+  <div class="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+    <h3 class="text-lg font-semibold text-white">{{ t('pricing_catalog_items') }}</h3>
+    <form method="get" action="{{ url_for('staff_pricing_products') }}" class="grid gap-2 sm:grid-cols-4">
+      <select name="category" class="rounded border border-gray-700 bg-gray-900 p-2 text-sm text-white">
+        <option value="">{{ t('pricing_all_categories') }}</option>
+        {% for category in pricing_categories %}
+          <option value="{{ category.key }}" {% if selected_category == category.key %}selected{% endif %}>{{ category.name }}</option>
+        {% endfor %}
+      </select>
+      <select name="status" class="rounded border border-gray-700 bg-gray-900 p-2 text-sm text-white">
+        <option value="">{{ t('pricing_all_statuses') }}</option>
+        <option value="active" {% if selected_status == 'active' %}selected{% endif %}>{{ t('pricing_active') }}</option>
+        <option value="inactive" {% if selected_status == 'inactive' %}selected{% endif %}>{{ t('pricing_inactive') }}</option>
+      </select>
+      <select name="visibility" class="rounded border border-gray-700 bg-gray-900 p-2 text-sm text-white">
+        <option value="">{{ t('pricing_all_visibility') }}</option>
+        {% for option in pricing_visibility_options %}
+          <option value="{{ option }}" {% if selected_visibility == option %}selected{% endif %}>{{ t('pricing_visibility_' ~ option) }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="rounded bg-gray-700 px-3 py-2 text-sm font-semibold text-white hover:bg-gray-600">{{ t('apply') }}</button>
+    </form>
+  </div>
+
+  <div class="grid gap-4">
+    {% for item in pricing_items %}
+      {% set terms = pricing_terms_list(item) %}
+      {% set visibility = pricing_visibility_list(item) %}
+      <form method="post" action="{{ url_for('staff_pricing_item_save') }}" class="rounded border border-gray-700 bg-gray-900/50 p-4">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="item_id" value="{{ item.id }}">
+        <div class="grid gap-3 lg:grid-cols-6">
+          <label class="block lg:col-span-2">
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_name') }}</span>
+            <input name="name" value="{{ item.name }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 p-2 text-white">
+          </label>
+          <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_category') }}</span>
+            <select name="category_key" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 p-2 text-white">
+              {% for category in pricing_categories %}
+                <option value="{{ category.key }}" {% if item.category_key == category.key %}selected{% endif %}>{{ category.name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_price') }}</span>
+            <input name="price_amount" type="number" min="0" step="0.01" value="{{ '%.2f'|format(item.price_amount or 0) }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 p-2 text-white">
+          </label>
+          <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_billing_interval') }}</span>
+            <select name="billing_interval" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 p-2 text-white">
+              {% for interval in pricing_billing_intervals %}
+                <option value="{{ interval }}" {% if item.billing_interval == interval %}selected{% endif %}>{{ t('pricing_interval_' ~ interval) }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_sort_order') }}</span>
+            <input name="sort_order" type="number" value="{{ item.sort_order }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 p-2 text-white">
+          </label>
+          <label class="block lg:col-span-2">
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_description') }}</span>
+            <textarea name="description" rows="2" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 p-2 text-white">{{ item.description or '' }}</textarea>
+          </label>
+          <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_duration') }}</span>
+            <input name="duration" value="{{ item.duration or '' }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 p-2 text-white">
+          </label>
+          <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_effective_from') }}</span>
+            <input name="effective_from" type="date" value="{{ item.effective_from.isoformat() if item.effective_from else '' }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 p-2 text-white">
+          </label>
+          <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_effective_to') }}</span>
+            <input name="effective_to" type="date" value="{{ item.effective_to.isoformat() if item.effective_to else '' }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 p-2 text-white">
+          </label>
+          <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_currency') }}</span>
+            <input name="currency" value="{{ item.currency or 'USD' }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 p-2 text-white">
+          </label>
+          <label class="block lg:col-span-3">
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_terms') }}</span>
+            <textarea name="terms" rows="5" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 p-2 text-white">{{ terms|join('\n') }}</textarea>
+          </label>
+          <label class="block lg:col-span-3">
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('pricing_internal_notes') }}</span>
+            <textarea name="internal_notes" rows="5" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 p-2 text-white">{{ item.internal_notes or '' }}</textarea>
+          </label>
+        </div>
+        <div class="mt-3 flex flex-wrap gap-4 text-sm text-gray-200">
+          {% for option in pricing_visibility_options %}
+            <label class="flex items-center gap-2"><input name="visibility_{{ option }}" value="1" type="checkbox" {% if option in visibility %}checked{% endif %} class="h-4 w-4 accent-yellow-500">{{ t('pricing_visibility_' ~ option) }}</label>
+          {% endfor %}
+          <label class="flex items-center gap-2"><input name="is_active" value="1" type="checkbox" {% if item.is_active %}checked{% endif %} class="h-4 w-4 accent-yellow-500">{{ t('pricing_active') }}</label>
+          <label class="flex items-center gap-2"><input name="requires_front_desk_handling" value="1" type="checkbox" {% if item.requires_front_desk_handling %}checked{% endif %} class="h-4 w-4 accent-yellow-500">{{ t('pricing_frontdesk_required') }}</label>
+          <label class="flex items-center gap-2"><input name="online_payment_available" value="1" type="checkbox" {% if item.online_payment_available %}checked{% endif %} class="h-4 w-4 accent-yellow-500">{{ t('pricing_online_payment_available') }}</label>
+          <label class="flex items-center gap-2"><input name="member_eligible" value="1" type="checkbox" {% if item.member_eligible %}checked{% endif %} class="h-4 w-4 accent-yellow-500">{{ t('pricing_member_eligible') }}</label>
+          <label class="flex items-center gap-2"><input name="contract_only" value="1" type="checkbox" {% if item.contract_only %}checked{% endif %} class="h-4 w-4 accent-yellow-500">{{ t('pricing_contract_only') }}</label>
+        </div>
+        <div class="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div class="text-xs text-yellow-100">
+            {{ t('pricing_active_price_warning') }}
+          </div>
+          <button type="submit" class="rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black hover:bg-yellow-400">{{ t('save') }}</button>
+        </div>
+      </form>
+    {% else %}
+      <div class="rounded border border-gray-700 bg-gray-900/60 p-6 text-center text-sm text-gray-400">{{ t('pricing_empty') }}</div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="rounded border border-gray-700 bg-gray-800/50 p-5">
+  <h3 class="text-lg font-semibold text-white">{{ t('pricing_change_log') }}</h3>
+  <div class="mt-4 space-y-3">
+    {% for change in pricing_changes %}
+      <div class="rounded border border-gray-700 bg-gray-900/60 p-3 text-sm">
+        <div class="font-semibold text-yellow-200">{{ change.change_type }}</div>
+        <div class="mt-1 text-gray-300">{{ change.pricing_item.name if change.pricing_item else t('not_available') }}</div>
+        <div class="mt-1 text-xs text-gray-500">{{ change.created_at|format_date('%d/%m/%Y %H:%M') }}{% if change.changed_by %} / {{ change.changed_by }}{% endif %}</div>
+      </div>
+    {% else %}
+      <div class="rounded border border-gray-700 bg-gray-900/60 p-4 text-sm text-gray-400">{{ t('pricing_no_changes') }}</div>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

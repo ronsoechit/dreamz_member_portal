@@ -31,6 +31,7 @@
               <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_coach_activity' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_coach_activity') }}">Coach</a>
             {% endif %}
             <a class="rounded px-3 py-2 {% if request.endpoint in ['staff_group_classes', 'staff_group_class_type_save', 'staff_group_class_occurrence_save', 'staff_group_class_publish'] %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_group_classes') }}">{{ t('staff_group_classes_nav') }}</a>
+            <a class="rounded px-3 py-2 {% if request.endpoint in ['staff_pricing_products', 'staff_pricing_item_save'] %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_pricing_products') }}">{{ t('staff_pricing_nav') }}</a>
             <a class="relative rounded px-3 py-2 {% if request.endpoint == 'staff_cancellations' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_cancellations') }}">
               Cancellations
               {% if open_cancellation_count %}
