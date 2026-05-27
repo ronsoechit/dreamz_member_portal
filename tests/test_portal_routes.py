@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 import importlib.util
+import json
 import os
 from pathlib import Path
 import re
@@ -15,7 +16,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
-from dreamz_portal import CancellationRequest, CoachInteraction, CoachProfile, CoachWorkoutExerciseLog, CoachWorkoutSession, EmailLog, Member, MemberDocument, MemberLoginCode, app, cancellation_message, db  # noqa: E402
+from dreamz_portal import CancellationRequest, CoachInteraction, CoachPlan, CoachProfile, CoachWorkoutExerciseLog, CoachWorkoutSession, EmailLog, Member, MemberDocument, MemberLoginCode, app, cancellation_message, db  # noqa: E402
 
 
 class FakeS3Body:
@@ -32,6 +33,10 @@ class PortalRouteTests(unittest.TestCase):
         self.original_attachments_root = app.config.get("GYM_ASSISTANT_ATTACHMENTS_ROOT")
         self.original_document_cache_root = app.config.get("DOCUMENT_CACHE_ROOT")
         self.original_photos_root = app.config.get("GYM_ASSISTANT_PHOTOS_ROOT")
+        self.original_coach_ai_mode = app.config.get("COACH_AI_MODE")
+        self.original_openai_api_key = app.config.get("OPENAI_API_KEY")
+        app.config["COACH_AI_MODE"] = "fallback"
+        app.config["OPENAI_API_KEY"] = ""
         self.ctx = app.app_context()
         self.ctx.push()
         db.drop_all()
@@ -45,6 +50,8 @@ class PortalRouteTests(unittest.TestCase):
         app.config["GYM_ASSISTANT_ATTACHMENTS_ROOT"] = self.original_attachments_root
         app.config["DOCUMENT_CACHE_ROOT"] = self.original_document_cache_root
         app.config["GYM_ASSISTANT_PHOTOS_ROOT"] = self.original_photos_root
+        app.config["COACH_AI_MODE"] = self.original_coach_ai_mode
+        app.config["OPENAI_API_KEY"] = self.original_openai_api_key
 
     def add_member(self, member_id="1206", **overrides):
         data = {
@@ -306,8 +313,102 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Use a controlled weight", body)
         self.assertIn("Build muscle", body)
 
+    def test_coach_page_uses_stored_personal_plan(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        db.session.add(
+            CoachProfile(
+                member_id="13659",
+                primary_goal="build_muscle",
+                experience_level="intermediate",
+                training_days=2,
+                session_minutes=45,
+                training_place="dreamz_gym",
+                height_cm=165,
+                weight_kg=68,
+                injuries="none",
+                nutrition_goal="muscle_gain",
+                dietary_preferences="local food",
+                allergies="none",
+            )
+        )
+        db.session.add(
+            CoachPlan(
+                member_id="13659",
+                language="en",
+                source="openai",
+                plan_json=json.dumps(
+                    [
+                        {
+                            "title": "Personal training week",
+                            "sessions": [
+                                {
+                                    "number": 1,
+                                    "focus": "custom glute and upper strength",
+                                    "minutes": 45,
+                                    "warmup": "7 minutes easy bike and mobility",
+                                    "main": "Train with clean control",
+                                    "cooldown": "Stretch hips and chest",
+                                    "exercises": [
+                                        {
+                                            "name": "Custom leg press",
+                                            "equipment": "Machine",
+                                            "sets": "3",
+                                            "reps": "10-12",
+                                            "rest": "90 sec",
+                                            "load": "Use a controlled load.",
+                                            "cue": "Press evenly through both feet.",
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
+                        {"title": "Personal nutrition", "items": ["Use Bonaire-friendly protein meals."]},
+                        {"title": "Personal notes", "items": ["Keep meals simple and repeatable."]},
+                    ]
+                ),
+            )
+        )
+        db.session.commit()
+        self.login_as("13659")
+
+        response = self.client.get("/coach")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("custom glute and upper strength", body)
+        self.assertIn("Custom leg press", body)
+        self.assertIn("Use Bonaire-friendly protein meals.", body)
+
+    def test_saving_coach_profile_clears_existing_plan(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        db.session.add(CoachPlan(member_id="13659", plan_json="[]"))
+        db.session.commit()
+        self.login_as("13659")
+
+        response = self.client.post(
+            "/coach",
+            data=self.csrf_form_data(
+                primary_goal="build_muscle",
+                experience_level="intermediate",
+                training_days="2",
+                session_minutes="45",
+                training_place="dreamz_gym",
+                height_cm="165",
+                weight_kg="68",
+                injuries="none",
+                nutrition_goal="muscle_gain",
+                dietary_preferences="none",
+                allergies="none",
+            ),
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(CoachPlan.query.filter_by(member_id="13659").count(), 0)
+
     def test_coach_workout_log_can_be_saved(self):
         self.add_member(member_id="13659", name="Ron Soechit")
+        db.session.add(CoachPlan(member_id="13659", plan_json="[]"))
+        db.session.commit()
         self.login_as("13659")
         with self.client.session_transaction() as browser_session:
             browser_session["_csrf_token"] = "csrf-test-token"
@@ -349,6 +450,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(CoachWorkoutSession.query.filter_by(member_id="13659").count(), 1)
         self.assertEqual(CoachWorkoutExerciseLog.query.filter_by(member_id="13659").count(), 2)
         self.assertEqual(CoachInteraction.query.filter_by(member_id="13659", category="workout_feedback").count(), 1)
+        self.assertEqual(CoachPlan.query.filter_by(member_id="13659").count(), 0)
         log = CoachWorkoutExerciseLog.query.filter_by(exercise_name="Leg press").one()
         self.assertEqual(log.weight_used, "50")
         self.assertEqual(log.reps_completed, "12")

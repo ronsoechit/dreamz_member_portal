@@ -3,6 +3,7 @@ import html
 import json
 import os
 import platform
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 if os.name == "nt":
@@ -339,6 +340,17 @@ class CoachInteraction(db.Model):
     message = db.Column(db.Text, nullable=False)
     context_summary = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+
+
+class CoachPlan(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.String, unique=True, nullable=False, index=True)
+    language = db.Column(db.String, default=DEFAULT_LANGUAGE)
+    source = db.Column(db.String, default="fallback")
+    plan_json = db.Column(db.Text, nullable=False)
+    prompt_context = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
 
 
 DEFAULT_SETTINGS = {
@@ -1475,6 +1487,218 @@ def coach_personal_plan(profile, language=None):
     ]
 
 
+def clean_coach_plan_text(value, default="", limit=700):
+    text = str(value or "").strip()
+    if not text:
+        text = str(default or "").strip()
+    return text[:limit]
+
+
+def clean_coach_plan_items(items, fallback_items, limit=6):
+    cleaned = []
+    for item in items if isinstance(items, list) else []:
+        text = clean_coach_plan_text(item, limit=500)
+        if text:
+            cleaned.append(text)
+        if len(cleaned) >= limit:
+            break
+    if cleaned:
+        return cleaned
+    return list(fallback_items or [])[:limit]
+
+
+def extract_json_object(text):
+    text = str(text or "").strip()
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        return json.loads(text[start:end + 1])
+    except (TypeError, ValueError):
+        return None
+
+
+def normalize_ai_coach_plan(data, fallback_plan, language=None):
+    language = language or current_language()
+    fallback_plan = fallback_plan or []
+    if not isinstance(data, dict) or not fallback_plan:
+        return fallback_plan
+
+    fallback_training = fallback_plan[0] if fallback_plan else {"sessions": []}
+    fallback_sessions = fallback_training.get("sessions", [])
+    ai_training = data.get("training") if isinstance(data.get("training"), dict) else {}
+    ai_sessions = ai_training.get("sessions") if isinstance(ai_training.get("sessions"), list) else []
+    sessions = []
+
+    for index, fallback_session in enumerate(fallback_sessions):
+        source_session = ai_sessions[index] if index < len(ai_sessions) and isinstance(ai_sessions[index], dict) else {}
+        fallback_exercises = fallback_session.get("exercises", [])
+        source_exercises = source_session.get("exercises") if isinstance(source_session.get("exercises"), list) else []
+        exercises = []
+
+        for exercise_index, fallback_exercise in enumerate(fallback_exercises):
+            source_exercise = (
+                source_exercises[exercise_index]
+                if exercise_index < len(source_exercises) and isinstance(source_exercises[exercise_index], dict)
+                else {}
+            )
+            exercises.append(
+                {
+                    "name": clean_coach_plan_text(source_exercise.get("name"), fallback_exercise.get("name"), 120),
+                    "equipment": clean_coach_plan_text(source_exercise.get("equipment"), fallback_exercise.get("equipment"), 120),
+                    "sets": clean_coach_plan_text(source_exercise.get("sets"), fallback_exercise.get("sets"), 40),
+                    "reps": clean_coach_plan_text(source_exercise.get("reps"), fallback_exercise.get("reps"), 80),
+                    "rest": clean_coach_plan_text(source_exercise.get("rest"), fallback_exercise.get("rest"), 80),
+                    "load": clean_coach_plan_text(source_exercise.get("load"), fallback_exercise.get("load"), 300),
+                    "cue": clean_coach_plan_text(source_exercise.get("cue"), fallback_exercise.get("cue"), 300),
+                }
+            )
+
+        for source_exercise in source_exercises[len(exercises):6]:
+            if not isinstance(source_exercise, dict) or not source_exercise.get("name"):
+                continue
+            exercises.append(
+                {
+                    "name": clean_coach_plan_text(source_exercise.get("name"), limit=120),
+                    "equipment": clean_coach_plan_text(source_exercise.get("equipment"), translated_text("not_available", language), 120),
+                    "sets": clean_coach_plan_text(source_exercise.get("sets"), "3", 40),
+                    "reps": clean_coach_plan_text(source_exercise.get("reps"), "8-12", 80),
+                    "rest": clean_coach_plan_text(source_exercise.get("rest"), "60-90 sec", 80),
+                    "load": clean_coach_plan_text(source_exercise.get("load"), translated_text("coach_load_moderate", language), 300),
+                    "cue": clean_coach_plan_text(source_exercise.get("cue"), translated_text("coach_session_main", language), 300),
+                }
+            )
+
+        sessions.append(
+            {
+                "number": index + 1,
+                "focus": clean_coach_plan_text(source_session.get("focus"), fallback_session.get("focus"), 160),
+                "minutes": parse_optional_int(source_session.get("minutes")) or fallback_session.get("minutes"),
+                "warmup": clean_coach_plan_text(source_session.get("warmup"), fallback_session.get("warmup"), 300),
+                "main": clean_coach_plan_text(source_session.get("main"), fallback_session.get("main"), 300),
+                "cooldown": clean_coach_plan_text(source_session.get("cooldown"), fallback_session.get("cooldown"), 300),
+                "exercises": exercises,
+            }
+        )
+
+    fallback_nutrition = fallback_plan[1] if len(fallback_plan) > 1 else {"items": []}
+    fallback_notes = fallback_plan[2] if len(fallback_plan) > 2 else {"items": []}
+    ai_nutrition = data.get("nutrition") if isinstance(data.get("nutrition"), dict) else {}
+    ai_notes = data.get("notes") if isinstance(data.get("notes"), dict) else {}
+
+    return [
+        {
+            "title": clean_coach_plan_text(ai_training.get("title"), fallback_training.get("title"), 140),
+            "sessions": sessions,
+        },
+        {
+            "title": clean_coach_plan_text(ai_nutrition.get("title"), fallback_nutrition.get("title"), 140),
+            "items": clean_coach_plan_items(ai_nutrition.get("items"), fallback_nutrition.get("items"), limit=7),
+        },
+        {
+            "title": clean_coach_plan_text(ai_notes.get("title"), fallback_notes.get("title"), 140),
+            "items": clean_coach_plan_items(ai_notes.get("items"), fallback_notes.get("items"), limit=6),
+        },
+    ]
+
+
+def stored_coach_plan(record):
+    if not record:
+        return None
+    try:
+        plan = json.loads(record.plan_json)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(plan, list) and plan and isinstance(plan[0], dict):
+        return plan
+    return None
+
+
+def generate_openai_coach_plan(member, profile, fallback_plan, language=None):
+    language = language or current_language()
+    api_key = app.config.get("OPENAI_API_KEY")
+    mode = app.config.get("COACH_AI_MODE", "fallback")
+    if not api_key or mode != "openai":
+        return None, None
+
+    recent_workouts = "\n".join(recent_coach_workout_summary(member.member_id)) or "No previous workouts logged."
+    context = coach_context_summary(member, profile)
+    prompt = (
+        "You create the Dreamz Fitness member coach plan. Return ONLY valid JSON, no markdown and no prose outside JSON. "
+        "Do not mention AI. Personalize the plan to the profile, goal, experience, schedule, injuries, preferences and recent workout history. "
+        "Use safe, practical exercise selection for Dreamz Fitness or the selected training place. "
+        "Nutrition must be realistic for Bonaire: budget-aware, common supermarket foods, simple repeatable meals, enough protein, and respect allergies/preferences. "
+        "For injuries or medical limitations, adjust exercise choices and intensity conservatively. "
+        "Use the member selected language for every visible value. "
+        "The number of sessions must match the fallback sessions. Each session should fit the requested minutes including warm-up and cool-down. "
+        "JSON schema: {"
+        "\"training\":{\"title\":\"...\",\"sessions\":[{\"focus\":\"...\",\"minutes\":45,\"warmup\":\"...\",\"main\":\"...\",\"cooldown\":\"...\","
+        "\"exercises\":[{\"name\":\"...\",\"equipment\":\"...\",\"sets\":\"...\",\"reps\":\"...\",\"rest\":\"...\",\"load\":\"...\",\"cue\":\"...\"}]}]},"
+        "\"nutrition\":{\"title\":\"...\",\"items\":[\"...\"]},"
+        "\"notes\":{\"title\":\"...\",\"items\":[\"...\"]}"
+        "}.\n\n"
+        f"Language: {language}\n"
+        f"Member/profile: {context}\n"
+        f"Recent workouts:\n{recent_workouts}\n"
+        f"Fallback structure to personalize and improve:\n{json.dumps(fallback_plan, ensure_ascii=False)}"
+    )
+
+    try:
+        request = Request(
+            "https://api.openai.com/v1/responses",
+            data=json.dumps({
+                "model": app.config.get("OPENAI_MODEL", "gpt-4.1-mini"),
+                "input": prompt,
+                "max_output_tokens": 2600,
+            }).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(request, timeout=35) as response:
+            output_text = openai_text_from_response(json.loads(response.read().decode("utf-8")))
+        parsed = extract_json_object(output_text)
+        if parsed:
+            return normalize_ai_coach_plan(parsed, fallback_plan, language), context
+    except (HTTPError, URLError, TimeoutError, ValueError, OSError):
+        pass
+    return None, context
+
+
+def coach_plan_for_member(member, profile, language=None, force=False):
+    language = language or current_language()
+    if not member or not profile:
+        return None
+
+    fallback_plan = coach_personal_plan(profile, language=language)
+    record = CoachPlan.query.filter_by(member_id=member.member_id).first()
+    if record and not force:
+        stored = stored_coach_plan(record)
+        if stored:
+            return stored
+
+    generated_plan, context = generate_openai_coach_plan(member, profile, fallback_plan, language=language)
+    plan = generated_plan or fallback_plan
+    source = "openai" if generated_plan else "fallback"
+    if not plan:
+        return None
+
+    if not record:
+        record = CoachPlan(member_id=member.member_id)
+    record.language = language
+    record.source = source
+    record.plan_json = json.dumps(plan, ensure_ascii=False)
+    record.prompt_context = context or coach_context_summary(member, profile)
+    record.updated_at = datetime.now()
+    db.session.add(record)
+    db.session.commit()
+    return plan
+
+
 def recent_coach_workout_summary(member_id, limit=3):
     sessions = (
         CoachWorkoutSession.query
@@ -1534,7 +1758,8 @@ def coach_next_session_context(profile, member_id, language=None):
     language = language or current_language()
     if not profile:
         return None
-    plan = coach_personal_plan(profile, language=language)
+    member = Member.query.filter_by(member_id=member_id).first()
+    plan = coach_plan_for_member(member, profile, language=language) if member else coach_personal_plan(profile, language=language)
     if not plan or not plan[0].get("sessions"):
         return None
     sessions = plan[0]["sessions"]
@@ -3614,17 +3839,19 @@ def member_coach():
         for key, value in profile_data.items():
             setattr(profile, key, value)
         profile.updated_at = datetime.now()
+        CoachPlan.query.filter_by(member_id=member.member_id).delete()
         db.session.commit()
         flash(translated_text("coach_profile_saved", current_language()))
         return redirect(url_for("member_coach"))
 
+    personal_plan = coach_plan_for_member(member, profile) if profile else None
     return render_template(
         "coach.html",
         member=member,
         profile=profile,
         completion=coach_profile_completion(profile),
         starter_guidance=coach_starter_guidance(profile),
-        personal_plan=coach_personal_plan(profile),
+        personal_plan=personal_plan,
         coach_goals=COACH_GOALS,
         coach_experience_levels=COACH_EXPERIENCE_LEVELS,
         coach_training_days=COACH_TRAINING_DAYS,
@@ -3690,6 +3917,7 @@ def save_coach_workout_log():
         source=source,
         context_summary=context,
     )
+    CoachPlan.query.filter_by(member_id=member.member_id).delete()
     db.session.commit()
     return jsonify(
         {
