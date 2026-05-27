@@ -20,7 +20,7 @@ from flask import (
 )
 
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from dateutil.relativedelta import relativedelta
 from datetime import datetime, date, timedelta   # ← bestaande regel uitbreiden
 from datetime import timezone
@@ -2531,14 +2531,19 @@ def seed_legal_documents():
         db.session.flush()
 
         version_value = "2026-05-27-legal-reviewed"
+        legacy_version_value = "2026-05-27-draft"
         version = LegalDocumentVersion.query.filter_by(
             document_id=document.id,
             version=version_value,
         ).first()
         if not version:
+            version = LegalDocumentVersion.query.filter_by(
+                document_id=document.id,
+                version=legacy_version_value,
+            ).first()
+        if not version:
             version = LegalDocumentVersion(
                 document_id=document.id,
-                version=version_value,
                 effective_from=date(2026, 5, 27),
                 source_language="en",
                 full_legal_text=defaults["text"],
@@ -2549,14 +2554,15 @@ def seed_legal_documents():
                 legal_review_status="legal_reviewed",
             )
             db.session.add(version)
-        else:
-            version.legal_review_status = "legal_reviewed"
-            version.is_current = True
+        version.version = version_value
+        version.legal_review_status = "legal_reviewed"
+        version.is_current = True
         LegalDocumentVersion.query.filter(
             LegalDocumentVersion.document_id == document.id,
+            LegalDocumentVersion.id != version.id,
             LegalDocumentVersion.version != version_value,
             LegalDocumentVersion.is_current.is_(True),
-        ).update({"is_current": False})
+        ).update({"is_current": False}, synchronize_session=False)
         db.session.flush()
 
         for language in LANGUAGES:
@@ -3759,11 +3765,15 @@ def open_email_log_count():
 def member_account_notification_count(member_id):
     if not member_id:
         return 0
-    member = Member.query.filter_by(member_id=member_id).first()
-    if not member:
+    try:
+        balance = db.session.execute(
+            db.select(Member.balance).where(Member.member_id == member_id).limit(1)
+        ).scalar()
+    except SQLAlchemyError:
+        db.session.rollback()
         return 0
     count = 0
-    if (member.balance or 0) > 0:
+    if (balance or 0) > 0:
         count += 1
     return count
 

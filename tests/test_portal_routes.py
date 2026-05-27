@@ -8,6 +8,7 @@ import re
 import tempfile
 import unittest
 from unittest.mock import patch
+from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.security import generate_password_hash
 
 
@@ -19,7 +20,7 @@ os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
 from translations import LANGUAGES, TRANSLATIONS  # noqa: E402
-from dreamz_portal import AppSetting, AgreementCategory, CancellationConfirmation, CancellationRequest, CancellationWindow, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, DigitalSignatureAuditTrail, DigitalSignatureRecord, EmailLog, FeatureAccessRule, GroupClassOccurrence, GroupClassSchedule, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, Member, MemberAgreementAcceptance, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, MemberSignedDocument, MembershipApplication, MembershipApplicationAuditEvent, MembershipApplicationDocument, MembershipApplicationStatus, MembershipApplicationStep, PricingCategory, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, SignedPdfRecord, app, cancellation_message, coach_context_summary, coach_plan_for_member, coach_profile_completion, db, member_access_profile, next_date_for_group_class, pricing_item_access_tags, pricing_visibility_list, seed_feature_access_rules, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
+from dreamz_portal import AppSetting, AgreementCategory, CancellationConfirmation, CancellationRequest, CancellationWindow, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, DigitalSignatureAuditTrail, DigitalSignatureRecord, EmailLog, FeatureAccessRule, GroupClassOccurrence, GroupClassSchedule, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, Member, MemberAgreementAcceptance, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, MemberSignedDocument, MembershipApplication, MembershipApplicationAuditEvent, MembershipApplicationDocument, MembershipApplicationStatus, MembershipApplicationStep, PricingCategory, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, SignedPdfRecord, app, cancellation_message, coach_context_summary, coach_plan_for_member, coach_profile_completion, db, member_access_profile, member_account_notification_count, next_date_for_group_class, pricing_item_access_tags, pricing_visibility_list, seed_feature_access_rules, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
 
 
 class FakeS3Body:
@@ -1573,6 +1574,10 @@ class PortalRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("account-notification-badge", response.get_data(as_text=True))
+
+    def test_account_notification_count_fails_closed_on_database_error(self):
+        with patch.object(db.session, "execute", side_effect=SQLAlchemyError("missing member column")):
+            self.assertEqual(member_account_notification_count("13659"), 0)
 
     def test_view_balance_opens_account_balance_section(self):
         self.add_member(
