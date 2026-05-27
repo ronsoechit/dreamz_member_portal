@@ -19,7 +19,7 @@ os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
 from translations import LANGUAGES, TRANSLATIONS  # noqa: E402
-from dreamz_portal import AppSetting, AgreementCategory, CancellationConfirmation, CancellationRequest, CancellationWindow, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, DigitalSignatureAuditTrail, DigitalSignatureRecord, EmailLog, FeatureAccessRule, GroupClassOccurrence, GroupClassSchedule, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, Member, MemberAgreementAcceptance, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, MemberSignedDocument, MembershipApplication, MembershipApplicationAuditEvent, MembershipApplicationDocument, MembershipApplicationStatus, MembershipApplicationStep, PricingCategory, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, SignedPdfRecord, app, cancellation_message, coach_context_summary, coach_plan_for_member, coach_profile_completion, db, member_access_profile, next_date_for_group_class, pricing_item_access_tags, pricing_visibility_list, seed_feature_access_rules, seed_group_class_schedule, seed_pricing_catalog  # noqa: E402
+from dreamz_portal import AppSetting, AgreementCategory, CancellationConfirmation, CancellationRequest, CancellationWindow, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, DigitalSignatureAuditTrail, DigitalSignatureRecord, EmailLog, FeatureAccessRule, GroupClassOccurrence, GroupClassSchedule, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, Member, MemberAgreementAcceptance, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, MemberSignedDocument, MembershipApplication, MembershipApplicationAuditEvent, MembershipApplicationDocument, MembershipApplicationStatus, MembershipApplicationStep, PricingCategory, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, SignedPdfRecord, app, cancellation_message, coach_context_summary, coach_plan_for_member, coach_profile_completion, db, member_access_profile, next_date_for_group_class, pricing_item_access_tags, pricing_visibility_list, seed_feature_access_rules, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
 
 
 class FakeS3Body:
@@ -1950,6 +1950,53 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(MemberSignedDocument.query.filter_by(status="signed").count(), 1)
         self.assertEqual(SignedPdfRecord.query.filter_by(audit_reference_number="DS-20260527-0001").count(), 1)
         self.assertEqual(CancellationConfirmation.query.filter_by(confirmation_number="CAN-20260527-0001").count(), 1)
+
+    def test_legal_document_seed_creates_terms_rules_translations_and_required_rules(self):
+        seed_legal_documents()
+
+        self.assertEqual(AgreementCategory.query.count(), 10)
+        self.assertEqual(LegalDocument.query.count(), 13)
+        self.assertEqual(LegalDocumentVersion.query.count(), 13)
+        self.assertEqual(LegalTranslation.query.count(), 13 * len(LANGUAGES))
+        self.assertEqual(RequiredAgreementRule.query.count(), 5)
+
+        notice = AppSetting.query.filter_by(key="legal_translation_review_notice").one()
+        self.assertIn("Final legal wording should be reviewed", notice.value)
+
+        cancellation = LegalDocument.query.filter_by(document_type="cancellation_renewal_rules").one()
+        cancellation_version = LegalDocumentVersion.query.filter_by(document_id=cancellation.id, is_current=True).one()
+        self.assertIn("Cancellation must be handled through the Dreamz Fitness member portal", cancellation_version.full_legal_text)
+        self.assertIn("30 calendar days", cancellation_version.full_legal_text)
+        self.assertIn("10 calendar days", cancellation_version.full_legal_text)
+        self.assertNotIn("Cancellation is handled by sending an email", cancellation_version.full_legal_text)
+
+        direct_debit = LegalDocument.query.filter_by(document_type="payment_rules").one()
+        direct_debit_version = LegalDocumentVersion.query.filter_by(document_id=direct_debit.id, is_current=True).one()
+        self.assertIn("MCB Bank Bonaire current accounts", direct_debit_version.full_legal_text)
+        self.assertIn("Savings accounts are not accepted", direct_debit_version.full_legal_text)
+        self.assertIn("No exceptions", direct_debit_version.full_legal_text)
+
+        six_month = LegalDocument.query.filter_by(document_type="membership_contract_6_months").one()
+        self.assertTrue(six_month.legal_review_needed)
+        self.assertIn("Legacy 6-month PDF", six_month.internal_notes)
+        self.assertIn("minimum of 12 months", six_month.internal_notes)
+        six_month_version = LegalDocumentVersion.query.filter_by(document_id=six_month.id).one()
+        self.assertNotIn("minimum of 12 months", six_month_version.full_legal_text)
+
+        for language in LANGUAGES:
+            with self.subTest(language=language):
+                translation = LegalTranslation.query.filter_by(
+                    version_id=cancellation_version.id,
+                    language=language,
+                ).one()
+                self.assertEqual(translation.translation_status, "draft")
+                self.assertTrue(translation.full_legal_text)
+                if language != "en":
+                    self.assertIn("Final legal wording should be reviewed", translation.full_legal_text)
+
+        seed_legal_documents()
+        self.assertEqual(LegalDocument.query.count(), 13)
+        self.assertEqual(LegalTranslation.query.count(), 13 * len(LANGUAGES))
 
     def test_public_pricing_page_shows_public_catalog_without_staff_only_items(self):
         seed_pricing_catalog()

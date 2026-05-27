@@ -954,6 +954,233 @@ DIGITAL_SIGNATURE_VERIFICATION_METHODS = [
     "otp_sms",
     "frontdesk_identity_verified",
 ]
+LEGAL_TRANSLATION_DRAFT_NOTICE = (
+    "Translations are provided to help members understand the agreement. "
+    "Final legal wording should be reviewed before being treated as legally final."
+)
+AGREEMENT_CATEGORY_SEED = [
+    ("general_membership_rules", "General Membership Rules", "Signup, member conduct and basic membership obligations.", 10),
+    ("contract_renewal_rules", "Contract & Renewal Rules", "Fixed-term contract, renewal and cancellation rules.", 20),
+    ("app_cancellation_rules", "App Cancellation Rules", "Cancellation windows and app-based cancellation process.", 30),
+    ("payment_direct_debit_rules", "Payment & Direct Debit Rules", "Frontdesk payments, MCB direct debit and payment fees.", 40),
+    ("gym_house_rules", "Gym House Rules", "Facility rules, towel/shirt requirements and equipment conduct.", 50),
+    ("liability_waiver", "Liability Waiver", "Assumption of risk, release and indemnity language.", 60),
+    ("group_pt_rules", "Group PT Rules", "Small Group PT add-on terms and waiver.", 70),
+    ("personal_training_business_rules", "Personal Training Business Rules", "Rules for paid training activity on Dreamz premises.", 80),
+    ("external_trainer_terms", "External Trainer Terms", "B2B external personal trainer package terms.", 90),
+    ("media_security_consent", "Media/Security Consent", "Photo, video, security and promotional consent.", 100),
+]
+
+
+def legal_terms_text(*paragraphs):
+    return "\n\n".join(paragraph.strip() for paragraph in paragraphs if paragraph and paragraph.strip())
+
+
+LEGAL_DOCUMENT_SEED = [
+    {
+        "document_type": "membership_application_form",
+        "title": "General Membership Application / Signup Terms",
+        "category_key": "general_membership_rules",
+        "required_for": ["all_membership_applications"],
+        "sort_order": 10,
+        "summary": "Every member must provide accurate personal details, choose a membership, accept required rules and sign before activation.",
+        "plain": "Your application must be true and complete. Dreamz Fitness uses it to process your membership, emergency contact, payment choice and required agreements.",
+        "text": legal_terms_text(
+            "The applicant confirms that all personal details, date of birth, contact details, emergency contact details, membership selections and payment selections are true, complete and current.",
+            "The applicant accepts the selected membership type, registration fee, set prices and payment terms shown by Dreamz Fitness. Payments and membership setup may be handled at the Dreamz Fitness front desk unless a separate online payment flow is explicitly available.",
+            "The applicant agrees to follow Dreamz Fitness club rules, posted announcements, staff instructions and entry conditions. Management may refuse entry, cancel membership, or ask a member to leave for irresponsible behaviour, drugs or alcohol, unsafe conduct, or breach of entry conditions.",
+            "The applicant understands that Dreamz Fitness Bonaire is operated by ABC Fitness & Health N.V. and that Bonaire, Dutch Caribbean law and jurisdiction apply where applicable."
+        ),
+    },
+    {
+        "document_type": "general_terms",
+        "title": "General Terms & Conditions",
+        "category_key": "general_membership_rules",
+        "required_for": ["all_members"],
+        "sort_order": 20,
+        "summary": "General terms for Dreamz Fitness membership, facility access and member responsibilities.",
+        "plain": "Be respectful, follow staff instructions, pay agreed fees, and use the facility responsibly.",
+        "text": legal_terms_text(
+            "Members agree with Dreamz Fitness terms, club rules, announcements, conduct rules, pricing and payment obligations applicable to their selected membership or product.",
+            "Memberships, passes, add-ons, direct debit mandates and other products must be paid according to the agreed terms. All prices and fees are non-negotiable unless Dreamz Fitness formally publishes another rule.",
+            "Dreamz Fitness may refuse entry, suspend access, cancel membership or require a member to leave if behaviour is unsafe, irresponsible, abusive, drug or alcohol related, or violates entry conditions or club rules.",
+            "Dreamz Fitness is not responsible for lost, stolen or damaged personal property. Members remain responsible for their own belongings."
+        ),
+    },
+    {
+        "document_type": "gym_rules",
+        "title": "Gym Rules",
+        "category_key": "gym_house_rules",
+        "required_for": ["all_members"],
+        "sort_order": 30,
+        "summary": "House rules for safe and respectful use of Dreamz Fitness.",
+        "plain": "Use a towel, wear a training shirt, respect the equipment, and keep the gym safe and clean.",
+        "text": legal_terms_text(
+            "A towel is required at all times and must be used on benches and equipment. Training shirts are required. Smoking and food are not allowed in the facility.",
+            "Equipment must be handled properly, returned after use and shared respectfully. Do not drop weights. Report faults, damage or unsafe situations to staff immediately.",
+            "Members must train responsibly and respect other members, staff, instructors and visitors. Management instructions must be followed.",
+            "Dreamz Fitness may remove members from the facility without refund if house rules or safety conditions are breached."
+        ),
+    },
+    {
+        "document_type": "liability_waiver",
+        "title": "Liability Waiver & Assumption of Risk",
+        "category_key": "liability_waiver",
+        "required_for": ["all_members"],
+        "sort_order": 40,
+        "summary": "Exercise has risks. Members participate voluntarily and at their own risk.",
+        "plain": "Training can cause injury. You choose to participate and must stop or ask for help if something feels unsafe.",
+        "text": legal_terms_text(
+            "The member understands that physical exercise, fitness training, classes, personal training and performance activities can be demanding and may cause serious injury, paralysis or death.",
+            "The member voluntarily participates at their own risk and confirms they are responsible for choosing activities suitable for their health, ability and medical situation.",
+            "To the maximum extent permitted by applicable law, the member releases, indemnifies and holds harmless Dreamz Fitness Bonaire, ABC Fitness & Health N.V., management, staff, instructors and representatives from claims related to participation, facility use or breach of rules.",
+            "The member confirms that the information provided is true and understands that rights may be limited by this disclaimer and waiver."
+        ),
+    },
+    {
+        "document_type": "media_security_consent",
+        "title": "Media & Security Consent",
+        "category_key": "media_security_consent",
+        "required_for": ["all_members"],
+        "sort_order": 50,
+        "summary": "Dreamz may use camera/security recording and limited media where applicable.",
+        "plain": "The gym may use cameras for safety and may use photos/video for promotion when applicable.",
+        "text": legal_terms_text(
+            "The member gives permission to photograph, videotape or record for safety, security, legal, exhibition, publicity, advertising and promotional materials where applicable.",
+            "Security recording may be used to protect members, staff, property, legal interests and facility safety.",
+            "Dreamz Fitness will handle media and security data with care and according to applicable privacy requirements."
+        ),
+    },
+    {
+        "document_type": "membership_contract_6_months",
+        "title": "6-Month Membership Contract",
+        "category_key": "contract_renewal_rules",
+        "required_for": ["contract_term:6_months"],
+        "sort_order": 60,
+        "internal_notes": "Legacy 6-month PDF appears to contain inconsistent wording referring to minimum of 12 months. Do not use that inconsistent wording in new templates. Legal review needed.",
+        "summary": "Six-month fixed term contract with discounted pricing and app-based cancellation window.",
+        "plain": "You commit to six months. Monthly direct debit is only a payment method; it does not make the contract monthly cancellable.",
+        "text": legal_terms_text(
+            "This is a 6-month Dreamz Fitness membership contract. Discounted contract pricing is offered because the member commits to the full 6-month term.",
+            "Payment options are USD 420 cash/pin all at once or USD 70 per month by MCB Bank Bonaire direct debit only with a valid current account and signed direct debit mandate.",
+            "The first initial payment is USD 20 signup fee plus remaining weeks in the month according to Dreamz Fitness policy.",
+            "Monthly payment is a payment method only and does not make the contract cancellable month-to-month. All months in the contract term remain due.",
+            "There are no refunds for paid memberships. Memberships and payments cannot be frozen. Direct debit cannot be cancelled before valid cancellation or contract end according to the cancellation rules.",
+            "Temporary closures, government measures and official holidays do not cancel the payment obligation according to the stated rules.",
+            "The contract renews automatically under the same conditions if the member does not cancel through the Dreamz Fitness member portal during the valid cancellation window."
+        ),
+    },
+    {
+        "document_type": "membership_contract_12_months",
+        "title": "12-Month Membership Contract",
+        "category_key": "contract_renewal_rules",
+        "required_for": ["contract_term:12_months"],
+        "sort_order": 70,
+        "summary": "Twelve-month fixed term contract with discounted pricing and app-based cancellation window.",
+        "plain": "You commit to twelve months. Monthly direct debit is only a payment method; it does not make the contract monthly cancellable.",
+        "text": legal_terms_text(
+            "This is a 12-month Dreamz Fitness membership contract. Discounted contract pricing is offered because the member commits to the full 12-month term.",
+            "Payment options are USD 720 cash/pin all at once or USD 60 per month by MCB Bank Bonaire direct debit only with a valid current account and signed direct debit mandate.",
+            "The first initial payment is USD 20 signup fee plus remaining weeks in the month according to Dreamz Fitness policy.",
+            "Monthly payment is a payment method only and does not make the contract cancellable month-to-month. All months in the contract term remain due.",
+            "There are no refunds for paid memberships. Memberships and payments cannot be frozen. Direct debit cannot be cancelled before valid cancellation or contract end according to the cancellation rules.",
+            "Temporary closures, government measures and official holidays do not cancel the payment obligation according to the stated rules.",
+            "The contract renews automatically under the same conditions if the member does not cancel through the Dreamz Fitness member portal during the valid cancellation window."
+        ),
+    },
+    {
+        "document_type": "cancellation_renewal_rules",
+        "title": "App-Based Cancellation & Renewal Rules",
+        "category_key": "app_cancellation_rules",
+        "required_for": ["contract_members"],
+        "sort_order": 80,
+        "summary": "Cancellation must be submitted in the app during the valid cancellation window.",
+        "plain": "Your contract can only be cancelled during the cancellation window shown in the app. The window opens 30 days before the end of your current term and stays open for 10 days.",
+        "text": legal_terms_text(
+            "Cancellation is no longer handled by sending an email to info@dreamzfitness.com. Cancellation must be handled through the Dreamz Fitness member portal.",
+            "The cancellation window opens 30 calendar days before the end of the current contract term and remains open for 10 calendar days.",
+            "Cancellation is only possible through the app during this window. The app shows the current contract term end date, cancellation window open date, cancellation window close date and whether cancellation is currently available.",
+            "If the member does not submit cancellation through the app during the valid window, the contract renews automatically under the same conditions.",
+            "If cancellation is submitted successfully, Dreamz Fitness generates a confirmation or receipt."
+        ),
+    },
+    {
+        "document_type": "payment_rules",
+        "title": "Payment & Direct Debit Rules",
+        "category_key": "payment_direct_debit_rules",
+        "required_for": ["all_members", "direct_debit_members"],
+        "sort_order": 90,
+        "summary": "Payment rules, direct debit restrictions and fees.",
+        "plain": "Direct debit is only available for MCB Bank Bonaire current accounts. Savings accounts and non-MCB accounts are not accepted.",
+        "text": legal_terms_text(
+            "Direct debit is only allowed for MCB Bank Bonaire current accounts. Savings accounts are not accepted. Non-MCB accounts are not accepted. MCB savings accounts are not accepted. No exceptions.",
+            "The member must explicitly confirm: I confirm that this is an MCB Bank Bonaire current account and not a savings account. If a savings account or non-MCB account is selected or entered, direct debit must be blocked.",
+            "Direct debit may include membership fees and debts on account where applicable. Direct debit is processed around the 28th of the month and multiple attempts may be made where applicable.",
+            "A USD 1.00 extra charge applies per direct debit transaction. A USD 10 fee applies if direct debit returns due to insufficient funds.",
+            "The direct debit mandate remains valid for the duration of the contract including automatic renewals. Monthly direct debit is only a payment method; it does not change the 6- or 12-month contract commitment."
+        ),
+    },
+    {
+        "document_type": "direct_debit_mandate",
+        "title": "MCB Direct Debit Mandate",
+        "category_key": "payment_direct_debit_rules",
+        "required_for": ["payment_method:mcb_direct_debit_monthly"],
+        "sort_order": 100,
+        "summary": "Authorization for Dreamz Fitness direct debit from an eligible MCB current account.",
+        "plain": "You authorize Dreamz Fitness to debit your MCB current account for agreed membership fees and eligible account debts.",
+        "text": legal_terms_text(
+            "The member authorizes Dreamz Fitness Bonaire / ABC Fitness & Health N.V. to process direct debit from the stated MCB Bank Bonaire current account for agreed membership fees and account debts where applicable.",
+            "The account must be an MCB Bank Bonaire current account. Savings accounts, MCB savings accounts and non-MCB accounts are not accepted.",
+            "The mandate remains valid for the contract duration and automatic renewals unless cancellation is completed according to the app-based cancellation rules."
+        ),
+    },
+    {
+        "document_type": "group_pt_addon_waiver",
+        "title": "Small Group PT Add-On & Waiver",
+        "category_key": "group_pt_rules",
+        "required_for": ["addon:group_pt"],
+        "sort_order": 110,
+        "summary": "Small Group PT add-on terms and training waiver.",
+        "plain": "Small Group PT is an add-on. You participate voluntarily and at your own risk.",
+        "text": legal_terms_text(
+            "Small Group PT add-on is USD 85 per month and allows participation up to 5 times per week according to availability and Dreamz Fitness procedures.",
+            "The member voluntarily participates in physical fitness and performance training at their own risk.",
+            "The member releases, indemnifies and holds harmless the trainer, instructor, Dreamz Fitness Bonaire and ABC Fitness & Health N.V. to the maximum extent permitted by applicable law.",
+            "The member confirms that all provided information is true and understands that rights may be limited by this disclaimer."
+        ),
+    },
+    {
+        "document_type": "personal_training_business_rules",
+        "title": "Personal Training Business Rules",
+        "category_key": "personal_training_business_rules",
+        "required_for": ["all_members"],
+        "sort_order": 120,
+        "summary": "Paid training of clients on Dreamz premises is not allowed without approved package.",
+        "plain": "You may not train clients for money inside Dreamz Fitness unless management approved the right package.",
+        "text": legal_terms_text(
+            "It is not allowed to help or train clients in Dreamz Fitness premises and charge them money without having an approved Personal Trainer membership/package.",
+            "If management discovers unauthorized paid personal training activity, Dreamz Fitness may remove the person from the gym without refund.",
+            "Dreamz Fitness may charge a fine calculated after investigation and evidence due to loss of business."
+        ),
+    },
+    {
+        "document_type": "external_personal_trainer_package_terms",
+        "title": "External Personal Trainer Package Terms",
+        "category_key": "external_trainer_terms",
+        "required_for": ["external_trainer_b2b"],
+        "sort_order": 130,
+        "summary": "B2B external trainer package terms, separate from normal membership add-ons.",
+        "plain": "This package is for external personal trainers, not a normal member upgrade.",
+        "text": legal_terms_text(
+            "The External Personal Trainer Package is a B2B/external trainer access package. It is not a member add-on.",
+            "The external trainer pays Dreamz Fitness USD 250 per month to use the facilities for themselves and their own clients.",
+            "The external trainer is responsible for their own clients. Dreamz Fitness is not responsible for the external trainer's coaching quality, training advice, payment collection, cancellations, disputes or client relationship.",
+            "The external trainer handles their own personal training session pricing and payment directly with their own clients.",
+            "Every client trained by the external trainer must either be an active Dreamz Fitness member, regardless of membership type, or purchase a valid Dreamz Fitness day pass.",
+            "For training Delfins Resort guests, Dreamz Fitness charges USD 10 per guest. This package does not include a Dreamz Fitness membership for the trainer's clients."
+        ),
+    },
+]
 FEATURE_ACCESS_RULE_SEED = [
     {
         "key": "pricing_public_catalog",
@@ -1544,6 +1771,7 @@ def ensure_runtime_schema():
     seed_group_class_schedule()
     seed_pricing_catalog()
     seed_feature_access_rules()
+    seed_legal_documents()
     app.config["_RUNTIME_SCHEMA_READY"] = True
 
 
@@ -1851,6 +2079,177 @@ def member_pricing_context(member):
         "pricing_terms_list": pricing_terms_list,
         "gym_balance": member.balance or 0,
     }
+
+
+def legal_translation_seed_text(document, language, field):
+    if language == "en":
+        return document[field]
+    language_labels = {
+        "nl": "Nederlandse conceptvertaling",
+        "pap": "Draft tradukshon na Papiamentu",
+        "es": "Traduccion borrador en Espanol",
+    }
+    notice = language_labels.get(language, "Draft translation")
+    return f"{notice}. {LEGAL_TRANSLATION_DRAFT_NOTICE}\n\n{document[field]}"
+
+
+def seed_required_agreement_rules():
+    rule_defaults = [
+        {
+            "applies_to_contract_term": None,
+            "applies_to_payment_method": None,
+            "applies_to_add_on": None,
+            "required_legal_document_types": [
+                "membership_application_form",
+                "general_terms",
+                "gym_rules",
+                "liability_waiver",
+                "media_security_consent",
+                "personal_training_business_rules",
+            ],
+        },
+        {
+            "applies_to_contract_term": "6_months",
+            "required_legal_document_types": [
+                "membership_contract_6_months",
+                "cancellation_renewal_rules",
+                "payment_rules",
+            ],
+        },
+        {
+            "applies_to_contract_term": "12_months",
+            "required_legal_document_types": [
+                "membership_contract_12_months",
+                "cancellation_renewal_rules",
+                "payment_rules",
+            ],
+        },
+        {
+            "applies_to_payment_method": "mcb_direct_debit_monthly",
+            "required_legal_document_types": [
+                "direct_debit_mandate",
+                "payment_rules",
+            ],
+        },
+        {
+            "applies_to_add_on": "group_pt",
+            "required_legal_document_types": ["group_pt_addon_waiver"],
+        },
+    ]
+    for defaults in rule_defaults:
+        required_json = json.dumps(defaults["required_legal_document_types"])
+        existing = RequiredAgreementRule.query.filter_by(
+            applies_to_membership_type=defaults.get("applies_to_membership_type"),
+            applies_to_contract_term=defaults.get("applies_to_contract_term"),
+            applies_to_payment_method=defaults.get("applies_to_payment_method"),
+            applies_to_add_on=defaults.get("applies_to_add_on"),
+            active=True,
+        ).first()
+        if existing:
+            continue
+        db.session.add(RequiredAgreementRule(
+            applies_to_membership_type=defaults.get("applies_to_membership_type"),
+            applies_to_contract_term=defaults.get("applies_to_contract_term"),
+            applies_to_payment_method=defaults.get("applies_to_payment_method"),
+            applies_to_add_on=defaults.get("applies_to_add_on"),
+            applies_to_under18=defaults.get("applies_to_under18"),
+            required_legal_document_types=required_json,
+            active=True,
+        ))
+
+
+def seed_legal_documents():
+    if not AppSetting.query.filter_by(key="legal_translation_review_notice").first():
+        db.session.add(AppSetting(key="legal_translation_review_notice", value=LEGAL_TRANSLATION_DRAFT_NOTICE))
+
+    for key, name, description, sort_order in AGREEMENT_CATEGORY_SEED:
+        category = AgreementCategory.query.filter_by(key=key).first()
+        if not category:
+            db.session.add(AgreementCategory(
+                key=key,
+                name=name,
+                description=description,
+                sort_order=sort_order,
+                is_active=True,
+            ))
+        else:
+            if not category.name:
+                category.name = name
+            if not category.description:
+                category.description = description
+            if category.sort_order in (None, 0):
+                category.sort_order = sort_order
+            category.updated_at = datetime.now()
+
+    db.session.flush()
+
+    for defaults in LEGAL_DOCUMENT_SEED:
+        document = LegalDocument.query.filter_by(document_type=defaults["document_type"]).first()
+        if not document:
+            document = LegalDocument(
+                document_type=defaults["document_type"],
+                title=defaults["title"],
+                category_key=defaults["category_key"],
+                active=True,
+                required_for=json.dumps(defaults.get("required_for", [])),
+                sort_order=defaults["sort_order"],
+                internal_notes=defaults.get("internal_notes"),
+                legal_review_needed=True,
+            )
+            db.session.add(document)
+        else:
+            if not document.title:
+                document.title = defaults["title"]
+            if not document.category_key:
+                document.category_key = defaults["category_key"]
+            if not document.required_for:
+                document.required_for = json.dumps(defaults.get("required_for", []))
+            if document.sort_order in (None, 0):
+                document.sort_order = defaults["sort_order"]
+            if not document.internal_notes and defaults.get("internal_notes"):
+                document.internal_notes = defaults.get("internal_notes")
+            document.legal_review_needed = True
+            document.updated_at = datetime.now()
+        db.session.flush()
+
+        version_value = "2026-05-27-draft"
+        version = LegalDocumentVersion.query.filter_by(
+            document_id=document.id,
+            version=version_value,
+        ).first()
+        if not version:
+            version = LegalDocumentVersion(
+                document_id=document.id,
+                version=version_value,
+                effective_from=date(2026, 5, 27),
+                source_language="en",
+                full_legal_text=defaults["text"],
+                short_summary=defaults["summary"],
+                plain_language_summary=defaults["plain"],
+                pdf_template_key=defaults["document_type"],
+                is_current=True,
+                legal_review_status="draft",
+            )
+            db.session.add(version)
+        db.session.flush()
+
+        for language in LANGUAGES:
+            translation = LegalTranslation.query.filter_by(version_id=version.id, language=language).first()
+            if translation:
+                continue
+            db.session.add(LegalTranslation(
+                version_id=version.id,
+                language=language,
+                title=defaults["title"] if language == "en" else legal_translation_seed_text(defaults, language, "title"),
+                short_summary=defaults["summary"] if language == "en" else legal_translation_seed_text(defaults, language, "summary"),
+                plain_language_summary=defaults["plain"] if language == "en" else legal_translation_seed_text(defaults, language, "plain"),
+                full_legal_text=defaults["text"] if language == "en" else legal_translation_seed_text(defaults, language, "text"),
+                translation_status="draft",
+            ))
+
+    seed_required_agreement_rules()
+    db.session.commit()
+    return LegalDocument.query.order_by(LegalDocument.sort_order.asc(), LegalDocument.title.asc()).all()
 
 
 def seed_pricing_catalog():
