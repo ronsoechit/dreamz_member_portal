@@ -1877,6 +1877,18 @@ def open_email_log_count():
     return EmailLog.query.filter(email_log_review_required_filter()).count()
 
 
+def member_account_notification_count(member_id):
+    if not member_id:
+        return 0
+    member = Member.query.filter_by(member_id=member_id).first()
+    if not member:
+        return 0
+    count = 0
+    if (member.balance or 0) > 0:
+        count += 1
+    return count
+
+
 def email_log_review_required_filter():
     return db.and_(
         EmailLog.reviewed_at.is_(None),
@@ -3591,12 +3603,15 @@ def payment_status_for_member(member, today=None):
                 "label": "Overdue",
                 "severity": "danger",
                 "reason": f"Next payment/due date is {due_date.isoformat()} and balance is ${balance:.2f}.",
+                "due_date": due_date,
+                "balance": balance,
             }
         return {
             "status": "stale_payment_data",
             "label": "Payment data may be stale",
             "severity": "warning",
             "reason": f"Next payment/due date is {due_date.isoformat()}, before today, but balance is $0.00.",
+            "due_date": due_date,
         }
 
     if due_date == today:
@@ -3605,6 +3620,7 @@ def payment_status_for_member(member, today=None):
             "label": "Due today",
             "severity": "info",
             "reason": "Next payment/due date is today.",
+            "due_date": due_date,
         }
 
     if balance > 0:
@@ -3614,6 +3630,7 @@ def payment_status_for_member(member, today=None):
             "severity": "warning",
             "reason": f"Outstanding balance is ${balance:.2f}.",
             "balance": balance,
+            "due_date": due_date or date(today.year, today.month, calendar.monthrange(today.year, today.month)[1]),
         }
 
     return {
@@ -3815,15 +3832,17 @@ def validate_request_csrf_token():
 
 @app.context_processor
 def inject_csrf_token():
+    member_id = session.get("member_id")
     return {
         "csrf_token": get_csrf_token,
         "t": t,
         "current_language": current_language(),
         "available_languages": LANGUAGES,
         "language_flags": LANGUAGE_FLAGS,
-        "current_member_id": session.get("member_id"),
+        "current_member_id": member_id,
         "current_staff_role": current_staff_role(),
         "current_staff_username": current_staff_username(),
+        "account_notification_count": member_account_notification_count(member_id) if member_id and not is_staff_user() else 0,
         "open_cancellation_count": open_cancellation_count() if is_staff_user() else 0,
         "open_email_log_count": open_email_log_count() if is_staff_user() else 0,
         "t_document_title": lambda document_type: translated_document_title(document_type, current_language()),
@@ -4247,6 +4266,7 @@ def member_dashboard_context(member, staff_admin_view=False):
     policy_text = cancellation_message(policy, language=language)
     policy_summary, policy_detail = cancellation_message_parts(policy, language=language)
     payment_status = localized_payment_status(payment_status_for_member(member), language)
+    gym_balance = member.balance or 0.0
     cancellation_request = active_cancellation_request_for_member(member)
     cancellation_request_message = cancellation_request_member_message(cancellation_request, language=language)
     show_cancellation_section = (
@@ -4302,6 +4322,8 @@ def member_dashboard_context(member, staff_admin_view=False):
         "documents": member_documents(member),
         "document_groups": member_document_groups(member),
         "payment_status": payment_status,
+        "gym_balance": gym_balance,
+        "account_section": request.args.get("section", ""),
         "info": info,
         "sub": sub,
         "pay": pay,

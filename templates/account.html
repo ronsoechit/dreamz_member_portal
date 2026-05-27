@@ -12,4 +12,15 @@
 </section>
 
 {% include "_account_sections.html" %}
+{% if account_section == 'balance' %}
+  <script>
+    window.addEventListener("DOMContentLoaded", () => {
+      const balanceSection = document.getElementById("balance");
+      if (balanceSection) {
+        balanceSection.open = true;
+        balanceSection.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    });
+  </script>
+{% endif %}
 {% endblock %}

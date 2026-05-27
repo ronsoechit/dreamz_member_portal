@@ -57,7 +57,12 @@
             <a class="rounded px-3 py-2 {% if request.endpoint == 'dashboard' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('dashboard', id=current_member_id) }}">{{ t('dashboard') }}</a>
             <a class="rounded px-3 py-2 {% if request.endpoint == 'member_coach' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('member_coach') }}">{{ t('my_coach') }}</a>
             <a class="rounded px-3 py-2 {% if request.endpoint == 'member_progress' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('member_progress') }}">{{ t('progress') }}</a>
-            <a class="rounded px-3 py-2 {% if request.endpoint in ['member_account', 'set_member_password'] %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('member_account') }}">{{ t('account') }}</a>
+            <a class="relative rounded px-3 py-2 {% if request.endpoint in ['member_account', 'set_member_password'] %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('member_account') }}">
+              {{ t('account') }}
+              {% if account_notification_count %}
+                <span class="account-notification-badge" aria-label="{{ t('account_notifications')|replace('{count}', account_notification_count|string) }}">{{ account_notification_count }}</span>
+              {% endif %}
+            </a>
           </nav>
         {% endif %}
         <div class="language-switcher flex flex-wrap items-center gap-2 border-gray-700 text-xs lg:border-l lg:pl-4">

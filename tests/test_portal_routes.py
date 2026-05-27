@@ -1235,7 +1235,7 @@ class PortalRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
 
-    def test_dashboard_warns_when_payment_data_is_stale(self):
+    def test_dashboard_does_not_surface_payment_alert_without_open_balance(self):
         self.add_member(
             member_id="1206",
             last_payment=date(2025, 3, 29),
@@ -1248,8 +1248,9 @@ class PortalRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn("Payment data may be stale", body)
-        self.assertIn("payment information may not be up to date", body)
+        self.assertNotIn("payment-alert-card", body)
+        self.assertNotIn("Payment data may be stale", body)
+        self.assertNotIn("View payment", body)
 
     def test_document_file_serves_pdf_for_logged_in_member(self):
         self.add_member(member_id="1206", contract_path="contracts/1206_contract.pdf")
@@ -1525,7 +1526,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(CancellationRequest.query.filter_by(member_id="13659").count(), 0)
 
-    def test_dashboard_open_balance_message_is_explicit(self):
+    def test_dashboard_open_balance_is_compact_below_training_focus(self):
         self.add_member(
             member_id="13659",
             plan_type="Medewerker",
@@ -1538,9 +1539,53 @@ class PortalRouteTests(unittest.TestCase):
         response = self.client.get("/dashboard?id=13659")
 
         body = response.get_data(as_text=True)
-        self.assertIn("Outstanding balance due", body)
+        self.assertNotIn("payment-alert-card", body)
+        self.assertNotIn("Outstanding balance due", body)
+        self.assertLess(body.index("home-primary-card"), body.index("Open gym balance"))
+        self.assertIn("Open gym balance", body)
         self.assertIn("$63.50", body)
-        self.assertIn("Please pay this before", body)
+        self.assertIn("Pay at front desk", body)
+        self.assertIn("/account?section=balance", body)
+        self.assertIn("View balance", body)
+
+    def test_member_nav_shows_account_badge_only_for_open_balance(self):
+        self.add_member(member_id="13659", balance=67.50)
+        self.login_as("13659")
+
+        response = self.client.get("/dashboard?id=13659")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("account-notification-badge", body)
+        self.assertIn(">1</span>", body)
+
+        self.add_member(member_id="1206", balance=0.0)
+        self.login_as("1206")
+
+        response = self.client.get("/dashboard?id=1206")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("account-notification-badge", response.get_data(as_text=True))
+
+    def test_view_balance_opens_account_balance_section(self):
+        self.add_member(
+            member_id="13659",
+            balance=67.50,
+            next_payment=date(2026, 5, 31),
+        )
+        self.login_as("13659")
+
+        response = self.client.get("/account?section=balance")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('id="balance"', body)
+        self.assertIn("account-target-highlight", body)
+        self.assertIn("Open gym balance", body)
+        self.assertIn("$67.50", body)
+        self.assertIn("31 May 2026", body)
+        self.assertIn("Pay at front desk", body)
+        self.assertIn("Online payment is not available", body)
 
     def test_cancel_before_fixed_term_window_notifies_admin(self):
         today = date.today()

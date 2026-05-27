@@ -451,6 +451,24 @@ tbody tr:hover {
   box-shadow: 0 20px 55px rgba(0, 0, 0, 0.22);
 }
 
+.account-notification-badge {
+  position: absolute;
+  right: 0.18rem;
+  top: 0.18rem;
+  min-width: 1.05rem;
+  height: 1.05rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--dreamz-gold);
+  color: #050816;
+  font-size: 0.65rem;
+  font-weight: 900;
+  line-height: 1;
+  box-shadow: 0 0 0 2px rgba(5, 8, 22, 0.92), 0 6px 16px rgba(245, 158, 11, 0.26);
+}
+
 .account-stack {
   scroll-margin-top: 6rem;
 }
@@ -509,6 +527,11 @@ tbody tr:hover {
 .account-details-card > div {
   border-top: 1px solid rgba(148, 163, 184, 0.14);
   padding: 1rem 1.15rem 1.15rem;
+}
+
+.account-target-highlight {
+  box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.32), 0 22px 60px rgba(245, 158, 11, 0.15);
+  scroll-margin-top: 7rem;
 }
 
 dl {

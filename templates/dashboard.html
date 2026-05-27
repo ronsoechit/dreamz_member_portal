@@ -59,14 +59,6 @@
     {% include "_member_photo.html" %}
   </section>
 
-  {% if payment_status.status != 'up_to_date' %}
-    <section class="payment-alert-card mb-4 rounded border border-yellow-500/50 bg-yellow-500/10 p-4 text-sm text-yellow-200">
-      <div class="font-semibold">{{ payment_status.label }}</div>
-      <div class="mt-1 text-yellow-100">{{ payment_status.reason }}</div>
-      <a class="mt-3 inline-flex rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black" href="{{ url_for('member_account') }}">{{ t('view_payment') }}</a>
-    </section>
-  {% endif %}
-
   <section class="home-primary-card mb-4 rounded-lg border border-yellow-500/30 bg-gray-800/50 p-5">
     <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
       <div>
@@ -147,9 +139,16 @@
       <div>
         <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('membership_status') }}</div>
         <p class="mt-1 text-sm text-gray-300">{{ member.plan_type }} &middot; {{ member.contract_type }}</p>
+        {% if gym_balance > 0 %}
+          <div class="mt-3 flex flex-wrap items-center gap-2 rounded border border-yellow-500/25 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-100">
+            <span class="font-semibold text-yellow-300">{{ t('open_gym_balance') }}</span>
+            <span>{{ '$%.2f'|format(gym_balance) }}</span>
+            <span class="text-yellow-50/80">{{ t('pay_at_front_desk') }}</span>
+          </div>
+        {% endif %}
       </div>
-      <a class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400" href="{{ url_for('member_account') }}">
-        {{ t('view_account') }}
+      <a class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400" href="{{ url_for('member_account', section='balance') if gym_balance > 0 else url_for('member_account') }}">
+        {{ t('view_balance') if gym_balance > 0 else t('view_account') }}
       </a>
     </div>
   </section>

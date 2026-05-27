@@ -25,7 +25,7 @@
     </div>
   </details>
 
-  <details class="dashboard-card account-details-card bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6" open>
+  <details id="membership" class="dashboard-card account-details-card bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6" open>
     <summary>
       <span>{{ t('subscription_details') }}</span>
       <small>{{ member.contract_type }}</small>
@@ -48,21 +48,45 @@
     </div>
   </details>
 
-  <details class="dashboard-card account-details-card bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6" {% if payment_status.status != 'up_to_date' or staff_admin_view %}open{% endif %}>
+  <details id="membership-billing" class="dashboard-card account-details-card bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6" {% if staff_admin_view %}open{% endif %}>
     <summary>
-      <span>{{ t('payment_information') }}</span>
-      <small>{{ '$%.2f'|format(member.balance or 0) }}</small>
+      <span>{{ t('membership_billing') }}</span>
+      <small>{{ '$%.2f'|format(member.billing_amount or 0) }}</small>
     </summary>
     <div class="mt-4">
       {% set bill = (member.billing_amount if member is defined and member.billing_amount is not none else 0) %}
-      {% set bal = member.balance or 0 %}
       {{ field_rows([
+        (t('membership_type'), member.plan_type),
+        (t('contract_type'), member.contract_type),
         (t('billing_amount'), '$%.2f'|format(bill)),
         (t('last_payment'), member.last_payment|format_date),
         (t('last_paid_amount'), '$%.2f'|format(member.last_payment_amount)),
-        (t('next_payment'), member.next_payment|format_date),
-        (t('outstanding_balance'), '$%.2f'|format(bal))
+        (t('next_membership_payment'), member.next_payment|format_date),
+        (t('contract_begin'), member.start_date|format_date or t('not_available')),
+        (t('contract_end'), contract_end|trim)
       ]) }}
+    </div>
+  </details>
+
+  <details id="balance" class="dashboard-card account-details-card bg-gray-800 bg-opacity-40 border {% if account_section == 'balance' %}account-target-highlight border-yellow-500/70{% else %}border-gray-700{% endif %} rounded-lg p-6" {% if gym_balance > 0 or account_section == 'balance' or staff_admin_view %}open{% endif %}>
+    <summary>
+      <span>{{ t('gym_balance') }}</span>
+      <small>{{ '$%.2f'|format(gym_balance) if gym_balance > 0 else t('no_open_gym_balance') }}</small>
+    </summary>
+    <div class="mt-4">
+      {{ field_rows([
+        (t('amount'), '$%.2f'|format(gym_balance)),
+        (t('open_balance_label'), t('open_gym_balance') if gym_balance > 0 else t('no_open_gym_balance')),
+        (t('due_date'), payment_status.get('due_date')|format_date or t('not_available')),
+        (t('payment_method'), t('pay_at_front_desk'))
+      ]) }}
+      <div class="mt-4 rounded-lg border border-yellow-500/25 bg-yellow-500/10 p-4 text-sm leading-6 text-yellow-50">
+        <div class="font-semibold text-yellow-300">{{ t('gym_balance_frontdesk_title') }}</div>
+        <p class="mt-1">{{ t('gym_balance_frontdesk_note') }}</p>
+        {% if gym_balance > 0 %}
+          <span class="mt-3 inline-flex rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black">{{ t('pay_at_front_desk') }}</span>
+        {% endif %}
+      </div>
     </div>
   </details>
 
