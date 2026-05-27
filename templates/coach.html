@@ -13,39 +13,46 @@
   </label>
 {% endmacro %}
 
-{% macro required_textarea(name, label, value, placeholder, rows=3) %}
+{% macro required_textarea(name, label, value, placeholder, rows=3, required=True) %}
   <label class="block">
     <span class="text-sm font-semibold text-gray-200">{{ label }}</span>
-    <textarea name="{{ name }}" data-coach-input rows="{{ rows }}" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" placeholder="{{ placeholder }}" required>{{ value or '' }}</textarea>
+    <textarea name="{{ name }}" data-coach-input rows="{{ rows }}" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" placeholder="{{ placeholder }}" {% if required %}required{% endif %}>{{ value or '' }}</textarea>
     <span class="mt-1 block text-xs text-gray-400">{{ t('coach_none_hint') }}</span>
   </label>
 {% endmacro %}
 
 {% block content %}
 {% set coach_complete = profile and completion == 100 %}
-<div class="mb-5">
-  <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('my_coach') }}</div>
-  <h2 class="mt-1 text-2xl font-semibold">{{ t('coach_title') }}</h2>
-  <p class="mt-2 max-w-4xl text-sm leading-6 text-gray-300">{{ t('coach_ready_intro') if coach_complete else t('coach_intro') }}</p>
-</div>
-
-{% if coach_complete %}
-  <div class="mb-4 flex flex-col gap-3 rounded-lg border border-green-500/30 bg-green-500/10 p-4 md:flex-row md:items-center md:justify-between">
-    <div>
-      <div class="text-xs font-semibold uppercase tracking-wide text-green-200">{{ t('coach_profile_status') }}</div>
-      <div class="mt-1 text-sm leading-6 text-green-50/90">{{ t('coach_profile_status_ready_intro') }}</div>
+<div class="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+  <div>
+    <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('my_coach') }}</div>
+    <h2 class="mt-1 text-2xl font-semibold">{{ t('coach_title') }}</h2>
+    <p class="mt-2 max-w-4xl text-sm leading-6 text-gray-300">{{ t('coach_ready_intro') if coach_complete else t('coach_intro') }}</p>
+    <div class="mt-3 inline-flex flex-wrap items-center gap-2 rounded-full border border-gray-700 bg-gray-900/70 px-3 py-1 text-xs text-gray-200">
+      <span class="font-semibold text-green-200">{{ display_name }}</span>
+      <span class="text-gray-500">#{{ member.member_id }}</span>
     </div>
-    <div class="flex flex-wrap items-center gap-3">
-      <div class="rounded border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-center">
-        <div class="text-xl font-semibold text-yellow-300">{{ completion }}%</div>
-        <div class="text-[11px] text-yellow-100/70">{{ t('coach_profile_complete') }}</div>
-      </div>
+  </div>
+  {% if coach_complete %}
+    <div class="flex flex-wrap gap-2">
       <button type="button" class="rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400" data-edit-coach>
         {{ t('coach_profile_edit') }}
       </button>
       <a class="rounded border border-gray-700 bg-gray-800 px-4 py-3 text-sm font-semibold text-yellow-300 transition hover:border-yellow-400 hover:bg-gray-800" href="{{ url_for('dashboard', id=member.member_id) }}">
         {{ t('back_to_dashboard') }}
       </a>
+    </div>
+  {% endif %}
+</div>
+
+{% if coach_complete %}
+  <div class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-green-500/20 bg-green-500/5 px-4 py-3">
+    <div class="text-sm text-green-50/90">
+      <span class="font-semibold uppercase tracking-wide text-green-200">{{ t('coach_profile_status') }}</span>
+      <span class="ml-2">{{ t('coach_profile_status_ready_intro') }}</span>
+    </div>
+    <div class="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-1 text-sm font-semibold text-yellow-200">
+      {{ completion }}% {{ t('coach_profile_complete') }}
     </div>
   </div>
   <section class="mb-5 grid gap-3 lg:grid-cols-[1.2fr_1fr_1fr]">
@@ -137,6 +144,9 @@
         </select>
       </label>
       {{ option_select('training_place', t('coach_training_place'), coach_training_places, profile.training_place if profile else '', 'place') }}
+      <div class="md:col-span-2">
+        {{ required_textarea('home_equipment', t('coach_home_equipment'), profile.home_equipment if profile else '', t('coach_home_equipment_placeholder'), rows=2, required=False) }}
+      </div>
     </div>
   </section>
 
@@ -203,9 +213,10 @@
         <p class="mt-2 text-sm leading-6 text-green-50/90">{{ t('coach_plan_focus_intro') }}</p>
       </div>
     </div>
-    <div class="mt-5 grid gap-2 sm:grid-cols-4" role="tablist" aria-label="{{ t('coach_plan_focus_title') }}">
+    <div class="mt-5 grid gap-2 sm:grid-cols-5" role="tablist" aria-label="{{ t('coach_plan_focus_title') }}">
       <button type="button" data-coach-view="training" class="rounded border border-yellow-400 bg-yellow-500 px-3 py-3 text-sm font-semibold text-black transition">{{ t('coach_plan_training_title') }}</button>
       <button type="button" data-coach-view="nutrition" class="rounded border border-gray-700 bg-gray-950 px-3 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">{{ t('coach_plan_nutrition_title') }}</button>
+      <button type="button" data-coach-view="progress" class="rounded border border-gray-700 bg-gray-950 px-3 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">{{ t('coach_progress_title') }}</button>
       <button type="button" data-coach-view="history" class="rounded border border-gray-700 bg-gray-950 px-3 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">{{ t('coach_history_title') }}</button>
       <button type="button" data-coach-view="chat" class="rounded border border-gray-700 bg-gray-950 px-3 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">{{ t('coach_chat_thread_title') }}</button>
     </div>
@@ -218,6 +229,87 @@
               <h4 class="text-lg font-semibold text-yellow-200">{{ training_section.title }}</h4>
               <p class="mt-1 text-sm text-yellow-50/80">{{ t('coach_plan_training_intro') }}</p>
             </div>
+            <button type="button" data-toggle-activity-log class="rounded border border-green-400/40 px-3 py-2 text-sm font-semibold text-green-100 transition hover:bg-green-500 hover:text-black">
+              {{ t('coach_log_extra_activity') }}
+            </button>
+          </div>
+        </div>
+        {% if training_calendar %}
+          <div class="border-b border-gray-700 bg-gray-900/70 p-4">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h5 class="font-semibold text-green-200">{{ t('coach_calendar_title') }}</h5>
+                <p class="mt-1 text-sm text-gray-300">{{ t('coach_calendar_intro') }}</p>
+              </div>
+              <div class="text-xs font-semibold text-yellow-200">{{ training_calendar.week_start|format_date('%d/%m') }} - {{ training_calendar.week_end|format_date('%d/%m') }}</div>
+            </div>
+            <div class="mt-4 grid gap-2 sm:grid-cols-7">
+              {% for day in training_calendar.days %}
+                <div class="min-h-28 rounded-lg border p-3 {% if day.status == 'done' %}border-green-400/50 bg-green-500/10{% elif day.status == 'planned' %}border-yellow-400/50 bg-yellow-500/10{% elif day.status == 'activity' %}border-blue-300/40 bg-blue-500/10{% else %}border-gray-700 bg-gray-950/50{% endif %}">
+                  <div class="flex items-center justify-between gap-2">
+                    <div class="text-xs font-semibold text-gray-300">{{ day.date|format_date('%a') }}</div>
+                    {% if day.is_today %}<span class="rounded-full bg-yellow-500 px-2 py-0.5 text-[10px] font-semibold text-black">{{ t('coach_calendar_today') }}</span>{% endif %}
+                  </div>
+                  <div class="mt-1 text-lg font-semibold text-white">{{ day.date|format_date('%d') }}</div>
+                  <div class="mt-2 space-y-1 text-xs leading-5">
+                    {% for workout in day.workouts %}
+                      <button type="button" data-open-coach-view="history" class="block w-full rounded bg-green-500/15 px-2 py-1 text-left font-semibold text-green-100">{{ t('coach_calendar_done') }}: {{ workout.focus or t('coach_plan_training_title') }}</button>
+                    {% endfor %}
+                    {% for activity in day.activities %}
+                      <span class="block rounded bg-blue-500/15 px-2 py-1 text-blue-100">{{ activity.activity_type }} - {{ activity.duration_minutes }} {{ t('minutes_short') }}</span>
+                    {% endfor %}
+                    {% if not day.workouts %}
+                      {% for session in day.planned_sessions %}
+                        <button type="button" data-calendar-session="{{ session.number }}" class="block w-full rounded bg-yellow-500/15 px-2 py-1 text-left font-semibold text-yellow-100">{{ t('coach_calendar_planned') }}: {{ session.focus }}</button>
+                      {% endfor %}
+                    {% endif %}
+                    {% if day.status == 'rest' %}
+                      <span class="text-gray-500">{{ t('coach_calendar_rest') }}</span>
+                    {% endif %}
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+            <form class="mt-4 hidden rounded-lg border border-green-400/30 bg-gray-950/60 p-4" data-activity-log-form data-action="{{ url_for('save_coach_activity_log') }}" data-csrf-token="{{ csrf_token() }}">
+              <div class="mb-3 flex items-center justify-between gap-3">
+                <h5 class="font-semibold text-green-200">{{ t('coach_extra_activity_title') }}</h5>
+                <button type="button" data-close-activity-log class="text-sm font-semibold text-yellow-200">{{ t('close') }}</button>
+              </div>
+              <div class="grid gap-3 md:grid-cols-4">
+                <label class="block">
+                  <span class="text-xs font-semibold text-gray-300">{{ t('coach_activity_type') }}</span>
+                  <select data-activity-type class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-2 text-white" required>
+                    <option value="run">{{ t('coach_activity_run') }}</option>
+                    <option value="walk">{{ t('coach_activity_walk') }}</option>
+                    <option value="cycling">{{ t('coach_activity_cycling') }}</option>
+                    <option value="sport">{{ t('coach_activity_sport') }}</option>
+                    <option value="other">{{ t('coach_activity_other') }}</option>
+                  </select>
+                </label>
+                <label class="block">
+                  <span class="text-xs font-semibold text-gray-300">{{ t('coach_activity_date') }}</span>
+                  <input data-activity-date type="date" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-2 text-white" value="{{ training_calendar.today_iso if training_calendar else '' }}" required>
+                </label>
+                <label class="block">
+                  <span class="text-xs font-semibold text-gray-300">{{ t('coach_activity_duration') }}</span>
+                  <input data-activity-duration type="number" min="1" inputmode="numeric" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-2 text-white" required>
+                </label>
+                <label class="block">
+                  <span class="text-xs font-semibold text-gray-300">{{ t('coach_activity_intensity') }}</span>
+                  <input data-activity-intensity type="text" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-2 text-white" placeholder="easy / medium / hard">
+                </label>
+                <label class="block md:col-span-4">
+                  <span class="text-xs font-semibold text-gray-300">{{ t('coach_activity_notes') }}</span>
+                  <textarea data-activity-notes rows="2" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-2 text-white"></textarea>
+                </label>
+              </div>
+              <button type="submit" class="mt-3 rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black transition hover:bg-yellow-400">{{ t('coach_log_activity') }}</button>
+              <p class="mt-2 hidden rounded border p-2 text-sm" data-activity-status></p>
+            </form>
+          </div>
+        {% endif %}
+        <div class="border-b border-yellow-500/20 bg-yellow-500/10 p-4">
+          <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div class="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="{{ training_section.title }}">
               {% for session in training_section["sessions"] %}
                 <button
@@ -234,7 +326,8 @@
         </div>
         <div class="p-4">
           {% for session in training_section["sessions"] %}
-            <article data-session-panel="{{ loop.index0 }}" data-session-number="{{ session.number }}" data-session-focus="{{ session.focus }}" data-session-minutes="{{ session.minutes }}" class="{% if not loop.first %}hidden {% endif %}rounded-lg border border-gray-700 bg-gray-900/80 p-4">
+            {% set session_done_this_week = training_calendar and session.number in training_calendar.completed_session_numbers %}
+            <article data-session-panel="{{ loop.index0 }}" data-session-number="{{ session.number }}" data-session-focus="{{ session.focus }}" data-session-minutes="{{ session.minutes }}" data-session-completed="{{ 'true' if session_done_this_week else 'false' }}" class="{% if not loop.first %}hidden {% endif %}rounded-lg border {% if session_done_this_week %}border-green-400/50 bg-green-500/10{% else %}border-gray-700 bg-gray-900/80{% endif %} p-4">
               <div class="flex items-start justify-between gap-3">
                 <div>
                   <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('coach_plan_session') }} {{ session.number }}</div>
@@ -256,8 +349,8 @@
                   <div class="mt-1 text-gray-300">{{ session.cooldown }}</div>
                 </div>
               </div>
-              <button type="button" data-start-session class="mt-4 w-full rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400 sm:w-auto">
-                {{ t('coach_start_session') }}
+              <button type="button" data-start-session class="mt-4 w-full rounded px-4 py-3 text-sm font-semibold transition sm:w-auto {% if session_done_this_week %}cursor-not-allowed bg-green-500/20 text-green-100{% else %}bg-yellow-500 text-black hover:bg-yellow-400{% endif %}" {% if session_done_this_week %}disabled{% endif %}>
+                {{ t('coach_session_already_done') if session_done_this_week else t('coach_start_session') }}
               </button>
               <div class="mt-4 space-y-3">
                 {% for exercise in session["exercises"] %}
@@ -336,6 +429,69 @@
       </div>
     {% endif %}
     <p data-coach-panel="training" class="mt-5 rounded border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm leading-6 text-yellow-100">{{ t('coach_plan_progress_note') }}</p>
+
+    <section id="coach-progress" data-coach-panel="progress" class="mt-5 hidden rounded-lg border border-green-400/30 bg-gray-950/50 p-4">
+      <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h4 class="text-lg font-semibold text-green-200">{{ t('coach_progress_title') }}</h4>
+          <p class="mt-1 text-sm leading-6 text-gray-300">{{ t('coach_progress_intro') }}</p>
+        </div>
+      </div>
+      <form class="mt-4 rounded-lg border border-gray-700 bg-gray-900/70 p-4" method="post" action="{{ url_for('save_coach_progress') }}" enctype="multipart/form-data" data-loading-form>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="grid gap-3 md:grid-cols-2">
+          <label class="block">
+            <span class="text-xs font-semibold text-gray-300">{{ t('coach_progress_entry_type') }}</span>
+            <select name="entry_type" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 p-3 text-white">
+              <option value="progress">{{ t('coach_progress_type_progress') }}</option>
+              <option value="before">{{ t('coach_progress_type_before') }}</option>
+            </select>
+          </label>
+          <label class="block">
+            <span class="text-xs font-semibold text-gray-300">{{ t('coach_progress_weight') }}</span>
+            <input name="weight_kg" type="number" min="1" step="0.1" inputmode="decimal" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 p-3 text-white" value="{{ profile.weight_kg or '' }}">
+          </label>
+          <label class="block md:col-span-2">
+            <span class="text-xs font-semibold text-gray-300">{{ t('coach_progress_photo') }}</span>
+            <input name="photo" type="file" accept="image/jpeg,image/png,image/webp" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 p-3 text-white">
+          </label>
+          <label class="block md:col-span-2">
+            <span class="text-xs font-semibold text-gray-300">{{ t('coach_progress_notes') }}</span>
+            <textarea name="notes" rows="3" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 p-3 text-white" placeholder="{{ t('coach_progress_notes_placeholder') }}"></textarea>
+          </label>
+        </div>
+        <button type="submit" class="mt-4 w-full rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400 sm:w-auto" data-loading-text="{{ t('saving') }}">
+          {{ t('coach_progress_save') }}
+        </button>
+      </form>
+      <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {% for entry in progress_entries %}
+          <article class="overflow-hidden rounded-lg border border-gray-700 bg-gray-900/70">
+            {% if entry.photo_path %}
+              <img src="{{ url_for('coach_progress_photo', entry_id=entry.id) }}" alt="{{ t('coach_progress_title') }}" class="h-56 w-full object-cover">
+            {% endif %}
+            <div class="p-3">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">
+                    {{ t('coach_progress_type_before') if entry.entry_type == 'before' else t('coach_progress_type_progress') }}
+                  </div>
+                  <div class="mt-1 text-sm text-gray-400">{{ entry.created_at|format_date('%d/%m/%Y %H:%M') }}</div>
+                </div>
+                {% if entry.weight_kg %}
+                  <div class="rounded-full border border-green-400/30 bg-green-500/10 px-3 py-1 text-sm font-semibold text-green-100">{{ '%.1f'|format(entry.weight_kg) }} kg</div>
+                {% endif %}
+              </div>
+              {% if entry.notes %}
+                <p class="mt-3 text-sm leading-6 text-gray-200">{{ entry.notes }}</p>
+              {% endif %}
+            </div>
+          </article>
+        {% else %}
+          <div class="rounded border border-gray-700 bg-gray-900/70 p-4 text-sm text-gray-300">{{ t('coach_progress_empty') }}</div>
+        {% endfor %}
+      </div>
+    </section>
 
     <section id="coach-history" data-coach-panel="history" class="mt-5 hidden rounded-lg border border-gray-700 bg-gray-950/50 p-4">
       <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
@@ -558,6 +714,8 @@
         setCoachView(link.dataset.openCoachView || "training");
       });
     });
+    const requestedCoachView = new URLSearchParams(window.location.search).get("view");
+    if (requestedCoachView) setCoachView(requestedCoachView, { scroll: false });
 
     const appendCoachMessage = (actor, message) => {
       const thread = document.querySelector("[data-coach-chat-thread]");
@@ -602,6 +760,64 @@
 
       tabs.forEach((tab) => {
         tab.addEventListener("click", () => activateSession(Number(tab.dataset.sessionTab || 0)));
+      });
+      plan.querySelectorAll("[data-calendar-session]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const sessionNumber = Number(button.dataset.calendarSession || 1);
+          const sessionIndex = panels.findIndex((panel) => Number(panel.dataset.sessionNumber || 0) === sessionNumber);
+          activateSession(sessionIndex >= 0 ? sessionIndex : 0);
+          panels[sessionIndex >= 0 ? sessionIndex : 0]?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      });
+
+      const activityForm = plan.querySelector("[data-activity-log-form]");
+      plan.querySelector("[data-toggle-activity-log]")?.addEventListener("click", () => {
+        activityForm?.classList.toggle("hidden");
+        activityForm?.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+      plan.querySelector("[data-close-activity-log]")?.addEventListener("click", () => {
+        activityForm?.classList.add("hidden");
+      });
+      activityForm?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const status = activityForm.querySelector("[data-activity-status]");
+        const button = activityForm.querySelector('button[type="submit"]');
+        const payload = {
+          activityType: activityForm.querySelector("[data-activity-type]")?.value || "",
+          activityDate: activityForm.querySelector("[data-activity-date]")?.value || "",
+          durationMinutes: activityForm.querySelector("[data-activity-duration]")?.value || "",
+          intensity: activityForm.querySelector("[data-activity-intensity]")?.value || "",
+          notes: activityForm.querySelector("[data-activity-notes]")?.value || "",
+        };
+        if (status) {
+          status.className = "mt-2 rounded border border-yellow-500/40 bg-yellow-500/10 p-2 text-sm text-yellow-100";
+          status.textContent = "{{ t('saving') }}";
+          status.classList.remove("hidden");
+        }
+        if (button) button.disabled = true;
+        try {
+          const response = await fetch(activityForm.dataset.action || "", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-CSRF-Token": activityForm.dataset.csrfToken || "",
+            },
+            body: JSON.stringify(payload),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(result.message || "{{ t('coach_activity_save_error') }}");
+          if (status) {
+            status.className = "mt-2 rounded border border-green-500/40 bg-green-500/10 p-2 text-sm text-green-100";
+            status.textContent = result.message || "{{ t('coach_activity_saved') }}";
+          }
+          window.setTimeout(() => window.location.reload(), 700);
+        } catch (error) {
+          if (status) {
+            status.className = "mt-2 rounded border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-100";
+            status.textContent = error.message || "{{ t('coach_activity_save_error') }}";
+          }
+          if (button) button.disabled = false;
+        }
       });
 
       plan.querySelectorAll("[data-session-panel]").forEach((panel) => {
@@ -662,6 +878,12 @@
               reply.innerHTML = renderCoachText(result.coach_reply);
               saveStatus.after(reply);
               appendCoachMessage("coach", result.coach_reply);
+            }
+            const startButton = panel.querySelector("[data-start-session]");
+            if (startButton) {
+              startButton.disabled = true;
+              startButton.textContent = "{{ t('coach_session_already_done') }}";
+              startButton.className = "mt-4 w-full cursor-not-allowed rounded bg-green-500/20 px-4 py-3 text-sm font-semibold text-green-100 transition sm:w-auto";
             }
           } catch (error) {
             if (saveStatus) saveStatus.textContent = error.message || "{{ t('coach_workout_save_error') }}";

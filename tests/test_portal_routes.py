@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+from io import BytesIO
 import re
 import tempfile
 import unittest
@@ -16,7 +17,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
-from dreamz_portal import CancellationRequest, CoachInteraction, CoachPlan, CoachProfile, CoachWorkoutExerciseLog, CoachWorkoutSession, EmailLog, Member, MemberDocument, MemberLoginCode, app, cancellation_message, db  # noqa: E402
+from dreamz_portal import CancellationRequest, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, EmailLog, Member, MemberDocument, MemberLoginCode, app, cancellation_message, db  # noqa: E402
 
 
 class FakeS3Body:
@@ -33,8 +34,13 @@ class PortalRouteTests(unittest.TestCase):
         self.original_attachments_root = app.config.get("GYM_ASSISTANT_ATTACHMENTS_ROOT")
         self.original_document_cache_root = app.config.get("DOCUMENT_CACHE_ROOT")
         self.original_photos_root = app.config.get("GYM_ASSISTANT_PHOTOS_ROOT")
+        self.original_coach_upload_root = app.config.get("COACH_UPLOAD_ROOT")
+        self.original_coach_force_local_uploads = app.config.get("COACH_FORCE_LOCAL_UPLOADS")
         self.original_coach_ai_mode = app.config.get("COACH_AI_MODE")
         self.original_openai_api_key = app.config.get("OPENAI_API_KEY")
+        self.coach_upload_dir = tempfile.TemporaryDirectory()
+        app.config["COACH_UPLOAD_ROOT"] = self.coach_upload_dir.name
+        app.config["COACH_FORCE_LOCAL_UPLOADS"] = True
         app.config["COACH_AI_MODE"] = "fallback"
         app.config["OPENAI_API_KEY"] = ""
         self.ctx = app.app_context()
@@ -50,8 +56,11 @@ class PortalRouteTests(unittest.TestCase):
         app.config["GYM_ASSISTANT_ATTACHMENTS_ROOT"] = self.original_attachments_root
         app.config["DOCUMENT_CACHE_ROOT"] = self.original_document_cache_root
         app.config["GYM_ASSISTANT_PHOTOS_ROOT"] = self.original_photos_root
+        app.config["COACH_UPLOAD_ROOT"] = self.original_coach_upload_root
+        app.config["COACH_FORCE_LOCAL_UPLOADS"] = self.original_coach_force_local_uploads
         app.config["COACH_AI_MODE"] = self.original_coach_ai_mode
         app.config["OPENAI_API_KEY"] = self.original_openai_api_key
+        self.coach_upload_dir.cleanup()
 
     def add_member(self, member_id="1206", **overrides):
         data = {
@@ -294,7 +303,10 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Your Dreamz coach plan", body)
         self.assertIn("Your training cockpit", body)
         self.assertIn("Training week", body)
+        self.assertIn("Training calendar", body)
+        self.assertIn("Log extra activity", body)
         self.assertIn("Nutrition focus", body)
+        self.assertIn("Progress", body)
         self.assertIn("Personal notes", body)
         self.assertIn("Training history", body)
         self.assertIn("Coach conversation", body)
@@ -308,6 +320,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Mark this exercise as done before continuing.", body)
         self.assertIn("Bonaire-friendly basics", body)
         self.assertIn("data-save-url", body)
+        self.assertIn("data-activity-log-form", body)
         self.assertIn("data-session-tab", body)
         self.assertIn("data-exercise-toggle", body)
         self.assertIn("Use a controlled weight", body)
@@ -336,6 +349,7 @@ class PortalRouteTests(unittest.TestCase):
                 member_id="13659",
                 language="en",
                 source="openai",
+                plan_version=COACH_PLAN_SCHEMA_VERSION,
                 plan_json=json.dumps(
                     [
                         {
@@ -454,6 +468,87 @@ class PortalRouteTests(unittest.TestCase):
         log = CoachWorkoutExerciseLog.query.filter_by(exercise_name="Leg press").one()
         self.assertEqual(log.weight_used, "50")
         self.assertEqual(log.reps_completed, "12")
+
+    def test_coach_extra_activity_log_can_be_saved(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        db.session.add(CoachPlan(member_id="13659", plan_json="[]"))
+        db.session.commit()
+        self.login_as("13659")
+        with self.client.session_transaction() as browser_session:
+            browser_session["_csrf_token"] = "csrf-test-token"
+
+        response = self.client.post(
+            "/coach/activity-log",
+            json={
+                "activityType": "run",
+                "activityDate": date.today().isoformat(),
+                "durationMinutes": 30,
+                "intensity": "medium",
+                "notes": "Outdoor run",
+            },
+            headers={"X-CSRF-Token": "csrf-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(CoachActivityLog.query.filter_by(member_id="13659").count(), 1)
+        self.assertEqual(CoachInteraction.query.filter_by(member_id="13659", category="activity_log").count(), 1)
+        self.assertEqual(CoachPlan.query.filter_by(member_id="13659").count(), 0)
+        activity = CoachActivityLog.query.filter_by(member_id="13659").one()
+        self.assertEqual(activity.activity_type, "run")
+        self.assertEqual(activity.duration_minutes, 30)
+
+    def test_coach_progress_entry_can_be_saved(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        db.session.add(
+            CoachProfile(
+                member_id="13659",
+                primary_goal="build_muscle",
+                experience_level="intermediate",
+                training_days=2,
+                session_minutes=45,
+                training_place="dreamz_gym",
+                height_cm=165,
+                weight_kg=68,
+                injuries="none",
+                nutrition_goal="muscle_gain",
+                dietary_preferences="none",
+                allergies="none",
+            )
+        )
+        db.session.add(CoachPlan(member_id="13659", plan_json="[]"))
+        db.session.commit()
+        self.login_as("13659")
+
+        response = self.client.post(
+            "/coach/progress",
+            data=self.csrf_form_data(
+                entry_type="before",
+                weight_kg="84.5",
+                notes="Starting point",
+                photo=(BytesIO(b"fake-image-bytes"), "before.jpg"),
+            ),
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/coach?view=progress", response.headers["Location"])
+        progress = CoachProgressEntry.query.filter_by(member_id="13659").one()
+        self.assertEqual(progress.entry_type, "before")
+        self.assertEqual(progress.weight_kg, 84.5)
+        self.assertTrue(Path(progress.photo_path).exists())
+        self.assertEqual(CoachInteraction.query.filter_by(member_id="13659", category="progress_checkin").count(), 1)
+        self.assertEqual(CoachPlan.query.filter_by(member_id="13659").count(), 0)
+        profile = CoachProfile.query.filter_by(member_id="13659").one()
+        self.assertEqual(profile.weight_kg, 84.5)
+
+        photo_response = self.client.get(f"/coach/progress-photo/{progress.id}")
+        self.assertEqual(photo_response.status_code, 200)
+        self.assertEqual(photo_response.get_data(), b"fake-image-bytes")
+
+        page_response = self.client.get("/coach")
+        body = page_response.get_data(as_text=True)
+        self.assertIn("Starting point", body)
+        self.assertIn("84.5 kg", body)
 
     def test_coach_workout_log_requires_completed_exercises(self):
         self.add_member(member_id="13659", name="Ron Soechit")

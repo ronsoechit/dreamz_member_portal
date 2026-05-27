@@ -33,7 +33,7 @@ from translations import (
     normalize_language,
     translate,
 )
-from storage_backend import is_s3_uri, open_s3_object, parse_s3_uri, s3_client, s3_download_name, s3_object_exists, upload_bytes_to_s3
+from storage_backend import is_s3_uri, open_s3_object, parse_s3_uri, s3_bucket_name, s3_client, s3_download_name, s3_object_exists, upload_bytes_to_s3
 
 import csv
 import secrets
@@ -42,6 +42,7 @@ from urllib.request import Request, urlopen
 from io import StringIO
 from pathlib import Path
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 
 
 def normalize_database_uri(database_uri, default_database_path):
@@ -99,6 +100,11 @@ app.config["DOCUMENT_CACHE_ROOT"] = os.getenv(
     "DOCUMENT_CACHE_ROOT",
     os.path.join(app.instance_path, "generated_documents"),
 )
+app.config["COACH_UPLOAD_ROOT"] = os.getenv(
+    "COACH_UPLOAD_ROOT",
+    os.path.join(app.instance_path, "coach_uploads"),
+)
+app.config["COACH_FORCE_LOCAL_UPLOADS"] = os.getenv("COACH_FORCE_LOCAL_UPLOADS", "").lower() in ("1", "true", "yes")
 db = SQLAlchemy(app)
 
 DOCUMENT_TYPES = {
@@ -293,6 +299,7 @@ class CoachProfile(db.Model):
     training_days = db.Column(db.Integer)
     session_minutes = db.Column(db.Integer)
     training_place = db.Column(db.String)
+    home_equipment = db.Column(db.Text)
     height_cm = db.Column(db.Float)
     weight_kg = db.Column(db.Float)
     injuries = db.Column(db.Text)
@@ -312,6 +319,30 @@ class CoachWorkoutSession(db.Model):
     language = db.Column(db.String, default=DEFAULT_LANGUAGE)
     started_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
     completed_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+
+
+class CoachActivityLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.String, nullable=False, index=True)
+    activity_type = db.Column(db.String, nullable=False)
+    activity_date = db.Column(db.Date, nullable=False, index=True)
+    duration_minutes = db.Column(db.Integer)
+    intensity = db.Column(db.String)
+    notes = db.Column(db.Text)
+    language = db.Column(db.String, default=DEFAULT_LANGUAGE)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+
+
+class CoachProgressEntry(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.String, nullable=False, index=True)
+    entry_type = db.Column(db.String, default="progress", nullable=False)
+    weight_kg = db.Column(db.Float)
+    photo_path = db.Column(db.String)
+    photo_mimetype = db.Column(db.String)
+    notes = db.Column(db.Text)
+    language = db.Column(db.String, default=DEFAULT_LANGUAGE)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
 
 
 class CoachWorkoutExerciseLog(db.Model):
@@ -347,6 +378,7 @@ class CoachPlan(db.Model):
     member_id = db.Column(db.String, unique=True, nullable=False, index=True)
     language = db.Column(db.String, default=DEFAULT_LANGUAGE)
     source = db.Column(db.String, default="fallback")
+    plan_version = db.Column(db.String, default="2026-05-26b")
     plan_json = db.Column(db.Text, nullable=False)
     prompt_context = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
@@ -363,6 +395,7 @@ DEFAULT_SETTINGS = {
 DEFAULT_PORTAL_TIMEZONE_OFFSET_HOURS = -4
 STALE_SYNC_RUN_MINUTES = 15
 LOGIN_CODE_RESEND_COOLDOWN_SECONDS = 60
+COACH_PLAN_SCHEMA_VERSION = "2026-05-26b"
 
 
 def portal_timezone():
@@ -427,6 +460,8 @@ def ensure_runtime_schema():
     ensure_sqlite_model_column("email_log", "reviewed_at", "DATETIME")
     ensure_sqlite_model_column("email_log", "reviewed_by", "VARCHAR")
     ensure_model_column("sync_run", "change_summary", "TEXT")
+    ensure_model_column("coach_profile", "home_equipment", "TEXT")
+    ensure_model_column("coach_plan", "plan_version", "VARCHAR")
     db.create_all()
     seed_default_settings()
     seed_default_staff_users()
@@ -1323,6 +1358,7 @@ def coach_profile_completion(profile):
         profile.training_days,
         profile.session_minutes,
         profile.training_place,
+        profile.home_equipment if profile.training_place in ("home", "both") else "not applicable",
         profile.height_cm,
         profile.weight_kg,
         profile.injuries,
@@ -1347,6 +1383,8 @@ def coach_profile_missing_fields(profile_data):
         "dietary_preferences",
         "allergies",
     ]
+    if profile_data.get("training_place") in ("home", "both"):
+        required_fields.append("home_equipment")
     return [field for field in required_fields if profile_data.get(field) in (None, "")]
 
 
@@ -1466,6 +1504,7 @@ def coach_personal_plan(profile, language=None):
 
     habits_items = [
         translated_text("coach_plan_train_at", language, place=coach_label("place", profile.training_place, language)),
+        translated_text("coach_plan_home_equipment", language, equipment=profile.home_equipment or translated_text("not_available", language)),
         translated_text("coach_plan_preferences", language, preferences=profile.dietary_preferences or translated_text("not_available", language)),
         translated_text("coach_plan_limitations", language, limitations=profile.injuries or translated_text("not_available", language)),
         translated_text("coach_plan_allergies", language, allergies=profile.allergies or translated_text("not_available", language)),
@@ -1627,9 +1666,10 @@ def generate_openai_coach_plan(member, profile, fallback_plan, language=None):
     context = coach_context_summary(member, profile)
     prompt = (
         "You create the Dreamz Fitness member coach plan. Return ONLY valid JSON, no markdown and no prose outside JSON. "
-        "Do not mention AI. Personalize the plan to the profile, goal, experience, schedule, injuries, preferences and recent workout history. "
+        "Do not mention AI. Personalize the plan to the profile, goal, experience, schedule, injuries, available home equipment, preferences and recent workout history. "
         "Use safe, practical exercise selection for Dreamz Fitness or the selected training place. "
-        "Nutrition must be realistic for Bonaire: budget-aware, common supermarket foods, simple repeatable meals, enough protein, and respect allergies/preferences. "
+        "If training place is both, split or clearly adapt the sessions for Dreamz Fitness and home. If training place is home, use only the listed home equipment; if none is listed, use bodyweight and simple household-safe options. "
+        "Nutrition must be realistic for Bonaire: budget-aware, common supermarket foods, simple repeatable meals, enough protein. Allergies and foods to avoid are strict constraints: never suggest those foods or close substitutes. "
         "For injuries or medical limitations, adjust exercise choices and intensity conservatively. "
         "Use the member selected language for every visible value. "
         "The number of sessions must match the fallback sessions. Each session should fit the requested minutes including warm-up and cool-down. "
@@ -1676,7 +1716,7 @@ def coach_plan_for_member(member, profile, language=None, force=False):
 
     fallback_plan = coach_personal_plan(profile, language=language)
     record = CoachPlan.query.filter_by(member_id=member.member_id).first()
-    if record and not force:
+    if record and not force and record.language == language and record.plan_version == COACH_PLAN_SCHEMA_VERSION:
         stored = stored_coach_plan(record)
         if stored:
             return stored
@@ -1691,6 +1731,7 @@ def coach_plan_for_member(member, profile, language=None, force=False):
         record = CoachPlan(member_id=member.member_id)
     record.language = language
     record.source = source
+    record.plan_version = COACH_PLAN_SCHEMA_VERSION
     record.plan_json = json.dumps(plan, ensure_ascii=False)
     record.prompt_context = context or coach_context_summary(member, profile)
     record.updated_at = datetime.now()
@@ -1720,6 +1761,30 @@ def recent_coach_workout_summary(member_id, limit=3):
             for log in logs
         )
         summaries.append(f"{workout.completed_at.date()}: session {workout.session_number or '-'} {workout.focus or ''}; {exercise_text}")
+    activities = (
+        CoachActivityLog.query
+        .filter_by(member_id=member_id)
+        .order_by(CoachActivityLog.activity_date.desc(), CoachActivityLog.id.desc())
+        .limit(limit)
+        .all()
+    )
+    for activity in activities:
+        summaries.append(
+            f"{activity.activity_date}: extra activity {activity.activity_type}, "
+            f"{activity.duration_minutes or '-'} min, intensity={activity.intensity or '-'}, notes={activity.notes or '-'}"
+        )
+    progress_entries = (
+        CoachProgressEntry.query
+        .filter_by(member_id=member_id)
+        .order_by(CoachProgressEntry.created_at.desc(), CoachProgressEntry.id.desc())
+        .limit(limit)
+        .all()
+    )
+    for entry in progress_entries:
+        summaries.append(
+            f"{entry.created_at.date()}: progress check-in {entry.entry_type}, "
+            f"weight={entry.weight_kg or '-'} kg, photo={'yes' if entry.photo_path else 'no'}, notes={entry.notes or '-'}"
+        )
     return summaries
 
 
@@ -1749,9 +1814,106 @@ def coach_workout_history(member_id, limit=6):
     return history
 
 
+def coach_progress_history(member_id, limit=12):
+    return (
+        CoachProgressEntry.query
+        .filter_by(member_id=member_id)
+        .order_by(CoachProgressEntry.created_at.desc(), CoachProgressEntry.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+
 def coach_latest_workout(member_id):
     history = coach_workout_history(member_id, limit=1)
     return history[0] if history else None
+
+
+def coach_week_schedule_offsets(training_days):
+    if training_days <= 2:
+        return [0, 3]
+    if training_days == 3:
+        return [0, 2, 4]
+    if training_days == 4:
+        return [0, 1, 3, 5]
+    if training_days == 5:
+        return [0, 1, 2, 4, 5]
+    return [0, 1, 2, 3, 4, 5]
+
+
+def coach_week_calendar(member_id, profile, plan, language=None):
+    language = language or current_language()
+    today = local_datetime(datetime.now()).date()
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+    sessions = (plan[0].get("sessions") if plan else []) or []
+    offsets = coach_week_schedule_offsets(profile.training_days or len(sessions) or 2)
+    planned_by_date = {}
+    for index, session_plan in enumerate(sessions):
+        offset = offsets[index % len(offsets)]
+        planned_by_date.setdefault(week_start + timedelta(days=offset), []).append(session_plan)
+
+    workouts = (
+        CoachWorkoutSession.query
+        .filter_by(member_id=member_id)
+        .filter(CoachWorkoutSession.completed_at >= datetime.combine(week_start, datetime.min.time()))
+        .filter(CoachWorkoutSession.completed_at <= datetime.combine(week_end, datetime.max.time()))
+        .order_by(CoachWorkoutSession.completed_at.asc(), CoachWorkoutSession.id.asc())
+        .all()
+    )
+    activities = (
+        CoachActivityLog.query
+        .filter_by(member_id=member_id)
+        .filter(CoachActivityLog.activity_date >= week_start)
+        .filter(CoachActivityLog.activity_date <= week_end)
+        .order_by(CoachActivityLog.activity_date.asc(), CoachActivityLog.id.asc())
+        .all()
+    )
+
+    workouts_by_date = {}
+    completed_session_numbers = set()
+    for workout in workouts:
+        local_day = local_datetime(workout.completed_at).date()
+        workouts_by_date.setdefault(local_day, []).append(workout)
+        if workout.session_number:
+            completed_session_numbers.add(workout.session_number)
+
+    activities_by_date = {}
+    for activity in activities:
+        activities_by_date.setdefault(activity.activity_date, []).append(activity)
+
+    days = []
+    for offset in range(7):
+        day = week_start + timedelta(days=offset)
+        day_workouts = workouts_by_date.get(day, [])
+        day_activities = activities_by_date.get(day, [])
+        planned_sessions = planned_by_date.get(day, [])
+        if day_workouts:
+            status = "done"
+        elif day_activities:
+            status = "activity"
+        elif planned_sessions:
+            status = "planned"
+        else:
+            status = "rest"
+        days.append(
+            {
+                "date": day,
+                "is_today": day == today,
+                "status": status,
+                "planned_sessions": planned_sessions,
+                "workouts": day_workouts,
+                "activities": day_activities,
+            }
+        )
+
+    return {
+        "week_start": week_start,
+        "week_end": week_end,
+        "today_iso": today.isoformat(),
+        "days": days,
+        "completed_session_numbers": completed_session_numbers,
+    }
 
 
 def coach_next_session_context(profile, member_id, language=None):
@@ -1794,11 +1956,27 @@ def coach_recent_interactions(member_id, limit=8):
 def coach_context_summary(member, profile):
     if not profile:
         return f"Member {member.member_id}: no coach profile yet."
+    latest_progress = (
+        CoachProgressEntry.query
+        .filter_by(member_id=member.member_id)
+        .order_by(CoachProgressEntry.created_at.desc(), CoachProgressEntry.id.desc())
+        .first()
+    )
+    progress_text = ""
+    if latest_progress:
+        progress_text = (
+            f", latest_progress_type={latest_progress.entry_type}, "
+            f"latest_progress_weight={latest_progress.weight_kg or 'unknown'}, "
+            f"latest_progress_notes={latest_progress.notes or 'none'}, "
+            f"latest_progress_photo={'yes' if latest_progress.photo_path else 'no'}"
+        )
     return (
         f"Member {member.member_id}, goal={profile.primary_goal}, experience={profile.experience_level}, "
         f"days={profile.training_days}, minutes={profile.session_minutes}, place={profile.training_place}, "
         f"height={profile.height_cm}, weight={profile.weight_kg}, injuries={profile.injuries or 'none'}, "
-        f"nutrition={profile.nutrition_goal}, food={profile.dietary_preferences or 'none'}, allergies={profile.allergies or 'none'}"
+        f"nutrition={profile.nutrition_goal}, food={profile.dietary_preferences or 'none'}, "
+        f"allergies={profile.allergies or 'none'}, home_equipment={profile.home_equipment or 'none'}"
+        f"{progress_text}"
     )
 
 
@@ -3655,6 +3833,37 @@ def storage_file_response(uri, download_name=None, mimetype=None, as_attachment=
     return Response(body.iter_chunks(), mimetype=mimetype, headers=headers)
 
 
+def allowed_progress_photo(filename):
+    extension = Path(filename or "").suffix.lower()
+    return extension in {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def save_coach_progress_photo(member_id, uploaded_file):
+    if not uploaded_file or not uploaded_file.filename:
+        return None
+    filename = secure_filename(uploaded_file.filename)
+    if not allowed_progress_photo(filename):
+        abort(400, translated_text("coach_progress_photo_invalid", current_language()))
+
+    extension = Path(filename).suffix.lower() or ".jpg"
+    key = f"coach-progress/{member_id}/{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(4)}{extension}"
+    data = uploaded_file.read()
+    if not data:
+        abort(400, translated_text("coach_progress_photo_required", current_language()))
+    if len(data) > 8 * 1024 * 1024:
+        abort(400, translated_text("coach_progress_photo_too_large", current_language()))
+
+    content_type = uploaded_file.mimetype or "application/octet-stream"
+    if s3_bucket_name() and not app.config.get("COACH_FORCE_LOCAL_UPLOADS"):
+        return upload_bytes_to_s3(data, key, content_type=content_type)
+
+    root = Path(app.config["COACH_UPLOAD_ROOT"]).resolve()
+    destination = root / key
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(data)
+    return str(destination)
+
+
 @app.get("/documents/<document_type>")
 def view_document(document_type):
     member, redirect_response = current_member_or_redirect()
@@ -3769,6 +3978,24 @@ def member_photo(member_id):
 
     return send_file(resolved_path)
 
+
+@app.get("/coach/progress-photo/<int:entry_id>")
+def coach_progress_photo(entry_id):
+    entry = CoachProgressEntry.query.get_or_404(entry_id)
+    if not is_staff_user() and session.get("member_id") != entry.member_id:
+        abort(404)
+
+    if is_s3_uri(entry.photo_path):
+        return storage_file_response(entry.photo_path, mimetype=entry.photo_mimetype or "image/jpeg")
+
+    root = Path(app.config["COACH_UPLOAD_ROOT"]).resolve()
+    path = Path(entry.photo_path or "").resolve()
+    if not entry.photo_path or not path.exists() or not path.is_file() or not is_path_under_root(path, root):
+        abort(404, "Progress photo not found.")
+
+    return send_file(path, mimetype=entry.photo_mimetype or "image/jpeg")
+
+
 def _legacy_in_cancel_window_unused(member):
     """Retourneert (show_button, window_end_date)"""
     if member.contract_type not in ["6-months", "12-months"] or not member.signup_date:
@@ -3821,6 +4048,7 @@ def member_coach():
             "training_days": parse_optional_int(request.form.get("training_days")),
             "session_minutes": parse_optional_int(request.form.get("session_minutes")),
             "training_place": request.form.get("training_place", "").strip() or None,
+            "home_equipment": request.form.get("home_equipment", "").strip() or None,
             "height_cm": parse_optional_float(request.form.get("height_cm")),
             "weight_kg": parse_optional_float(request.form.get("weight_kg")),
             "injuries": request.form.get("injuries", "").strip() or None,
@@ -3845,9 +4073,11 @@ def member_coach():
         return redirect(url_for("member_coach"))
 
     personal_plan = coach_plan_for_member(member, profile) if profile else None
+    training_calendar = coach_week_calendar(member.member_id, profile, personal_plan) if profile and personal_plan else None
     return render_template(
         "coach.html",
         member=member,
+        display_name=display_member_name(member.name),
         profile=profile,
         completion=coach_profile_completion(profile),
         starter_guidance=coach_starter_guidance(profile),
@@ -3860,9 +4090,66 @@ def member_coach():
         coach_nutrition_goals=COACH_NUTRITION_GOALS,
         coach_label=coach_label,
         workout_history=coach_workout_history(member.member_id),
+        progress_entries=coach_progress_history(member.member_id),
+        training_calendar=training_calendar,
         coach_interactions=coach_recent_interactions(member.member_id),
         coach_next_session=coach_next_session_context(profile, member.member_id),
     )
+
+
+@app.post("/coach/progress")
+def save_coach_progress():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    validate_csrf_token()
+
+    entry_type = request.form.get("entry_type", "progress").strip() or "progress"
+    if entry_type not in {"before", "progress"}:
+        entry_type = "progress"
+    weight_kg = parse_optional_float(request.form.get("weight_kg"))
+    notes = request.form.get("notes", "").strip() or None
+    photo = request.files.get("photo")
+    has_photo = bool(photo and photo.filename)
+    if weight_kg is None and not notes and not has_photo:
+        flash(translated_text("coach_progress_need_input", current_language()), "error")
+        return redirect(url_for("member_coach", view="progress"))
+
+    photo_mimetype = photo.mimetype if has_photo else None
+    photo_path = save_coach_progress_photo(member.member_id, photo) if has_photo else None
+    progress = CoachProgressEntry(
+        member_id=member.member_id,
+        entry_type=entry_type,
+        weight_kg=weight_kg,
+        photo_path=photo_path,
+        photo_mimetype=photo_mimetype,
+        notes=notes,
+        language=current_language(),
+    )
+    db.session.add(progress)
+
+    profile = coach_profile_for_member(member)
+    if profile and weight_kg is not None:
+        profile.weight_kg = weight_kg
+        profile.updated_at = datetime.now()
+
+    context = coach_context_summary(member, profile)
+    save_coach_interaction(
+        member.member_id,
+        "member",
+        (
+            f"Progress check-in: {entry_type}, "
+            f"weight={weight_kg if weight_kg is not None else '-'} kg, "
+            f"photo={'yes' if photo_path else 'no'}, notes={notes or '-'}"
+        ),
+        category="progress_checkin",
+        source="member",
+        context_summary=context,
+    )
+    CoachPlan.query.filter_by(member_id=member.member_id).delete()
+    db.session.commit()
+    flash(translated_text("coach_progress_saved", current_language()))
+    return redirect(url_for("member_coach", view="progress"))
 
 
 @app.route("/coach/workout-log", methods=["POST"])
@@ -3927,6 +4214,51 @@ def save_coach_workout_log():
             "coach_reply": reply,
         }
     )
+
+
+@app.route("/coach/activity-log", methods=["POST"])
+def save_coach_activity_log():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return jsonify({"status": "error", "message": "Login required."}), 401
+    validate_request_csrf_token()
+
+    payload = request.get_json(silent=True) or {}
+    activity_type = str(payload.get("activityType") or "").strip()[:80]
+    activity_date_raw = str(payload.get("activityDate") or "").strip()
+    duration_minutes = parse_optional_int(payload.get("durationMinutes"))
+    intensity = str(payload.get("intensity") or "").strip()[:80]
+    notes = str(payload.get("notes") or "").strip()[:1000]
+    try:
+        activity_date = datetime.strptime(activity_date_raw, "%Y-%m-%d").date()
+    except ValueError:
+        activity_date = None
+
+    if not activity_type or not activity_date or not duration_minutes:
+        return jsonify({"status": "error", "message": translated_text("coach_activity_required", current_language())}), 400
+
+    activity = CoachActivityLog(
+        member_id=member.member_id,
+        activity_type=activity_type,
+        activity_date=activity_date,
+        duration_minutes=duration_minutes,
+        intensity=intensity,
+        notes=notes,
+        language=current_language(),
+    )
+    db.session.add(activity)
+    context = coach_context_summary(member, coach_profile_for_member(member))
+    save_coach_interaction(
+        member.member_id,
+        "member",
+        f"Extra activity logged: {activity_type}, {duration_minutes} min, intensity={intensity or '-'}, notes={notes or '-'}",
+        category="activity_log",
+        source="member",
+        context_summary=context,
+    )
+    CoachPlan.query.filter_by(member_id=member.member_id).delete()
+    db.session.commit()
+    return jsonify({"status": "success", "message": translated_text("coach_activity_saved", current_language())})
 
 
 @app.route("/coach/message", methods=["POST"])
