@@ -310,6 +310,15 @@ class CoachProfile(db.Model):
     nutrition_goal = db.Column(db.String)
     dietary_preferences = db.Column(db.Text)
     allergies = db.Column(db.Text)
+    pregnancy_status = db.Column(db.String, default="not_pregnant")
+    gestational_weeks = db.Column(db.Integer)
+    expected_due_date = db.Column(db.Date)
+    pre_pregnancy_weight_kg = db.Column(db.Float)
+    multiple_pregnancy = db.Column(db.String)
+    provider_cleared_exercise = db.Column(db.String)
+    provider_restrictions = db.Column(db.Text)
+    pregnancy_symptoms = db.Column(db.Text)
+    pregnancy_consent = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
 
@@ -399,7 +408,7 @@ DEFAULT_SETTINGS = {
 DEFAULT_PORTAL_TIMEZONE_OFFSET_HOURS = -4
 STALE_SYNC_RUN_MINUTES = 15
 LOGIN_CODE_RESEND_COOLDOWN_SECONDS = 60
-COACH_PLAN_SCHEMA_VERSION = "2026-05-26b"
+COACH_PLAN_SCHEMA_VERSION = "2026-05-27a"
 
 
 def portal_timezone():
@@ -465,6 +474,15 @@ def ensure_runtime_schema():
     ensure_sqlite_model_column("email_log", "reviewed_by", "VARCHAR")
     ensure_model_column("sync_run", "change_summary", "TEXT")
     ensure_model_column("coach_profile", "home_equipment", "TEXT")
+    ensure_model_column("coach_profile", "pregnancy_status", "VARCHAR")
+    ensure_model_column("coach_profile", "gestational_weeks", "INTEGER")
+    ensure_model_column("coach_profile", "expected_due_date", "DATE")
+    ensure_model_column("coach_profile", "pre_pregnancy_weight_kg", "FLOAT")
+    ensure_model_column("coach_profile", "multiple_pregnancy", "VARCHAR")
+    ensure_model_column("coach_profile", "provider_cleared_exercise", "VARCHAR")
+    ensure_model_column("coach_profile", "provider_restrictions", "TEXT")
+    ensure_model_column("coach_profile", "pregnancy_symptoms", "TEXT")
+    ensure_model_column("coach_profile", "pregnancy_consent", "BOOLEAN")
     ensure_model_column("coach_plan", "plan_version", "VARCHAR")
     ensure_model_column("member", "password_hash", "VARCHAR(512)")
     ensure_model_column("member", "password_set_at", "TIMESTAMP")
@@ -1321,6 +1339,20 @@ COACH_TRAINING_DAYS = [2, 3, 4, 5, 6]
 COACH_SESSION_MINUTES = [30, 45, 60, 75, 90]
 COACH_TRAINING_PLACES = ["dreamz_gym", "home", "both"]
 COACH_NUTRITION_GOALS = ["fat_loss", "muscle_gain", "maintenance", "healthier"]
+PREGNANCY_STATUSES = ["not_pregnant", "pregnant", "prefer_not_to_say"]
+PREGNANCY_MULTIPLE_VALUES = ["no", "yes", "unknown"]
+PREGNANCY_PROVIDER_CLEARANCE_VALUES = ["yes", "no", "unknown"]
+PREGNANCY_WARNING_SYMPTOMS = [
+    "dizziness",
+    "vaginal_bleeding",
+    "chest_pain",
+    "severe_shortness_of_breath",
+    "severe_headache",
+    "painful_contractions",
+    "fluid_leakage",
+    "pelvic_pain",
+    "other",
+]
 COACH_EXERCISE_LIBRARY = {
     "leg_press": ("machine", "3", "10-12", "90 sec", "moderate"),
     "goblet_squat": ("dumbbell", "3", "8-10", "90 sec", "moderate"),
@@ -1371,6 +1403,74 @@ def parse_optional_int(value):
         return None
 
 
+def parse_optional_date(value):
+    value = str(value or "").strip()
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def pregnancy_symptom_list(profile):
+    if not profile or not profile.pregnancy_symptoms:
+        return []
+    try:
+        symptoms = json.loads(profile.pregnancy_symptoms)
+    except (TypeError, ValueError):
+        symptoms = [part.strip() for part in str(profile.pregnancy_symptoms).split(",")]
+    return [symptom for symptom in symptoms if symptom in PREGNANCY_WARNING_SYMPTOMS]
+
+
+def set_pregnancy_symptoms(profile, symptoms):
+    selected = [symptom for symptom in symptoms if symptom in PREGNANCY_WARNING_SYMPTOMS]
+    profile.pregnancy_symptoms = json.dumps(selected) if selected else None
+
+
+def is_pregnant_profile(profile):
+    return bool(profile and profile.pregnancy_status == "pregnant")
+
+
+def pregnancy_trimester(profile):
+    weeks = profile.gestational_weeks if profile else None
+    if not weeks:
+        return None
+    if weeks <= 13:
+        return 1
+    if weeks <= 27:
+        return 2
+    return 3
+
+
+def pregnancy_safety_status(profile):
+    if not is_pregnant_profile(profile):
+        return "not_applicable"
+    if pregnancy_symptom_list(profile):
+        return "warning_symptoms"
+    if profile.provider_cleared_exercise == "no":
+        return "not_cleared"
+    if profile.provider_cleared_exercise == "unknown":
+        return "clearance_unknown"
+    return "active"
+
+
+def pregnancy_context_summary(profile):
+    if not is_pregnant_profile(profile):
+        return f"pregnancy_status={profile.pregnancy_status or 'not_pregnant'}" if profile else "pregnancy_status=unknown"
+    symptoms = pregnancy_symptom_list(profile)
+    trimester = pregnancy_trimester(profile)
+    return (
+        "pregnancy_status=pregnant, "
+        f"gestational_weeks={profile.gestational_weeks}, trimester={trimester or 'unknown'}, "
+        f"expected_due_date={profile.expected_due_date or 'unknown'}, "
+        f"pre_pregnancy_weight={profile.pre_pregnancy_weight_kg or 'unknown'}, current_weight={profile.weight_kg or 'unknown'}, "
+        f"multiple_pregnancy={profile.multiple_pregnancy or 'unknown'}, provider_cleared_exercise={profile.provider_cleared_exercise or 'unknown'}, "
+        f"provider_restrictions={profile.provider_restrictions or 'none'}, warning_symptoms={', '.join(symptoms) if symptoms else 'none'}, "
+        f"consent_to_use_pregnancy_info={bool(profile.pregnancy_consent)}"
+    )
+
+
 def coach_label(key, value, language=None):
     if not value:
         return translated_text("not_available", language or current_language())
@@ -1394,6 +1494,13 @@ def coach_profile_completion(profile):
         profile.dietary_preferences,
         profile.allergies,
     ]
+    if profile.pregnancy_status == "pregnant":
+        fields.extend([
+            profile.gestational_weeks,
+            profile.multiple_pregnancy,
+            profile.provider_cleared_exercise,
+            profile.pregnancy_consent,
+        ])
     return round((sum(1 for field in fields if field not in (None, "")) / len(fields)) * 100)
 
 
@@ -1413,6 +1520,8 @@ def coach_profile_missing_fields(profile_data):
     ]
     if profile_data.get("training_place") in ("home", "both"):
         required_fields.append("home_equipment")
+    if profile_data.get("pregnancy_status") == "pregnant":
+        required_fields.extend(["gestational_weeks", "multiple_pregnancy", "provider_cleared_exercise", "pregnancy_consent"])
     return [field for field in required_fields if profile_data.get(field) in (None, "")]
 
 
@@ -1475,10 +1584,84 @@ def coach_training_focuses(profile):
     return focuses[:days]
 
 
+def coach_pregnancy_safety_plan(profile, language=None):
+    language = language or current_language()
+    status = pregnancy_safety_status(profile)
+    if status == "not_applicable":
+        return None
+
+    title_key = {
+        "warning_symptoms": "coach_pregnancy_safety_warning_title",
+        "not_cleared": "coach_pregnancy_safety_not_cleared_title",
+        "clearance_unknown": "coach_pregnancy_safety_unknown_title",
+        "active": "coach_pregnancy_safety_active_title",
+    }.get(status, "coach_pregnancy_safety_active_title")
+    body_key = {
+        "warning_symptoms": "coach_pregnancy_safety_warning_body",
+        "not_cleared": "coach_pregnancy_safety_not_cleared_body",
+        "clearance_unknown": "coach_pregnancy_safety_unknown_body",
+        "active": "coach_pregnancy_safety_active_body",
+    }.get(status, "coach_pregnancy_safety_active_body")
+    return [
+        {
+            "title": translated_text("coach_plan_training_title", language),
+            "sessions": [
+                {
+                    "number": 1,
+                    "focus": translated_text(title_key, language),
+                    "minutes": profile.session_minutes or 30,
+                    "warmup": translated_text("coach_pregnancy_warmup", language),
+                    "main": translated_text(body_key, language),
+                    "cooldown": translated_text("coach_pregnancy_cooldown", language),
+                    "exercises": [] if status in {"warning_symptoms", "not_cleared"} else [
+                        {
+                            "name": translated_text("coach_pregnancy_mobility", language),
+                            "equipment": translated_text("coach_equipment_bodyweight", language),
+                            "sets": "2",
+                            "reps": "6-8",
+                            "rest": "60 sec",
+                            "load": translated_text("coach_pregnancy_load", language),
+                            "cue": translated_text("coach_pregnancy_mobility_cue", language),
+                        },
+                        {
+                            "name": translated_text("coach_pregnancy_walk", language),
+                            "equipment": translated_text("coach_equipment_cardio", language),
+                            "sets": "1",
+                            "reps": "10-20 min",
+                            "rest": "as needed",
+                            "load": translated_text("coach_pregnancy_talk_test", language),
+                            "cue": translated_text("coach_pregnancy_walk_cue", language),
+                        },
+                    ],
+                }
+            ],
+        },
+        {
+            "title": translated_text("coach_plan_nutrition_title", language),
+            "items": [
+                translated_text("coach_pregnancy_nutrition_no_cutting", language),
+                translated_text("coach_pregnancy_nutrition_balance", language),
+                translated_text("coach_pregnancy_nutrition_provider", language),
+            ],
+        },
+        {
+            "title": translated_text("coach_plan_notes_title", language),
+            "items": [
+                translated_text("coach_pregnancy_safety_notice", language),
+                translated_text("coach_pregnancy_provider_priority", language),
+                pregnancy_context_summary(profile),
+            ],
+        },
+    ]
+
+
 def coach_personal_plan(profile, language=None):
     language = language or current_language()
     if not profile:
         return None
+    pregnancy_plan = coach_pregnancy_safety_plan(profile, language)
+    if pregnancy_plan and pregnancy_safety_status(profile) in {"warning_symptoms", "not_cleared", "clearance_unknown"}:
+        return pregnancy_plan
 
     session_minutes = profile.session_minutes or 45
     sessions = []
@@ -1515,6 +1698,8 @@ def coach_personal_plan(profile, language=None):
             language,
         )
     ]
+    if is_pregnant_profile(profile) and profile.nutrition_goal == "fat_loss":
+        nutrition_items[0] = translated_text("coach_pregnancy_nutrition_no_cutting", language)
     if profile.weight_kg:
         protein_low = round(profile.weight_kg * 1.6)
         protein_high = round(profile.weight_kg * 2.0)
@@ -1529,6 +1714,9 @@ def coach_personal_plan(profile, language=None):
     nutrition_items.append(translated_text("coach_plan_meal_structure", language))
     nutrition_items.append(translated_text("coach_plan_budget_bonaire", language))
     nutrition_items.append(translated_text("coach_plan_local_simple", language))
+    if is_pregnant_profile(profile):
+        nutrition_items.append(translated_text("coach_pregnancy_nutrition_balance", language))
+        nutrition_items.append(translated_text("coach_pregnancy_nutrition_provider", language))
 
     habits_items = [
         translated_text("coach_plan_train_at", language, place=coach_label("place", profile.training_place, language)),
@@ -1537,6 +1725,9 @@ def coach_personal_plan(profile, language=None):
         translated_text("coach_plan_limitations", language, limitations=profile.injuries or translated_text("not_available", language)),
         translated_text("coach_plan_allergies", language, allergies=profile.allergies or translated_text("not_available", language)),
     ]
+    if is_pregnant_profile(profile):
+        habits_items.insert(0, translated_text("coach_pregnancy_summary", language, weeks=profile.gestational_weeks or translated_text("not_available", language), trimester=pregnancy_trimester(profile) or translated_text("not_available", language)))
+        habits_items.insert(1, translated_text("coach_pregnancy_provider_priority", language))
 
     return [
         {
@@ -1689,9 +1880,17 @@ def generate_openai_coach_plan(member, profile, fallback_plan, language=None):
     mode = app.config.get("COACH_AI_MODE", "fallback")
     if not api_key or mode != "openai":
         return None, None
+    if pregnancy_safety_status(profile) in {"warning_symptoms", "not_cleared"}:
+        return None, coach_context_summary(member, profile)
 
     recent_workouts = "\n".join(recent_coach_workout_summary(member.member_id)) or "No previous workouts logged."
     context = coach_context_summary(member, profile)
+    pregnancy_rules = (
+        "Pregnancy safety rules: if pregnancy_status=pregnant, never prescribe aggressive fat loss, cutting, crash diets, max effort, PR attempts, high-impact/contact sport, high fall-risk exercises, overheating, dehydration, or prolonged supine exercises after 16 weeks. "
+        "Use low-to-moderate intensity, talk-test pacing, hydration, safe strength, mobility, posture, breathing and pelvic floor focus. Provider restrictions always override the plan. "
+        "If warning_symptoms are present or provider_cleared_exercise=no, do not generate a workout; advise the member to contact their doctor, midwife or healthcare provider before exercise. "
+        "If provider_cleared_exercise=unknown, keep guidance cautious and low/moderate while advising medical clearance. Distinguish current_weight from pre_pregnancy_weight."
+    )
     prompt = (
         "You create the Dreamz Fitness member coach plan. Return ONLY valid JSON, no markdown and no prose outside JSON. "
         "Do not mention AI. Personalize the plan to the profile, goal, experience, schedule, injuries, available home equipment, preferences and recent workout history. "
@@ -1699,6 +1898,7 @@ def generate_openai_coach_plan(member, profile, fallback_plan, language=None):
         "If training place is both, split or clearly adapt the sessions for Dreamz Fitness and home. If training place is home, use only the listed home equipment; if none is listed, use bodyweight and simple household-safe options. "
         "Nutrition must be realistic for Bonaire: budget-aware, common supermarket foods, simple repeatable meals, enough protein. Allergies and foods to avoid are strict constraints: never suggest those foods or close substitutes. "
         "For injuries or medical limitations, adjust exercise choices and intensity conservatively. "
+        f"{pregnancy_rules} "
         "Use the member selected language for every visible value. "
         "The number of sessions must match the fallback sessions. Each session should fit the requested minutes including warm-up and cool-down. "
         "JSON schema: {"
@@ -2078,7 +2278,8 @@ def coach_context_summary(member, profile):
         f"days={profile.training_days}, minutes={profile.session_minutes}, place={profile.training_place}, "
         f"height={profile.height_cm}, weight={profile.weight_kg}, injuries={profile.injuries or 'none'}, "
         f"nutrition={profile.nutrition_goal}, food={profile.dietary_preferences or 'none'}, "
-        f"allergies={profile.allergies or 'none'}, home_equipment={profile.home_equipment or 'none'}"
+        f"allergies={profile.allergies or 'none'}, home_equipment={profile.home_equipment or 'none'}, "
+        f"{pregnancy_context_summary(profile)}"
         f"{progress_text}"
     )
 
@@ -2099,6 +2300,10 @@ def save_coach_interaction(member_id, actor, message, category="conversation", s
 
 def fallback_coach_reply(member, profile, user_message=None, workout_logs=None, language=None):
     language = language or current_language()
+    if pregnancy_safety_status(profile) in {"warning_symptoms", "not_cleared"}:
+        return translated_text("coach_pregnancy_reply_medical_first", language)
+    if pregnancy_safety_status(profile) == "clearance_unknown":
+        return translated_text("coach_pregnancy_reply_clearance_unknown", language)
     goal = coach_label("goal", profile.primary_goal, language).lower() if profile else translated_text("coach_goal_get_fitter", language).lower()
     if workout_logs:
         completed = [log for log in workout_logs if log.completed]
@@ -2140,6 +2345,7 @@ def generate_coach_reply(member, profile, user_message=None, workout_logs=None, 
         "Be specific about next training actions, weights/reps progression, food choices, recovery and what to log next. "
         "Do not say you are an AI. Do not refer routine questions to Dreamz staff. "
         "For serious red flags such as chest pain, fainting, severe injury, severe dizziness or medical emergencies, tell the member to stop and seek qualified medical help. "
+        "Pregnancy safety rules: if pregnancy_status=pregnant, do not advise aggressive fat loss/cutting, max-effort/PR training, high-impact/contact sport, high fall-risk exercises, overheating, dehydration, or prolonged supine exercises after 16 weeks. Use talk-test moderate intensity, safe strength, mobility, breathing, pelvic floor and hydration guidance. Provider restrictions always override. If warning symptoms are present or provider_cleared_exercise=no, do not give a workout progression; advise contacting doctor/midwife/healthcare provider before exercise. If clearance is unknown, keep advice cautious and low/moderate while recommending clearance. "
         "Use Bonaire-friendly, realistic and budget-aware training and nutrition advice. "
         "Format the reply with short sections and concrete next steps.\n\n"
         f"Language: {language}\n"
@@ -3738,7 +3944,7 @@ def staff_daily_changes():
 
 @app.get("/staff/coach")
 def staff_coach_activity():
-    require_staff_access()
+    require_staff_access(required_role="admin")
     ensure_runtime_schema()
     interactions = (
         CoachInteraction.query
@@ -4231,6 +4437,17 @@ def member_coach():
     profile = coach_profile_for_member(member)
     if request.method == "POST":
         validate_csrf_token()
+        pregnancy_status = request.form.get("pregnancy_status", "not_pregnant").strip() or "not_pregnant"
+        if pregnancy_status not in PREGNANCY_STATUSES:
+            pregnancy_status = "not_pregnant"
+        gestational_weeks = parse_optional_int(request.form.get("gestational_weeks"))
+        multiple_pregnancy = request.form.get("multiple_pregnancy", "unknown").strip() or "unknown"
+        if multiple_pregnancy not in PREGNANCY_MULTIPLE_VALUES:
+            multiple_pregnancy = "unknown"
+        provider_cleared_exercise = request.form.get("provider_cleared_exercise", "unknown").strip() or "unknown"
+        if provider_cleared_exercise not in PREGNANCY_PROVIDER_CLEARANCE_VALUES:
+            provider_cleared_exercise = "unknown"
+        pregnancy_consent = request.form.get("pregnancy_consent") == "yes"
         profile_data = {
             "primary_goal": request.form.get("primary_goal", "").strip() or None,
             "experience_level": request.form.get("experience_level", "").strip() or None,
@@ -4244,7 +4461,19 @@ def member_coach():
             "nutrition_goal": request.form.get("nutrition_goal", "").strip() or None,
             "dietary_preferences": request.form.get("dietary_preferences", "").strip() or None,
             "allergies": request.form.get("allergies", "").strip() or None,
+            "pregnancy_status": pregnancy_status,
+            "gestational_weeks": gestational_weeks if pregnancy_status == "pregnant" else None,
+            "expected_due_date": parse_optional_date(request.form.get("expected_due_date")) if pregnancy_status == "pregnant" else None,
+            "pre_pregnancy_weight_kg": parse_optional_float(request.form.get("pre_pregnancy_weight_kg")) if pregnancy_status == "pregnant" else None,
+            "multiple_pregnancy": multiple_pregnancy if pregnancy_status == "pregnant" else None,
+            "provider_cleared_exercise": provider_cleared_exercise if pregnancy_status == "pregnant" else None,
+            "provider_restrictions": (request.form.get("provider_restrictions", "").strip() or None) if pregnancy_status == "pregnant" else None,
+            "pregnancy_consent": pregnancy_consent if pregnancy_status == "pregnant" else False,
         }
+        if pregnancy_status == "pregnant":
+            if gestational_weeks is None or gestational_weeks < 1 or gestational_weeks > 42 or not pregnancy_consent:
+                flash(translated_text("coach_pregnancy_required", current_language()), "error")
+                return redirect(url_for("member_coach"))
         if coach_profile_missing_fields(profile_data):
             flash(translated_text("coach_complete_required", current_language()), "error")
             return redirect(url_for("member_coach"))
@@ -4255,6 +4484,7 @@ def member_coach():
 
         for key, value in profile_data.items():
             setattr(profile, key, value)
+        set_pregnancy_symptoms(profile, request.form.getlist("pregnancy_symptoms") if pregnancy_status == "pregnant" else [])
         profile.updated_at = datetime.now()
         CoachPlan.query.filter_by(member_id=member.member_id).delete()
         db.session.commit()
@@ -4277,6 +4507,13 @@ def member_coach():
         coach_session_minutes=COACH_SESSION_MINUTES,
         coach_training_places=COACH_TRAINING_PLACES,
         coach_nutrition_goals=COACH_NUTRITION_GOALS,
+        pregnancy_statuses=PREGNANCY_STATUSES,
+        pregnancy_multiple_values=PREGNANCY_MULTIPLE_VALUES,
+        pregnancy_provider_clearance_values=PREGNANCY_PROVIDER_CLEARANCE_VALUES,
+        pregnancy_warning_symptoms=PREGNANCY_WARNING_SYMPTOMS,
+        selected_pregnancy_symptoms=pregnancy_symptom_list(profile),
+        pregnancy_safety_status=pregnancy_safety_status(profile),
+        pregnancy_trimester=pregnancy_trimester(profile),
         coach_label=coach_label,
         workout_history=coach_workout_history(member.member_id),
         progress_entries=coach_progress_history(member.member_id),

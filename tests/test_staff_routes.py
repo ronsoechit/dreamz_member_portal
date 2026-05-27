@@ -159,7 +159,7 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn(">Audit</a>", body)
         self.assertIn(">Changes</a>", body)
         self.assertIn(">Sync</a>", body)
-        self.assertIn(">Coach</a>", body)
+        self.assertNotIn(">Coach</a>", body)
         self.assertIn("Cancellations", body)
         self.assertIn("Email Log", body)
         self.assertNotIn(">Settings</a>", body)
@@ -178,8 +178,8 @@ class StaffRouteTests(unittest.TestCase):
         ))
         db.session.commit()
         with self.client.session_transaction() as sess:
-            sess["staff_role"] = "manager"
-            sess["staff_username"] = "manager"
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
 
         response = self.client.get("/staff/coach")
 
@@ -188,6 +188,15 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("Coach Activity", body)
         self.assertIn("Ron Soechit", body)
         self.assertIn("Keep the next session controlled.", body)
+
+    def test_manager_cannot_view_staff_coach_activity(self):
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "manager"
+
+        response = self.client.get("/staff/coach")
+
+        self.assertEqual(response.status_code, 403)
 
     def test_staff_cancellations_status_filter(self):
         self.add_request(member_id="1206", member_name="Accepted Member", status="accepted")

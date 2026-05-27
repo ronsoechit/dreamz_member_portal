@@ -23,6 +23,7 @@
 
 {% block content %}
 {% set coach_complete = profile and completion == 100 %}
+{% set next_session_startable = coach_next_session and coach_next_session.session.exercises %}
 <div class="coach-hero coach-hero-compact mb-4 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
   <div>
     <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('my_coach') }}</div>
@@ -32,11 +33,18 @@
       <span class="font-semibold text-green-200">{{ display_name }}</span>
       <span class="text-gray-500">#{{ member.member_id }}</span>
     </div>
+    {% if profile and profile.pregnancy_status == 'pregnant' %}
+      <div class="mt-2 inline-flex flex-wrap items-center gap-2 rounded-full border {% if pregnancy_safety_status in ['warning_symptoms', 'not_cleared'] %}border-red-400/40 bg-red-500/10 text-red-100{% else %}border-green-400/30 bg-green-500/10 text-green-100{% endif %} px-3 py-1 text-xs font-semibold">
+        <span>{{ t('coach_pregnancy_status_pregnant') }}</span>
+        {% if profile.gestational_weeks %}<span>&middot; {{ profile.gestational_weeks }} {{ t('coach_pregnancy_weeks_short') }}</span>{% endif %}
+        <span>&middot; {{ t('coach_pregnancy_safety_' ~ pregnancy_safety_status) }}</span>
+      </div>
+    {% endif %}
   </div>
   {% if coach_complete %}
     <div class="flex flex-wrap items-center gap-2">
       <span class="rounded-full border border-green-500/30 bg-green-500/10 px-3 py-2 text-sm font-semibold text-green-100">
-        {{ t('coach_profile_status') }} · {{ completion }}% {{ t('coach_profile_complete') }}
+        {{ t('coach_profile_status') }} &middot; {{ completion }}% {{ t('coach_profile_complete') }}
       </span>
       <button type="button" class="rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400" data-edit-coach>
         {{ t('coach_profile_edit') }}
@@ -51,9 +59,11 @@
       <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('coach_next_session_title') }}</div>
       <div class="mt-2 text-lg font-semibold text-white">{{ coach_next_session.session.focus if coach_next_session else t('coach_plan_training_title') }}</div>
       {% if coach_next_session %}
-        <div class="mt-2 text-sm text-yellow-50/80">{{ t('coach_plan_session') }} {{ coach_next_session.session.number }} · {{ coach_next_session.session.minutes }} {{ t('minutes_short') }}</div>
+        <div class="mt-2 text-sm text-yellow-50/80">{{ t('coach_plan_session') }} {{ coach_next_session.session.number }} &middot; {{ coach_next_session.session.minutes }} {{ t('minutes_short') }}</div>
       {% endif %}
-      <div class="mt-3 inline-flex rounded-full bg-yellow-500 px-3 py-1 text-xs font-semibold text-black">{{ t('coach_start_session') }}</div>
+      <div class="mt-3 inline-flex rounded-full bg-yellow-500 px-3 py-1 text-xs font-semibold text-black">
+        {{ t('coach_start_session') if next_session_startable else t('coach_review_guidance') }}
+      </div>
     </a>
     <a href="#coach-plan" data-open-coach-view="history" class="coach-action-card rounded-lg border border-gray-700 bg-gray-800/50 p-4 transition hover:border-green-300">
       <div class="text-xs font-semibold uppercase tracking-wide text-green-200">{{ t('coach_history_title') }}</div>
@@ -145,8 +155,81 @@
   <section data-coach-step data-title="{{ t('coach_step_limitations') }}" class="hidden rounded-lg border border-gray-700 bg-gray-800/40 p-5">
     <h3 class="text-xl font-semibold text-yellow-400">{{ t('coach_step_limitations') }}</h3>
     <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('coach_step_limitations_intro') }}</p>
-    <div class="mt-5">
+    <div class="mt-5 space-y-5">
       {{ required_textarea('injuries', t('coach_injuries'), profile.injuries if profile else '', t('coach_injuries_placeholder')) }}
+      <div class="rounded-lg border border-green-500/20 bg-green-500/5 p-4">
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h4 class="font-semibold text-green-200">{{ t('coach_pregnancy_section_title') }}</h4>
+            <p class="mt-1 text-sm leading-6 text-gray-300">{{ t('coach_pregnancy_privacy_text') }}</p>
+          </div>
+          {% if profile and profile.pregnancy_status == 'pregnant' %}
+            <span class="rounded-full border border-green-400/30 bg-green-500/10 px-3 py-1 text-xs font-semibold text-green-100">
+              {{ t('coach_pregnancy_status_pregnant') }}{% if profile.gestational_weeks %} &middot; {{ profile.gestational_weeks }} {{ t('coach_pregnancy_weeks_short') }}{% endif %}
+            </span>
+          {% endif %}
+        </div>
+        <p class="mt-3 rounded border border-yellow-500/30 bg-yellow-500/10 p-3 text-xs leading-5 text-yellow-50">{{ t('coach_pregnancy_safety_notice') }}</p>
+        <div class="mt-4 grid gap-4 md:grid-cols-2">
+          <label class="block">
+            <span class="text-sm font-semibold text-gray-200">{{ t('coach_pregnancy_status_label') }}</span>
+            <select name="pregnancy_status" data-coach-input data-pregnancy-status class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" required>
+              {% for value in pregnancy_statuses %}
+                <option value="{{ value }}" {% if (profile.pregnancy_status if profile and profile.pregnancy_status else 'not_pregnant') == value %}selected{% endif %}>{{ t('coach_pregnancy_status_' ~ value) }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+        <div class="mt-4 grid gap-4 md:grid-cols-2 {% if not profile or profile.pregnancy_status != 'pregnant' %}hidden{% endif %}" data-pregnancy-fields>
+          <label class="block">
+            <span class="text-sm font-semibold text-gray-200">{{ t('coach_gestational_weeks') }}</span>
+            <input name="gestational_weeks" data-coach-input data-pregnancy-required type="number" min="1" max="42" inputmode="numeric" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" value="{{ profile.gestational_weeks if profile and profile.gestational_weeks is not none else '' }}">
+          </label>
+          <label class="block">
+            <span class="text-sm font-semibold text-gray-200">{{ t('coach_expected_due_date') }}</span>
+            <input name="expected_due_date" data-coach-input type="date" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" value="{{ profile.expected_due_date.isoformat() if profile and profile.expected_due_date else '' }}">
+          </label>
+          <label class="block">
+            <span class="text-sm font-semibold text-gray-200">{{ t('coach_pre_pregnancy_weight') }}</span>
+            <input name="pre_pregnancy_weight_kg" data-coach-input type="number" step="0.1" min="1" inputmode="decimal" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" value="{{ profile.pre_pregnancy_weight_kg if profile and profile.pre_pregnancy_weight_kg is not none else '' }}">
+          </label>
+          <label class="block">
+            <span class="text-sm font-semibold text-gray-200">{{ t('coach_multiple_pregnancy') }}</span>
+            <select name="multiple_pregnancy" data-coach-input data-pregnancy-required class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white">
+              {% for value in pregnancy_multiple_values %}
+                <option value="{{ value }}" {% if (profile.multiple_pregnancy if profile and profile.multiple_pregnancy else 'unknown') == value %}selected{% endif %}>{{ t('coach_pregnancy_option_' ~ value) }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="block">
+            <span class="text-sm font-semibold text-gray-200">{{ t('coach_provider_cleared_exercise') }}</span>
+            <select name="provider_cleared_exercise" data-coach-input data-pregnancy-required class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white">
+              {% for value in pregnancy_provider_clearance_values %}
+                <option value="{{ value }}" {% if (profile.provider_cleared_exercise if profile and profile.provider_cleared_exercise else 'unknown') == value %}selected{% endif %}>{{ t('coach_pregnancy_option_' ~ value) }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="block md:col-span-2">
+            <span class="text-sm font-semibold text-gray-200">{{ t('coach_provider_restrictions') }}</span>
+            <textarea name="provider_restrictions" data-coach-input rows="2" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" placeholder="{{ t('coach_provider_restrictions_placeholder') }}">{{ profile.provider_restrictions if profile else '' }}</textarea>
+          </label>
+          <fieldset class="md:col-span-2">
+            <legend class="text-sm font-semibold text-gray-200">{{ t('coach_pregnancy_symptoms') }}</legend>
+            <div class="mt-3 grid gap-2 sm:grid-cols-2">
+              {% for value in pregnancy_warning_symptoms %}
+                <label class="flex items-start gap-2 rounded border border-gray-700 bg-gray-900/70 p-3 text-sm text-gray-100">
+                  <input name="pregnancy_symptoms" value="{{ value }}" type="checkbox" class="mt-1 h-4 w-4 accent-yellow-500" {% if value in selected_pregnancy_symptoms %}checked{% endif %}>
+                  <span>{{ t('coach_pregnancy_symptom_' ~ value) }}</span>
+                </label>
+              {% endfor %}
+            </div>
+          </fieldset>
+          <label class="flex gap-3 rounded border border-green-400/30 bg-green-500/10 p-3 text-sm leading-6 text-green-50 md:col-span-2">
+            <input name="pregnancy_consent" value="yes" data-pregnancy-required type="checkbox" class="mt-1 h-4 w-4 accent-yellow-500" {% if profile and profile.pregnancy_consent %}checked{% endif %}>
+            <span>{{ t('coach_pregnancy_consent') }}</span>
+          </label>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -159,7 +242,7 @@
         <input name="height_cm" data-coach-input type="number" step="0.1" min="1" inputmode="decimal" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" value="{{ profile.height_cm if profile and profile.height_cm is not none else '' }}" required>
       </label>
       <label class="block">
-        <span class="text-sm font-semibold text-gray-200">{{ t('coach_weight_kg') }}</span>
+        <span class="text-sm font-semibold text-gray-200">{{ t('coach_current_weight_kg') }}</span>
         <input name="weight_kg" data-coach-input type="number" step="0.1" min="1" inputmode="decimal" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" value="{{ profile.weight_kg if profile and profile.weight_kg is not none else '' }}" required>
       </label>
     </div>
@@ -341,9 +424,13 @@
                   <div class="mt-1 text-gray-300">{{ session.cooldown }}</div>
                 </div>
               </div>
-              <button type="button" data-start-session class="mt-4 w-full rounded px-4 py-3 text-sm font-semibold transition sm:w-auto {% if session_done_this_week %}cursor-not-allowed bg-green-500/20 text-green-100{% else %}bg-yellow-500 text-black hover:bg-yellow-400{% endif %}" {% if session_done_this_week %}disabled{% endif %}>
-                {{ t('coach_session_already_done') if session_done_this_week else t('coach_start_session') }}
-              </button>
+              {% if session["exercises"] %}
+                <button type="button" data-start-session class="mt-4 w-full rounded px-4 py-3 text-sm font-semibold transition sm:w-auto {% if session_done_this_week %}cursor-not-allowed bg-green-500/20 text-green-100{% else %}bg-yellow-500 text-black hover:bg-yellow-400{% endif %}" {% if session_done_this_week %}disabled{% endif %}>
+                  {{ t('coach_session_already_done') if session_done_this_week else t('coach_start_session') }}
+                </button>
+              {% else %}
+                <div class="mt-4 rounded border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm leading-6 text-yellow-50">{{ session.main }}</div>
+              {% endif %}
               <div class="mt-4 space-y-3">
                 {% for exercise in session["exercises"] %}
                   {% set demo_query = (exercise.name ~ ' exercise proper form')|urlencode %}
@@ -507,7 +594,7 @@
               {% for log in item.logs %}
                 <div class="grid grid-cols-[1fr_auto] gap-3 rounded bg-gray-950/50 p-2">
                   <dt class="font-semibold text-gray-100">{{ log.exercise_name }}</dt>
-                  <dd class="text-right text-yellow-100">{{ log.weight_used or '-' }} · {{ log.reps_completed or '-' }}</dd>
+                  <dd class="text-right text-yellow-100">{{ log.weight_used or '-' }} &middot; {{ log.reps_completed or '-' }}</dd>
                 </div>
               {% endfor %}
             </dl>
@@ -573,9 +660,26 @@
     const saveButton = form.querySelector("[data-step-save]");
     const review = form.querySelector("[data-coach-review]");
     let index = 0;
+    const pregnancyStatus = form.querySelector("[data-pregnancy-status]");
+    const pregnancyFields = form.querySelector("[data-pregnancy-fields]");
+    const updatePregnancyFields = () => {
+      const isPregnant = pregnancyStatus?.value === "pregnant";
+      pregnancyFields?.classList.toggle("hidden", !isPregnant);
+      form.querySelectorAll("[data-pregnancy-required]").forEach((input) => {
+        input.required = isPregnant;
+      });
+    };
+    pregnancyStatus?.addEventListener("change", updatePregnancyFields);
+    updatePregnancyFields();
 
     const fieldLabel = (input) => input.closest("label")?.querySelector("span")?.textContent?.trim() || input.name;
     const fieldValue = (input) => {
+      if ((input.type === "checkbox" || input.type === "radio") && !input.checked) {
+        return "";
+      }
+      if (input.type === "checkbox" && input.checked) {
+        return input.closest("label")?.innerText?.trim() || input.value;
+      }
       if (input.tagName === "SELECT") {
         return input.options[input.selectedIndex]?.textContent?.trim() || "";
       }
@@ -586,6 +690,8 @@
       if (!review) return;
       review.innerHTML = "";
       form.querySelectorAll("[data-coach-input]").forEach((input) => {
+        const valueText = fieldValue(input);
+        if (!valueText && input.closest("[data-pregnancy-fields]")?.classList.contains("hidden")) return;
         const item = document.createElement("div");
         item.className = "rounded border border-green-500/20 bg-gray-900/60 p-3";
         const label = document.createElement("div");
@@ -593,7 +699,7 @@
         label.textContent = fieldLabel(input);
         const value = document.createElement("div");
         value.className = "mt-1 text-sm text-white";
-        value.textContent = fieldValue(input) || "-";
+        value.textContent = valueText || "-";
         item.append(label, value);
         review.append(item);
       });

@@ -462,6 +462,80 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(CoachPlan.query.filter_by(member_id="13659").count(), 0)
 
+    def test_pregnancy_profile_fields_are_saved_and_contextualized(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+
+        response = self.client.post(
+            "/coach",
+            data=self.csrf_form_data(
+                primary_goal="get_fitter",
+                experience_level="beginner",
+                training_days="2",
+                session_minutes="45",
+                training_place="dreamz_gym",
+                height_cm="165",
+                weight_kg="70",
+                injuries="none",
+                nutrition_goal="healthier",
+                dietary_preferences="local food",
+                allergies="none",
+                pregnancy_status="pregnant",
+                gestational_weeks="18",
+                expected_due_date="2026-10-15",
+                pre_pregnancy_weight_kg="65",
+                multiple_pregnancy="no",
+                provider_cleared_exercise="unknown",
+                provider_restrictions="low impact only",
+                pregnancy_symptoms=["pelvic_pain"],
+                pregnancy_consent="yes",
+            ),
+        )
+
+        self.assertEqual(response.status_code, 302)
+        profile = CoachProfile.query.filter_by(member_id="13659").one()
+        self.assertEqual(profile.pregnancy_status, "pregnant")
+        self.assertEqual(profile.gestational_weeks, 18)
+        self.assertEqual(profile.pre_pregnancy_weight_kg, 65)
+        self.assertIn("pelvic_pain", profile.pregnancy_symptoms)
+
+        page = self.client.get("/coach").get_data(as_text=True)
+        self.assertIn("Pregnant", page)
+        self.assertIn("Medical check advised", page)
+        self.assertIn("Medical clearance first", page)
+        self.assertIn("Review guidance", page)
+        self.assertNotIn("<button type=\"button\" data-start-session", page)
+
+    def test_pregnancy_profile_requires_consent_and_weeks(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+
+        response = self.client.post(
+            "/coach",
+            data=self.csrf_form_data(
+                primary_goal="get_fitter",
+                experience_level="beginner",
+                training_days="2",
+                session_minutes="45",
+                training_place="dreamz_gym",
+                height_cm="165",
+                weight_kg="70",
+                injuries="none",
+                nutrition_goal="healthier",
+                dietary_preferences="local food",
+                allergies="none",
+                pregnancy_status="pregnant",
+                gestational_weeks="",
+                multiple_pregnancy="no",
+                provider_cleared_exercise="yes",
+            ),
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(CoachProfile.query.filter_by(member_id="13659").count(), 0)
+        self.assertIn("Please complete the pregnancy safety questions", response.get_data(as_text=True))
+
     def test_coach_workout_log_can_be_saved(self):
         self.add_member(member_id="13659", name="Ron Soechit")
         db.session.add(CoachPlan(member_id="13659", plan_json="[]"))
