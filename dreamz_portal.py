@@ -1128,6 +1128,10 @@ def local_datetime(value):
     return value.astimezone(portal_timezone())
 
 
+def current_portal_datetime():
+    return local_datetime(datetime.now(timezone.utc))
+
+
 def ensure_sqlite_model_column(table_name, column_name, column_definition):
     if db.engine.dialect.name != "sqlite":
         return
@@ -1888,13 +1892,43 @@ def member_group_class_schedule_rows(member_id, selected_day="", selected_type="
     return rows
 
 
-def member_today_group_classes(member_id, limit=3):
-    today = local_datetime(datetime.now(timezone.utc)).date()
+def group_class_time_status(occurrence, current_time):
+    if occurrence.status == "cancelled":
+        return "cancelled"
+    if occurrence.end_time < current_time:
+        return "past"
+    if occurrence.start_time <= current_time <= occurrence.end_time:
+        return "live"
+    return "upcoming"
+
+
+def member_today_group_class_sections(member_id, now=None, limit=3, earlier_limit=2):
+    now = now or current_portal_datetime()
+    today = now.date()
+    current_time = now.time()
     rows = [
         row for row in member_group_class_schedule_rows(member_id, selected_day=str(today.weekday()))
         if row["class_date"] == today
     ]
-    return rows[:limit]
+    current_rows = []
+    earlier_rows = []
+    for row in rows:
+        status = group_class_time_status(row["occurrence"], current_time)
+        row["time_status"] = status
+        if status in {"past", "cancelled"}:
+            earlier_rows.append(row)
+        else:
+            current_rows.append(row)
+    current_rows.sort(key=lambda row: (0 if row["time_status"] == "live" else 1, row["occurrence"].start_time))
+    earlier_rows.sort(key=lambda row: row["occurrence"].start_time, reverse=True)
+    return {
+        "current": current_rows[:limit],
+        "earlier": earlier_rows[:earlier_limit],
+    }
+
+
+def member_today_group_classes(member_id, limit=3):
+    return member_today_group_class_sections(member_id, limit=limit)["current"]
 
 
 def member_planned_group_classes(member_id, start_date=None, end_date=None):
@@ -5062,6 +5096,9 @@ def member_dashboard_context(member, staff_admin_view=False):
     coach_next_session = coach_next_session_context(coach_profile, member.member_id, language=language)
     coach_latest = coach_latest_workout(member.member_id)
     coach_counts = coach_data_counts(member.member_id) if staff_admin_view else {"total": 0}
+    today_group_class_sections = (
+        member_today_group_class_sections(member.member_id) if not staff_admin_view else {"current": [], "earlier": []}
+    )
 
     return {
         "member": member,
@@ -5097,7 +5134,8 @@ def member_dashboard_context(member, staff_admin_view=False):
         "coach_latest_workout": coach_latest,
         "coach_data_counts": coach_counts,
         "coach_data_total": coach_counts.get("total", 0),
-        "today_group_classes": member_today_group_classes(member.member_id) if not staff_admin_view else [],
+        "today_group_classes": today_group_class_sections["current"],
+        "today_earlier_group_classes": today_group_class_sections["earlier"],
     }
 
 

@@ -3003,6 +3003,49 @@ for language, values in PRICING_TRANSLATIONS.items():
     TRANSLATIONS.setdefault(language, {}).update(values)
 
 
+DASHBOARD_CLASS_STATUS_TRANSLATIONS = {
+    "en": {
+        "class_status_ended": "Ended",
+        "class_status_live": "Live now",
+        "class_status_upcoming": "Upcoming",
+        "class_status_cancelled": "Cancelled",
+        "earlier_today": "Earlier today",
+        "no_more_classes_today": "No more classes today",
+        "view_full_schedule": "View full schedule",
+    },
+    "nl": {
+        "class_status_ended": "Afgelopen",
+        "class_status_live": "Nu live",
+        "class_status_upcoming": "Komt eraan",
+        "class_status_cancelled": "Geannuleerd",
+        "earlier_today": "Eerder vandaag",
+        "no_more_classes_today": "Geen lessen meer vandaag",
+        "view_full_schedule": "Bekijk volledig rooster",
+    },
+    "pap": {
+        "class_status_ended": "Kaba",
+        "class_status_live": "Ta live awor",
+        "class_status_upcoming": "Ta bini",
+        "class_status_cancelled": "Kansela",
+        "earlier_today": "Mas tempran awe",
+        "no_more_classes_today": "No tin klas mas awe",
+        "view_full_schedule": "Wak roster kompleto",
+    },
+    "es": {
+        "class_status_ended": "Terminada",
+        "class_status_live": "En vivo ahora",
+        "class_status_upcoming": "Próxima",
+        "class_status_cancelled": "Cancelada",
+        "earlier_today": "Más temprano hoy",
+        "no_more_classes_today": "No hay más clases hoy",
+        "view_full_schedule": "Ver horario completo",
+    },
+}
+
+for language, values in DASHBOARD_CLASS_STATUS_TRANSLATIONS.items():
+    TRANSLATIONS.setdefault(language, {}).update(values)
+
+
 def normalize_language(language):
     if language in LANGUAGES:
         return language

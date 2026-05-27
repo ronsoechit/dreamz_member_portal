@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import importlib.util
 import json
 import os
@@ -1557,7 +1557,9 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
         self.assertIn("account-notification-badge", body)
-        self.assertIn(">1</span>", body)
+        self.assertIn('aria-label="Account, 1 account notification"', body)
+        self.assertIn('aria-hidden="true">1</span>', body)
+        self.assertNotIn("Account1", re.sub(r"\s+", "", body))
 
         self.add_member(member_id="1206", balance=0.0)
         self.login_as("1206")
@@ -2112,6 +2114,59 @@ class PortalRouteTests(unittest.TestCase):
         progress_body = progress_response.get_data(as_text=True)
         self.assertIn("Classes this week", progress_body)
         self.assertIn(">1</strong>", progress_body)
+
+    def test_dashboard_group_classes_split_upcoming_and_earlier_by_portal_time(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+        seed_group_class_schedule()
+        local_now = datetime(2026, 5, 27, 13, 48, tzinfo=timezone(timedelta(hours=-4)))
+
+        with patch("dreamz_portal.current_portal_datetime", return_value=local_now):
+            response = self.client.get("/dashboard?id=13659")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Upcoming classes today", body)
+        self.assertIn("18:00", body)
+        self.assertIn("ZUMBA", body)
+        self.assertIn("Upcoming", body)
+        self.assertIn("Earlier today", body)
+        self.assertIn("BODYPUMP", body)
+        self.assertIn("Ended", body)
+        self.assertLess(body.index("Upcoming classes today"), body.index("Earlier today"))
+
+    def test_dashboard_group_classes_marks_live_class(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+        seed_group_class_schedule()
+        local_now = datetime(2026, 5, 27, 8, 30, tzinfo=timezone(timedelta(hours=-4)))
+
+        with patch("dreamz_portal.current_portal_datetime", return_value=local_now):
+            response = self.client.get("/dashboard?id=13659")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("BODYPUMP", body)
+        self.assertIn("Live now", body)
+        self.assertIn("YOGA", body)
+        self.assertIn("Upcoming", body)
+
+    def test_dashboard_group_classes_no_more_classes_after_schedule_ends(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+        seed_group_class_schedule()
+        local_now = datetime(2026, 5, 30, 12, 30, tzinfo=timezone(timedelta(hours=-4)))
+
+        with patch("dreamz_portal.current_portal_datetime", return_value=local_now):
+            response = self.client.get("/dashboard?id=13659")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("No more classes today", body)
+        self.assertIn("View full schedule", body)
+        self.assertIn("Earlier today", body)
+        self.assertIn("Ended", body)
+        self.assertNotIn("Upcoming classes today", body)
 
     def test_dashboard_keeps_member_home_focused_and_navigation_compact(self):
         self.add_member(member_id="13659", name="Ron Soechit", balance=0)
