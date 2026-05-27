@@ -49,14 +49,14 @@
     </div>
   </div>
   <section class="mb-5 grid gap-3 lg:grid-cols-[1.2fr_1fr_1fr]">
-    <a href="#coach-plan" class="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4 transition hover:border-yellow-300 hover:bg-yellow-500/15">
+    <a href="#coach-plan" data-open-coach-view="training" class="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4 transition hover:border-yellow-300 hover:bg-yellow-500/15">
       <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('coach_next_session_title') }}</div>
       <div class="mt-2 text-lg font-semibold text-white">{{ coach_next_session.session.focus if coach_next_session else t('coach_plan_training_title') }}</div>
       {% if coach_next_session %}
         <div class="mt-2 text-sm text-yellow-50/80">{{ t('coach_plan_session') }} {{ coach_next_session.session.number }} · {{ coach_next_session.session.minutes }} {{ t('minutes_short') }}</div>
       {% endif %}
     </a>
-    <a href="#coach-history" class="rounded-lg border border-gray-700 bg-gray-800/50 p-4 transition hover:border-green-300">
+    <a href="#coach-plan" data-open-coach-view="history" class="rounded-lg border border-gray-700 bg-gray-800/50 p-4 transition hover:border-green-300">
       <div class="text-xs font-semibold uppercase tracking-wide text-green-200">{{ t('coach_history_title') }}</div>
       {% if workout_history %}
         <div class="mt-2 text-lg font-semibold text-white">{{ workout_history[0].workout.focus }}</div>
@@ -65,7 +65,7 @@
         <div class="mt-2 text-sm text-gray-300">{{ t('coach_history_empty') }}</div>
       {% endif %}
     </a>
-    <a href="#coach-chat" class="rounded-lg border border-gray-700 bg-gray-800/50 p-4 transition hover:border-green-300">
+    <a href="#coach-plan" data-open-coach-view="chat" class="rounded-lg border border-gray-700 bg-gray-800/50 p-4 transition hover:border-green-300">
       <div class="text-xs font-semibold uppercase tracking-wide text-green-200">{{ t('coach_chat_thread_title') }}</div>
       <div class="mt-2 text-lg font-semibold text-white">{{ t('coach_reply_label') }}</div>
       <div class="mt-2 text-sm text-gray-300">{{ t('coach_chat_intro') }}</div>
@@ -195,7 +195,7 @@
 </form>
 
 {% if profile %}
-  <section id="coach-plan" class="mt-6 rounded-lg border border-green-500/30 bg-gray-900/60 p-4 sm:p-5">
+  <section id="coach-plan" class="mt-6 rounded-lg border border-green-500/30 bg-gray-900/60 p-4 sm:p-5" data-coach-shell>
     <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
       <div>
         <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('coach_plan_ready_title') }}</div>
@@ -203,9 +203,15 @@
         <p class="mt-2 text-sm leading-6 text-green-50/90">{{ t('coach_plan_focus_intro') }}</p>
       </div>
     </div>
+    <div class="mt-5 grid gap-2 sm:grid-cols-4" role="tablist" aria-label="{{ t('coach_plan_focus_title') }}">
+      <button type="button" data-coach-view="training" class="rounded border border-yellow-400 bg-yellow-500 px-3 py-3 text-sm font-semibold text-black transition">{{ t('coach_plan_training_title') }}</button>
+      <button type="button" data-coach-view="nutrition" class="rounded border border-gray-700 bg-gray-950 px-3 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">{{ t('coach_plan_nutrition_title') }}</button>
+      <button type="button" data-coach-view="history" class="rounded border border-gray-700 bg-gray-950 px-3 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">{{ t('coach_history_title') }}</button>
+      <button type="button" data-coach-view="chat" class="rounded border border-gray-700 bg-gray-950 px-3 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">{{ t('coach_chat_thread_title') }}</button>
+    </div>
     {% if personal_plan %}
       {% set training_section = personal_plan[0] %}
-      <div class="mt-5 overflow-hidden rounded-lg border border-yellow-500/20 bg-gray-950/50" data-coach-plan data-save-url="{{ url_for('save_coach_workout_log') }}" data-csrf-token="{{ csrf_token() }}">
+      <div data-coach-panel="training" class="mt-5 overflow-hidden rounded-lg border border-yellow-500/20 bg-gray-950/50" data-coach-plan data-save-url="{{ url_for('save_coach_workout_log') }}" data-csrf-token="{{ csrf_token() }}">
         <div class="border-b border-yellow-500/20 bg-yellow-500/10 p-4">
           <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -313,7 +319,7 @@
         </div>
       </div>
 
-      <div class="mt-4 grid gap-4 lg:grid-cols-2">
+      <div data-coach-panel="nutrition" class="mt-5 hidden grid gap-4 lg:grid-cols-2">
         {% for section in personal_plan[1:] %}
           <article class="rounded-lg border border-green-500/20 bg-gray-900/60 p-4">
             <h4 class="font-semibold text-yellow-300">{{ section.title }}</h4>
@@ -329,9 +335,9 @@
         {% endfor %}
       </div>
     {% endif %}
-    <p class="mt-5 rounded border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm leading-6 text-yellow-100">{{ t('coach_plan_progress_note') }}</p>
+    <p data-coach-panel="training" class="mt-5 rounded border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm leading-6 text-yellow-100">{{ t('coach_plan_progress_note') }}</p>
 
-    <section id="coach-history" class="mt-5 rounded-lg border border-gray-700 bg-gray-950/50 p-4">
+    <section id="coach-history" data-coach-panel="history" class="mt-5 hidden rounded-lg border border-gray-700 bg-gray-950/50 p-4">
       <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h4 class="text-lg font-semibold text-green-200">{{ t('coach_history_title') }}</h4>
@@ -364,7 +370,7 @@
       </div>
     </section>
 
-    <section id="coach-chat" class="mt-5 rounded-lg border border-green-400/30 bg-gray-950/50 p-4" data-coach-chat data-message-url="{{ url_for('coach_message') }}" data-csrf-token="{{ csrf_token() }}">
+    <section id="coach-chat" data-coach-panel="chat" class="mt-5 hidden rounded-lg border border-green-400/30 bg-gray-950/50 p-4" data-coach-chat data-message-url="{{ url_for('coach_message') }}" data-csrf-token="{{ csrf_token() }}">
       <h4 class="text-lg font-semibold text-green-200">{{ t('coach_chat_title') }}</h4>
       <p class="mt-1 text-sm leading-6 text-gray-300">{{ t('coach_chat_intro') }}</p>
       <div class="mt-4 max-h-[26rem] space-y-3 overflow-y-auto rounded border border-gray-700 bg-gray-900/60 p-3" data-coach-chat-thread>
@@ -374,7 +380,7 @@
               <span>{{ t('coach_member_label') if item.actor == 'member' else t('coach_reply_label') }}</span>
               <span>{{ item.created_at|format_date('%d/%m/%Y %H:%M') }}</span>
             </div>
-            <div class="whitespace-pre-wrap">{{ item.message }}</div>
+            <div class="whitespace-pre-wrap" data-format-coach-message>{{ item.message }}</div>
           </article>
         {% else %}
           <div class="rounded border border-gray-700 bg-gray-950/50 p-3 text-sm text-gray-300" data-empty-chat>{{ t('coach_chat_empty') }}</div>
@@ -469,6 +475,90 @@
       form.scrollIntoView({ behavior: "smooth", block: "start" });
     });
 
+    const escapeHtml = (value) => String(value || "").replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#039;",
+    }[char]));
+
+    const inlineFormat = (value) => escapeHtml(value)
+      .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold text-yellow-100">$1</strong>')
+      .replace(/\*([^*]+)\*/g, '<em class="text-gray-100">$1</em>');
+
+    const renderCoachText = (message) => {
+      const lines = String(message || "").split(/\r?\n/);
+      const output = [];
+      let listOpen = false;
+      const closeList = () => {
+        if (listOpen) {
+          output.push("</ul>");
+          listOpen = false;
+        }
+      };
+      lines.forEach((rawLine) => {
+        const line = rawLine.trim();
+        if (!line) {
+          closeList();
+          output.push('<div class="h-2"></div>');
+          return;
+        }
+        const heading = line.match(/^#{1,4}\s+(.+)$/);
+        if (heading) {
+          closeList();
+          output.push(`<h5 class="mt-3 text-sm font-semibold uppercase tracking-wide text-green-200">${inlineFormat(heading[1])}</h5>`);
+          return;
+        }
+        const bullet = line.match(/^[-*]\s+(.+)$/);
+        if (bullet) {
+          if (!listOpen) {
+            output.push('<ul class="mt-2 space-y-1 text-sm leading-6">');
+            listOpen = true;
+          }
+          output.push(`<li class="flex gap-2"><span class="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-yellow-400"></span><span>${inlineFormat(bullet[1])}</span></li>`);
+          return;
+        }
+        closeList();
+        output.push(`<p class="text-sm leading-6">${inlineFormat(line)}</p>`);
+      });
+      closeList();
+      return output.join("");
+    };
+
+    document.querySelectorAll("[data-format-coach-message]").forEach((node) => {
+      node.innerHTML = renderCoachText(node.textContent || "");
+      node.classList.remove("whitespace-pre-wrap");
+    });
+
+    const setCoachView = (view, { scroll = true } = {}) => {
+      document.querySelectorAll("[data-coach-view]").forEach((button) => {
+        const active = button.dataset.coachView === view;
+        button.classList.toggle("border-yellow-400", active);
+        button.classList.toggle("bg-yellow-500", active);
+        button.classList.toggle("text-black", active);
+        button.classList.toggle("border-gray-700", !active);
+        button.classList.toggle("bg-gray-950", !active);
+        button.classList.toggle("text-yellow-200", !active);
+        button.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      document.querySelectorAll("[data-coach-panel]").forEach((panel) => {
+        panel.classList.toggle("hidden", panel.dataset.coachPanel !== view);
+      });
+      const shell = document.querySelector("[data-coach-shell]");
+      if (scroll && shell) shell.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+
+    document.querySelectorAll("[data-coach-view]").forEach((button) => {
+      button.addEventListener("click", () => setCoachView(button.dataset.coachView || "training"));
+    });
+    document.querySelectorAll("[data-open-coach-view]").forEach((link) => {
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        setCoachView(link.dataset.openCoachView || "training");
+      });
+    });
+
     const appendCoachMessage = (actor, message) => {
       const thread = document.querySelector("[data-coach-chat-thread]");
       if (!thread || !message) return;
@@ -483,11 +573,11 @@
       const time = document.createElement("span");
       time.textContent = new Date().toLocaleString();
       const body = document.createElement("div");
-      body.className = "whitespace-pre-wrap";
-      body.textContent = message;
+      body.innerHTML = renderCoachText(message);
       header.append(label, time);
       card.append(header, body);
       thread.append(card);
+      setCoachView("chat", { scroll: false });
       card.scrollIntoView({ behavior: "smooth", block: "center" });
     };
 
@@ -569,7 +659,7 @@
             if (result.coach_reply && saveStatus) {
               const reply = document.createElement("div");
               reply.className = "mt-3 rounded border border-green-400/30 bg-gray-950/50 p-3 text-sm leading-6 text-green-50";
-              reply.textContent = result.coach_reply;
+              reply.innerHTML = renderCoachText(result.coach_reply);
               saveStatus.after(reply);
               appendCoachMessage("coach", result.coach_reply);
             }
@@ -654,10 +744,6 @@
           });
           const result = await response.json().catch(() => ({}));
           if (!response.ok) throw new Error(result.message || "{{ t('coach_chat_error') }}");
-          if (reply) {
-            reply.textContent = result.reply || "";
-            reply.classList.remove("hidden");
-          }
           appendCoachMessage("coach", result.reply || "");
           if (input) input.value = "";
         } catch (error) {
