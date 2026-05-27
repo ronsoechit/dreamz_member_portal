@@ -99,6 +99,12 @@ class PortalRouteTests(unittest.TestCase):
             sess["_csrf_token"] = "test-csrf-token"
             sess["member_id"] = member_id
 
+    def login_staff(self, role="admin", username="ron"):
+        with self.client.session_transaction() as sess:
+            sess["_csrf_token"] = "test-csrf-token"
+            sess["staff_role"] = role
+            sess["staff_username"] = username
+
     def csrf_form_data(self, **data):
         with self.client.session_transaction() as sess:
             sess["_csrf_token"] = "test-csrf-token"
@@ -647,6 +653,105 @@ class PortalRouteTests(unittest.TestCase):
         self.assertLess(body.index("Newest answer about training."), body.index("Older question about training."))
         self.assertIn("data-coach-message-card", body)
         self.assertIn("<details", body)
+
+    def test_admin_can_reset_member_coach_data(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        progress_photo = Path(self.coach_upload_dir.name) / "coach-progress" / "13659" / "before.jpg"
+        progress_photo.parent.mkdir(parents=True, exist_ok=True)
+        progress_photo.write_bytes(b"photo")
+        workout = CoachWorkoutSession(
+            member_id="13659",
+            session_number=1,
+            focus="upper body",
+            planned_minutes=45,
+            completed_at=datetime(2026, 5, 26, 17, 0),
+        )
+        db.session.add_all(
+            [
+                CoachProfile(
+                    member_id="13659",
+                    primary_goal="build_muscle",
+                    experience_level="intermediate",
+                    training_days=2,
+                    session_minutes=45,
+                    training_place="dreamz_gym",
+                    height_cm=165,
+                    weight_kg=68,
+                    injuries="none",
+                    nutrition_goal="muscle_gain",
+                    dietary_preferences="none",
+                    allergies="none",
+                ),
+                CoachPlan(member_id="13659", plan_json=json.dumps([{"sessions": []}])),
+                CoachInteraction(member_id="13659", actor="member", message="Question"),
+                CoachActivityLog(
+                    member_id="13659",
+                    activity_type="run",
+                    activity_date=date(2026, 5, 26),
+                    duration_minutes=20,
+                ),
+                CoachProgressEntry(member_id="13659", photo_path=str(progress_photo), weight_kg=68),
+                workout,
+            ]
+        )
+        db.session.flush()
+        db.session.add(
+            CoachWorkoutExerciseLog(
+                workout_session_id=workout.id,
+                member_id="13659",
+                exercise_order=1,
+                exercise_name="Leg press",
+                completed=True,
+            )
+        )
+        db.session.commit()
+        self.login_staff(role="admin")
+
+        response = self.client.post(
+            "/staff/members/13659/coach/reset",
+            data=self.csrf_form_data(),
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/staff/members/13659", response.headers["Location"])
+        self.assertEqual(CoachProfile.query.filter_by(member_id="13659").count(), 0)
+        self.assertEqual(CoachPlan.query.filter_by(member_id="13659").count(), 0)
+        self.assertEqual(CoachInteraction.query.filter_by(member_id="13659").count(), 0)
+        self.assertEqual(CoachActivityLog.query.filter_by(member_id="13659").count(), 0)
+        self.assertEqual(CoachProgressEntry.query.filter_by(member_id="13659").count(), 0)
+        self.assertEqual(CoachWorkoutSession.query.filter_by(member_id="13659").count(), 0)
+        self.assertEqual(CoachWorkoutExerciseLog.query.filter_by(member_id="13659").count(), 0)
+        self.assertFalse(progress_photo.exists())
+        self.assertIsNotNone(Member.query.filter_by(member_id="13659").first())
+
+    def test_manager_cannot_reset_member_coach_data(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        db.session.add(
+            CoachProfile(
+                member_id="13659",
+                primary_goal="build_muscle",
+                experience_level="intermediate",
+                training_days=2,
+                session_minutes=45,
+                training_place="dreamz_gym",
+                height_cm=165,
+                weight_kg=68,
+                injuries="none",
+                nutrition_goal="muscle_gain",
+                dietary_preferences="none",
+                allergies="none",
+            )
+        )
+        db.session.commit()
+        self.login_staff(role="manager", username="christel")
+
+        response = self.client.post(
+            "/staff/members/13659/coach/reset",
+            data=self.csrf_form_data(),
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(CoachProfile.query.filter_by(member_id="13659").count(), 1)
 
     def test_coach_profile_requires_all_fields(self):
         self.add_member(member_id="13659", name="Ron Soechit")

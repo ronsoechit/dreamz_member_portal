@@ -12,12 +12,37 @@
 
 {% block content %}
 {% if staff_admin_view %}
-  <div class="mb-5 flex flex-col gap-3 rounded border border-yellow-500/40 bg-yellow-500/10 p-4 text-sm text-yellow-100 md:flex-row md:items-center md:justify-between">
-    <div>
+  <div class="mb-5 flex flex-col gap-4 rounded border border-yellow-500/40 bg-yellow-500/10 p-4 text-sm text-yellow-100 lg:flex-row lg:items-center lg:justify-between">
+    <div class="space-y-1">
       <span class="font-semibold text-yellow-300">Staff member view</span>
       <span class="ml-2 text-yellow-100">You are viewing this profile from the staff environment.</span>
+      {% if current_staff_role == 'admin' %}
+        <div class="text-xs text-yellow-50/80">
+          {{ t('coach_admin_reset_summary')|replace('{count}', coach_data_total|string) }}
+        </div>
+      {% endif %}
     </div>
-    <a class="rounded bg-gray-800 px-3 py-2 text-white hover:bg-gray-700" href="{{ url_for('staff_data_audit') }}">Back to audit</a>
+    <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+      {% if current_staff_role == 'admin' %}
+        <form
+          method="post"
+          action="{{ url_for('staff_reset_member_coach', member_id=member.member_id) }}"
+          data-loading-form
+          onsubmit="return confirm('{{ t('coach_admin_reset_confirm') }}');"
+        >
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button
+            type="submit"
+            class="w-full rounded border border-red-400/60 bg-red-500/10 px-3 py-2 font-semibold text-red-100 transition hover:bg-red-500/20 disabled:cursor-wait disabled:opacity-60 sm:w-auto"
+            data-loading-label="{{ t('coach_admin_reset_processing') }}"
+            {% if not coach_data_total %}disabled{% endif %}
+          >
+            {{ t('coach_admin_reset_button') }}
+          </button>
+        </form>
+      {% endif %}
+      <a class="rounded bg-gray-800 px-3 py-2 text-center text-white hover:bg-gray-700" href="{{ url_for('staff_data_audit') }}">Back to audit</a>
+    </div>
   </div>
 {% endif %}
 

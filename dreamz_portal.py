@@ -1814,6 +1814,70 @@ def coach_workout_history(member_id, limit=6):
     return history
 
 
+def coach_data_counts(member_id):
+    session_ids = [
+        row[0]
+        for row in db.session.query(CoachWorkoutSession.id)
+        .filter_by(member_id=member_id)
+        .all()
+    ]
+    exercise_count = 0
+    if session_ids:
+        exercise_count = (
+            CoachWorkoutExerciseLog.query
+            .filter(CoachWorkoutExerciseLog.workout_session_id.in_(session_ids))
+            .count()
+        )
+    counts = {
+        "profile": CoachProfile.query.filter_by(member_id=member_id).count(),
+        "plans": CoachPlan.query.filter_by(member_id=member_id).count(),
+        "interactions": CoachInteraction.query.filter_by(member_id=member_id).count(),
+        "activities": CoachActivityLog.query.filter_by(member_id=member_id).count(),
+        "progress": CoachProgressEntry.query.filter_by(member_id=member_id).count(),
+        "workouts": CoachWorkoutSession.query.filter_by(member_id=member_id).count(),
+        "exercises": exercise_count,
+    }
+    counts["total"] = sum(counts.values())
+    return counts
+
+
+def delete_local_coach_progress_photo(photo_path):
+    if not photo_path or is_s3_uri(photo_path):
+        return
+    root = Path(app.config["COACH_UPLOAD_ROOT"]).resolve()
+    path = Path(photo_path).resolve()
+    if path.exists() and path.is_file() and is_path_under_root(path, root):
+        path.unlink()
+
+
+def reset_member_coach_data(member_id):
+    counts = coach_data_counts(member_id)
+    progress_entries = CoachProgressEntry.query.filter_by(member_id=member_id).all()
+    for entry in progress_entries:
+        delete_local_coach_progress_photo(entry.photo_path)
+
+    session_ids = [
+        row[0]
+        for row in db.session.query(CoachWorkoutSession.id)
+        .filter_by(member_id=member_id)
+        .all()
+    ]
+    if session_ids:
+        (
+            CoachWorkoutExerciseLog.query
+            .filter(CoachWorkoutExerciseLog.workout_session_id.in_(session_ids))
+            .delete(synchronize_session=False)
+        )
+    CoachWorkoutSession.query.filter_by(member_id=member_id).delete(synchronize_session=False)
+    CoachActivityLog.query.filter_by(member_id=member_id).delete(synchronize_session=False)
+    CoachProgressEntry.query.filter_by(member_id=member_id).delete(synchronize_session=False)
+    CoachInteraction.query.filter_by(member_id=member_id).delete(synchronize_session=False)
+    CoachPlan.query.filter_by(member_id=member_id).delete(synchronize_session=False)
+    CoachProfile.query.filter_by(member_id=member_id).delete(synchronize_session=False)
+    db.session.commit()
+    return counts
+
+
 def coach_progress_history(member_id, limit=12):
     return (
         CoachProgressEntry.query
@@ -3198,6 +3262,7 @@ def member_dashboard_context(member, staff_admin_view=False):
     coach_completion = coach_profile_completion(coach_profile)
     coach_next_session = coach_next_session_context(coach_profile, member.member_id, language=language)
     coach_latest = coach_latest_workout(member.member_id)
+    coach_counts = coach_data_counts(member.member_id) if staff_admin_view else {"total": 0}
 
     return {
         "member": member,
@@ -3229,6 +3294,8 @@ def member_dashboard_context(member, staff_admin_view=False):
         "coach_complete": bool(coach_profile and coach_completion == 100),
         "coach_next_session": coach_next_session,
         "coach_latest_workout": coach_latest,
+        "coach_data_counts": coach_counts,
+        "coach_data_total": coach_counts.get("total", 0),
     }
 
 
@@ -3807,6 +3874,23 @@ def staff_member_detail(member_id):
     require_staff_access()
     member = Member.query.filter_by(member_id=member_id).first_or_404()
     return render_template("dashboard.html", **member_dashboard_context(member, staff_admin_view=True))
+
+
+@app.post("/staff/members/<member_id>/coach/reset")
+def staff_reset_member_coach(member_id):
+    validate_csrf_token()
+    require_staff_access(required_role="admin")
+    member = Member.query.filter_by(member_id=member_id).first_or_404()
+    counts = reset_member_coach_data(member.member_id)
+    flash(
+        translated_text(
+            "coach_admin_reset_done",
+            current_language(),
+            name=display_member_name(member.name),
+            count=counts.get("total", 0),
+        )
+    )
+    return redirect(url_for("staff_member_detail", member_id=member.member_id))
 
 
 def mask_email(email):
