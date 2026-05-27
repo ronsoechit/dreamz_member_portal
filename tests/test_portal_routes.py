@@ -18,6 +18,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
+from translations import LANGUAGES, TRANSLATIONS  # noqa: E402
 from dreamz_portal import CancellationRequest, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, EmailLog, GroupClassOccurrence, GroupClassSchedule, GroupClassType, Member, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, ScheduleChangeNotification, app, cancellation_message, coach_context_summary, coach_plan_for_member, coach_profile_completion, db, next_date_for_group_class, seed_group_class_schedule  # noqa: E402
 
 
@@ -131,6 +132,28 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Sending code...", body)
         self.assertIn("button.disabled = true", body)
         self.assertNotIn("Birthdate", body)
+
+    def test_translation_catalog_has_exact_four_language_key_parity(self):
+        self.assertEqual(set(LANGUAGES), {"en", "nl", "pap", "es"})
+        key_sets = {language: set(values) for language, values in TRANSLATIONS.items()}
+        expected_keys = key_sets["en"]
+
+        for language in LANGUAGES:
+            self.assertEqual(key_sets[language], expected_keys, language)
+
+    def test_group_class_member_page_renders_in_all_languages(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        seed_group_class_schedule()
+        self.login_as("13659")
+
+        for language in LANGUAGES:
+            with self.client.session_transaction() as sess:
+                sess["language"] = language
+            response = self.client.get("/group-classes")
+            self.assertEqual(response.status_code, 200)
+            body = response.get_data(as_text=True)
+            self.assertIn(TRANSLATIONS[language]["group_classes_title"], body)
+            self.assertIn(TRANSLATIONS[language]["group_class_preferences"], body)
 
     def test_login_page_shows_language_choices(self):
         response = self.client.get("/login")

@@ -5,8 +5,8 @@
 {% if staff_admin_view %}
   <div class="admin-banner mb-5 flex flex-col gap-4 rounded border border-yellow-500/40 bg-yellow-500/10 p-4 text-sm text-yellow-100 lg:flex-row lg:items-center lg:justify-between">
     <div class="space-y-1">
-      <span class="font-semibold text-yellow-300">Staff member view</span>
-      <span class="ml-2 text-yellow-100">You are viewing this profile from the staff environment.</span>
+      <span class="font-semibold text-yellow-300">{{ t('staff_member_view') }}</span>
+      <span class="ml-2 text-yellow-100">{{ t('staff_member_view_intro') }}</span>
       {% if current_staff_role == 'admin' %}
         <div class="text-xs text-yellow-50/80">
           {{ t('coach_admin_reset_summary')|replace('{count}', coach_data_total|string) }}
@@ -32,7 +32,7 @@
           </button>
         </form>
       {% endif %}
-      <a class="rounded bg-gray-800 px-3 py-2 text-center text-white hover:bg-gray-700" href="{{ url_for('staff_data_audit') }}">Back to audit</a>
+      <a class="rounded bg-gray-800 px-3 py-2 text-center text-white hover:bg-gray-700" href="{{ url_for('staff_data_audit') }}">{{ t('back_to_audit') }}</a>
     </div>
   </div>
   <section class="dashboard-hero mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
