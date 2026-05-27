@@ -81,7 +81,7 @@
             {% if coach_latest_workout %}
               <span class="rounded-full border border-green-500/30 bg-green-500/10 px-3 py-1 text-green-100">{{ t('coach_dashboard_last_workout')|replace('{date}', coach_latest_workout.workout.completed_at|format_date('%d/%m/%Y')) }}</span>
             {% endif %}
-            {% if coach_profile and coach_profile.pregnancy_status == 'pregnant' %}
+            {% if coach_profile and coach_profile.sex == 'female' and coach_profile.pregnancy_status == 'pregnant' %}
               <span class="rounded-full border border-purple-400/30 bg-purple-500/10 px-3 py-1 text-purple-100">
                 {{ t('coach_pregnancy_status_pregnant') }}{% if coach_profile.gestational_weeks %} · {{ coach_profile.gestational_weeks }} {{ t('coach_pregnancy_weeks_short') }}{% endif %}
               </span>

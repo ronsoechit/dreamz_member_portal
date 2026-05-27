@@ -33,7 +33,7 @@
       <span class="font-semibold text-green-200">{{ display_name }}</span>
       <span class="text-gray-500">#{{ member.member_id }}</span>
     </div>
-    {% if profile and profile.pregnancy_status == 'pregnant' %}
+    {% if profile and profile.sex == 'female' and profile.pregnancy_status == 'pregnant' %}
       <div class="mt-2 inline-flex flex-wrap items-center gap-2 rounded-full border {% if pregnancy_safety_status in ['warning_symptoms', 'not_cleared'] %}border-red-400/40 bg-red-500/10 text-red-100{% else %}border-green-400/30 bg-green-500/10 text-green-100{% endif %} px-3 py-1 text-xs font-semibold">
         <span>{{ t('coach_pregnancy_status_pregnant') }}</span>
         {% if profile.gestational_weeks %}<span>&middot; {{ profile.gestational_weeks }} {{ t('coach_pregnancy_weeks_short') }}</span>{% endif %}
@@ -156,14 +156,23 @@
     <h3 class="text-xl font-semibold text-yellow-400">{{ t('coach_step_limitations') }}</h3>
     <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('coach_step_limitations_intro') }}</p>
     <div class="mt-5 space-y-5">
+      <label class="block">
+        <span class="text-sm font-semibold text-gray-200">{{ t('coach_sex_label') }}</span>
+        <select name="sex" data-coach-input data-sex-select class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" required>
+          <option value="">{{ t('choose_option') }}</option>
+          {% for value in coach_sex_values %}
+            <option value="{{ value }}" {% if profile and profile.sex == value %}selected{% endif %}>{{ t('coach_sex_' ~ value) }}</option>
+          {% endfor %}
+        </select>
+      </label>
       {{ required_textarea('injuries', t('coach_injuries'), profile.injuries if profile else '', t('coach_injuries_placeholder')) }}
-      <div class="rounded-lg border border-green-500/20 bg-green-500/5 p-4">
+      <div class="rounded-lg border border-green-500/20 bg-green-500/5 p-4 {% if not profile or profile.sex != 'female' %}hidden{% endif %}" data-pregnancy-section>
         <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h4 class="font-semibold text-green-200">{{ t('coach_pregnancy_section_title') }}</h4>
             <p class="mt-1 text-sm leading-6 text-gray-300">{{ t('coach_pregnancy_privacy_text') }}</p>
           </div>
-          {% if profile and profile.pregnancy_status == 'pregnant' %}
+          {% if profile and profile.sex == 'female' and profile.pregnancy_status == 'pregnant' %}
             <span class="rounded-full border border-green-400/30 bg-green-500/10 px-3 py-1 text-xs font-semibold text-green-100">
               {{ t('coach_pregnancy_status_pregnant') }}{% if profile.gestational_weeks %} &middot; {{ profile.gestational_weeks }} {{ t('coach_pregnancy_weeks_short') }}{% endif %}
             </span>
@@ -173,14 +182,14 @@
         <div class="mt-4 grid gap-4 md:grid-cols-2">
           <label class="block">
             <span class="text-sm font-semibold text-gray-200">{{ t('coach_pregnancy_status_label') }}</span>
-            <select name="pregnancy_status" data-coach-input data-pregnancy-status class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" required>
+            <select name="pregnancy_status" data-coach-input data-pregnancy-status class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white">
               {% for value in pregnancy_statuses %}
                 <option value="{{ value }}" {% if (profile.pregnancy_status if profile and profile.pregnancy_status else 'not_pregnant') == value %}selected{% endif %}>{{ t('coach_pregnancy_status_' ~ value) }}</option>
               {% endfor %}
             </select>
           </label>
         </div>
-        <div class="mt-4 grid gap-4 md:grid-cols-2 {% if not profile or profile.pregnancy_status != 'pregnant' %}hidden{% endif %}" data-pregnancy-fields>
+        <div class="mt-4 grid gap-4 md:grid-cols-2 {% if not profile or profile.sex != 'female' or profile.pregnancy_status != 'pregnant' %}hidden{% endif %}" data-pregnancy-fields>
           <label class="block">
             <span class="text-sm font-semibold text-gray-200">{{ t('coach_gestational_weeks') }}</span>
             <input name="gestational_weeks" data-coach-input data-pregnancy-required type="number" min="1" max="42" inputmode="numeric" class="mt-2 block w-full rounded border border-gray-700 bg-gray-900 p-3 text-white" value="{{ profile.gestational_weeks if profile and profile.gestational_weeks is not none else '' }}">
@@ -660,15 +669,24 @@
     const saveButton = form.querySelector("[data-step-save]");
     const review = form.querySelector("[data-coach-review]");
     let index = 0;
+    const sexSelect = form.querySelector("[data-sex-select]");
+    const pregnancySection = form.querySelector("[data-pregnancy-section]");
     const pregnancyStatus = form.querySelector("[data-pregnancy-status]");
     const pregnancyFields = form.querySelector("[data-pregnancy-fields]");
     const updatePregnancyFields = () => {
-      const isPregnant = pregnancyStatus?.value === "pregnant";
+      const isFemale = sexSelect?.value === "female";
+      pregnancySection?.classList.toggle("hidden", !isFemale);
+      if (pregnancyStatus) {
+        pregnancyStatus.required = Boolean(isFemale);
+        if (!isFemale) pregnancyStatus.value = "not_pregnant";
+      }
+      const isPregnant = isFemale && pregnancyStatus?.value === "pregnant";
       pregnancyFields?.classList.toggle("hidden", !isPregnant);
       form.querySelectorAll("[data-pregnancy-required]").forEach((input) => {
         input.required = isPregnant;
       });
     };
+    sexSelect?.addEventListener("change", updatePregnancyFields);
     pregnancyStatus?.addEventListener("change", updatePregnancyFields);
     updatePregnancyFields();
 
@@ -690,8 +708,9 @@
       if (!review) return;
       review.innerHTML = "";
       form.querySelectorAll("[data-coach-input]").forEach((input) => {
+        if (input.closest("[data-pregnancy-section]")?.classList.contains("hidden")) return;
+        if (input.closest("[data-pregnancy-fields]")?.classList.contains("hidden")) return;
         const valueText = fieldValue(input);
-        if (!valueText && input.closest("[data-pregnancy-fields]")?.classList.contains("hidden")) return;
         const item = document.createElement("div");
         item.className = "rounded border border-green-500/20 bg-gray-900/60 p-3";
         const label = document.createElement("div");

@@ -18,7 +18,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
-from dreamz_portal import CancellationRequest, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, EmailLog, Member, MemberDocument, MemberLoginCode, app, cancellation_message, db  # noqa: E402
+from dreamz_portal import CancellationRequest, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, EmailLog, Member, MemberDocument, MemberLoginCode, app, cancellation_message, coach_profile_completion, db  # noqa: E402
 
 
 class FakeS3Body:
@@ -280,6 +280,7 @@ class PortalRouteTests(unittest.TestCase):
         db.session.add(
             CoachProfile(
                 member_id="13659",
+                sex="male",
                 primary_goal="build_muscle",
                 experience_level="intermediate",
                 training_days=4,
@@ -317,6 +318,7 @@ class PortalRouteTests(unittest.TestCase):
             "/coach",
             data=self.csrf_form_data(
                 primary_goal="build_muscle",
+                sex="male",
                 experience_level="intermediate",
                 training_days="4",
                 session_minutes="60",
@@ -374,6 +376,7 @@ class PortalRouteTests(unittest.TestCase):
         db.session.add(
             CoachProfile(
                 member_id="13659",
+                sex="male",
                 primary_goal="build_muscle",
                 experience_level="intermediate",
                 training_days=2,
@@ -446,6 +449,7 @@ class PortalRouteTests(unittest.TestCase):
             "/coach",
             data=self.csrf_form_data(
                 primary_goal="build_muscle",
+                sex="male",
                 experience_level="intermediate",
                 training_days="2",
                 session_minutes="45",
@@ -470,6 +474,7 @@ class PortalRouteTests(unittest.TestCase):
             "/coach",
             data=self.csrf_form_data(
                 primary_goal="get_fitter",
+                sex="female",
                 experience_level="beginner",
                 training_days="2",
                 session_minutes="45",
@@ -506,6 +511,47 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Review guidance", page)
         self.assertNotIn("<button type=\"button\" data-start-session", page)
 
+    def test_male_coach_profile_ignores_pregnancy_fields(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+
+        response = self.client.post(
+            "/coach",
+            data=self.csrf_form_data(
+                primary_goal="get_fitter",
+                sex="male",
+                experience_level="beginner",
+                training_days="2",
+                session_minutes="45",
+                training_place="dreamz_gym",
+                height_cm="180",
+                weight_kg="82",
+                injuries="none",
+                nutrition_goal="healthier",
+                dietary_preferences="local food",
+                allergies="none",
+                pregnancy_status="pregnant",
+                gestational_weeks="18",
+                multiple_pregnancy="no",
+                provider_cleared_exercise="unknown",
+                pregnancy_symptoms=["pelvic_pain"],
+                pregnancy_consent="yes",
+            ),
+        )
+
+        self.assertEqual(response.status_code, 302)
+        profile = CoachProfile.query.filter_by(member_id="13659").one()
+        self.assertEqual(profile.sex, "male")
+        self.assertEqual(profile.pregnancy_status, "not_pregnant")
+        self.assertIsNone(profile.gestational_weeks)
+        self.assertIsNone(profile.pregnancy_symptoms)
+        self.assertFalse(profile.pregnancy_consent)
+        self.assertEqual(coach_profile_completion(profile), 100)
+
+        page = self.client.get("/coach").get_data(as_text=True)
+        self.assertNotIn("Medical clearance first", page)
+        self.assertNotIn("Medical check advised", page)
+
     def test_pregnancy_profile_requires_consent_and_weeks(self):
         self.add_member(member_id="13659", name="Ron Soechit")
         self.login_as("13659")
@@ -514,6 +560,7 @@ class PortalRouteTests(unittest.TestCase):
             "/coach",
             data=self.csrf_form_data(
                 primary_goal="get_fitter",
+                sex="female",
                 experience_level="beginner",
                 training_days="2",
                 session_minutes="45",
@@ -619,6 +666,7 @@ class PortalRouteTests(unittest.TestCase):
         db.session.add(
             CoachProfile(
                 member_id="13659",
+                sex="male",
                 primary_goal="build_muscle",
                 experience_level="intermediate",
                 training_days=2,
@@ -690,6 +738,7 @@ class PortalRouteTests(unittest.TestCase):
         db.session.add(
             CoachProfile(
                 member_id="13659",
+                sex="male",
                 primary_goal="build_muscle",
                 experience_level="intermediate",
                 training_days=2,
@@ -725,6 +774,7 @@ class PortalRouteTests(unittest.TestCase):
         db.session.add(
             CoachProfile(
                 member_id="13659",
+                sex="male",
                 primary_goal="build_muscle",
                 experience_level="intermediate",
                 training_days=2,
@@ -781,6 +831,7 @@ class PortalRouteTests(unittest.TestCase):
             [
                 CoachProfile(
                     member_id="13659",
+                    sex="male",
                     primary_goal="build_muscle",
                     experience_level="intermediate",
                     training_days=2,
@@ -840,6 +891,7 @@ class PortalRouteTests(unittest.TestCase):
         db.session.add(
             CoachProfile(
                 member_id="13659",
+                sex="male",
                 primary_goal="build_muscle",
                 experience_level="intermediate",
                 training_days=2,
@@ -872,6 +924,7 @@ class PortalRouteTests(unittest.TestCase):
             "/coach",
             data=self.csrf_form_data(
                 primary_goal="build_muscle",
+                sex="male",
                 experience_level="intermediate",
                 training_days="4",
                 session_minutes="60",

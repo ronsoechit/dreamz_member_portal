@@ -310,6 +310,7 @@ class CoachProfile(db.Model):
     nutrition_goal = db.Column(db.String)
     dietary_preferences = db.Column(db.Text)
     allergies = db.Column(db.Text)
+    sex = db.Column(db.String)
     pregnancy_status = db.Column(db.String, default="not_pregnant")
     gestational_weeks = db.Column(db.Integer)
     expected_due_date = db.Column(db.Date)
@@ -474,6 +475,7 @@ def ensure_runtime_schema():
     ensure_sqlite_model_column("email_log", "reviewed_by", "VARCHAR")
     ensure_model_column("sync_run", "change_summary", "TEXT")
     ensure_model_column("coach_profile", "home_equipment", "TEXT")
+    ensure_model_column("coach_profile", "sex", "VARCHAR")
     ensure_model_column("coach_profile", "pregnancy_status", "VARCHAR")
     ensure_model_column("coach_profile", "gestational_weeks", "INTEGER")
     ensure_model_column("coach_profile", "expected_due_date", "DATE")
@@ -1339,6 +1341,7 @@ COACH_TRAINING_DAYS = [2, 3, 4, 5, 6]
 COACH_SESSION_MINUTES = [30, 45, 60, 75, 90]
 COACH_TRAINING_PLACES = ["dreamz_gym", "home", "both"]
 COACH_NUTRITION_GOALS = ["fat_loss", "muscle_gain", "maintenance", "healthier"]
+COACH_SEX_VALUES = ["male", "female"]
 PREGNANCY_STATUSES = ["not_pregnant", "pregnant", "prefer_not_to_say"]
 PREGNANCY_MULTIPLE_VALUES = ["no", "yes", "unknown"]
 PREGNANCY_PROVIDER_CLEARANCE_VALUES = ["yes", "no", "unknown"]
@@ -1429,7 +1432,7 @@ def set_pregnancy_symptoms(profile, symptoms):
 
 
 def is_pregnant_profile(profile):
-    return bool(profile and profile.pregnancy_status == "pregnant")
+    return bool(profile and profile.sex == "female" and profile.pregnancy_status == "pregnant")
 
 
 def pregnancy_trimester(profile):
@@ -1457,11 +1460,16 @@ def pregnancy_safety_status(profile):
 
 def pregnancy_context_summary(profile):
     if not is_pregnant_profile(profile):
-        return f"pregnancy_status={profile.pregnancy_status or 'not_pregnant'}" if profile else "pregnancy_status=unknown"
+        if not profile:
+            return "sex=unknown, pregnancy_status=unknown"
+        status = profile.pregnancy_status or "not_pregnant"
+        if profile.sex != "female":
+            status = "not_applicable"
+        return f"sex={profile.sex or 'unknown'}, pregnancy_status={status}"
     symptoms = pregnancy_symptom_list(profile)
     trimester = pregnancy_trimester(profile)
     return (
-        "pregnancy_status=pregnant, "
+        "sex=female, pregnancy_status=pregnant, "
         f"gestational_weeks={profile.gestational_weeks}, trimester={trimester or 'unknown'}, "
         f"expected_due_date={profile.expected_due_date or 'unknown'}, "
         f"pre_pregnancy_weight={profile.pre_pregnancy_weight_kg or 'unknown'}, current_weight={profile.weight_kg or 'unknown'}, "
@@ -1493,8 +1501,9 @@ def coach_profile_completion(profile):
         profile.nutrition_goal,
         profile.dietary_preferences,
         profile.allergies,
+        profile.sex,
     ]
-    if profile.pregnancy_status == "pregnant":
+    if is_pregnant_profile(profile):
         fields.extend([
             profile.gestational_weeks,
             profile.multiple_pregnancy,
@@ -1517,10 +1526,11 @@ def coach_profile_missing_fields(profile_data):
         "nutrition_goal",
         "dietary_preferences",
         "allergies",
+        "sex",
     ]
     if profile_data.get("training_place") in ("home", "both"):
         required_fields.append("home_equipment")
-    if profile_data.get("pregnancy_status") == "pregnant":
+    if profile_data.get("sex") == "female" and profile_data.get("pregnancy_status") == "pregnant":
         required_fields.extend(["gestational_weeks", "multiple_pregnancy", "provider_cleared_exercise", "pregnancy_consent"])
     return [field for field in required_fields if profile_data.get(field) in (None, "")]
 
@@ -4437,9 +4447,15 @@ def member_coach():
     profile = coach_profile_for_member(member)
     if request.method == "POST":
         validate_csrf_token()
+        sex = request.form.get("sex", "").strip() or None
+        if sex not in COACH_SEX_VALUES:
+            sex = None
         pregnancy_status = request.form.get("pregnancy_status", "not_pregnant").strip() or "not_pregnant"
         if pregnancy_status not in PREGNANCY_STATUSES:
             pregnancy_status = "not_pregnant"
+        if sex != "female":
+            pregnancy_status = "not_pregnant"
+        is_pregnant = sex == "female" and pregnancy_status == "pregnant"
         gestational_weeks = parse_optional_int(request.form.get("gestational_weeks"))
         multiple_pregnancy = request.form.get("multiple_pregnancy", "unknown").strip() or "unknown"
         if multiple_pregnancy not in PREGNANCY_MULTIPLE_VALUES:
@@ -4461,16 +4477,17 @@ def member_coach():
             "nutrition_goal": request.form.get("nutrition_goal", "").strip() or None,
             "dietary_preferences": request.form.get("dietary_preferences", "").strip() or None,
             "allergies": request.form.get("allergies", "").strip() or None,
+            "sex": sex,
             "pregnancy_status": pregnancy_status,
-            "gestational_weeks": gestational_weeks if pregnancy_status == "pregnant" else None,
-            "expected_due_date": parse_optional_date(request.form.get("expected_due_date")) if pregnancy_status == "pregnant" else None,
-            "pre_pregnancy_weight_kg": parse_optional_float(request.form.get("pre_pregnancy_weight_kg")) if pregnancy_status == "pregnant" else None,
-            "multiple_pregnancy": multiple_pregnancy if pregnancy_status == "pregnant" else None,
-            "provider_cleared_exercise": provider_cleared_exercise if pregnancy_status == "pregnant" else None,
-            "provider_restrictions": (request.form.get("provider_restrictions", "").strip() or None) if pregnancy_status == "pregnant" else None,
-            "pregnancy_consent": pregnancy_consent if pregnancy_status == "pregnant" else False,
+            "gestational_weeks": gestational_weeks if is_pregnant else None,
+            "expected_due_date": parse_optional_date(request.form.get("expected_due_date")) if is_pregnant else None,
+            "pre_pregnancy_weight_kg": parse_optional_float(request.form.get("pre_pregnancy_weight_kg")) if is_pregnant else None,
+            "multiple_pregnancy": multiple_pregnancy if is_pregnant else None,
+            "provider_cleared_exercise": provider_cleared_exercise if is_pregnant else None,
+            "provider_restrictions": (request.form.get("provider_restrictions", "").strip() or None) if is_pregnant else None,
+            "pregnancy_consent": pregnancy_consent if is_pregnant else False,
         }
-        if pregnancy_status == "pregnant":
+        if is_pregnant:
             if gestational_weeks is None or gestational_weeks < 1 or gestational_weeks > 42 or not pregnancy_consent:
                 flash(translated_text("coach_pregnancy_required", current_language()), "error")
                 return redirect(url_for("member_coach"))
@@ -4484,7 +4501,7 @@ def member_coach():
 
         for key, value in profile_data.items():
             setattr(profile, key, value)
-        set_pregnancy_symptoms(profile, request.form.getlist("pregnancy_symptoms") if pregnancy_status == "pregnant" else [])
+        set_pregnancy_symptoms(profile, request.form.getlist("pregnancy_symptoms") if is_pregnant else [])
         profile.updated_at = datetime.now()
         CoachPlan.query.filter_by(member_id=member.member_id).delete()
         db.session.commit()
@@ -4507,6 +4524,7 @@ def member_coach():
         coach_session_minutes=COACH_SESSION_MINUTES,
         coach_training_places=COACH_TRAINING_PLACES,
         coach_nutrition_goals=COACH_NUTRITION_GOALS,
+        coach_sex_values=COACH_SEX_VALUES,
         pregnancy_statuses=PREGNANCY_STATUSES,
         pregnancy_multiple_values=PREGNANCY_MULTIPLE_VALUES,
         pregnancy_provider_clearance_values=PREGNANCY_PROVIDER_CLEARANCE_VALUES,
