@@ -113,6 +113,7 @@
             <span class="rounded border border-gray-700 px-2 py-1 {% if translation and translation.translation_status == 'draft' %}text-yellow-200{% elif translation %}text-green-200{% else %}text-red-200{% endif %}">
               {{ language }}: {{ translation.translation_status if translation else t('terms_missing') }}
             </span>
+            <a class="rounded border border-gray-700 px-2 py-1 text-yellow-200" href="{{ url_for('staff_printable_agreement_pdf', document_type=document.document_type, language=language) }}">{{ t('download') }}</a>
           {% endfor %}
         </div>
       {% else %}

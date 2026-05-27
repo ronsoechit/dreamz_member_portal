@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="{{ language }}">
+<head>
+  <meta charset="utf-8">
+  <title>{{ translation.title if translation else document.title }}</title>
+  <style>
+    body { color: #111827; font-family: Arial, sans-serif; line-height: 1.45; margin: 2rem; }
+    header { border-bottom: 3px solid #f5b301; margin-bottom: 1.5rem; padding-bottom: 1rem; }
+    h1 { margin: 0; }
+    h2 { border-bottom: 1px solid #d1d5db; margin-top: 1.5rem; padding-bottom: .35rem; }
+    .meta { color: #4b5563; font-size: .9rem; margin-top: .5rem; }
+    .notice { background: #fff7ed; border: 1px solid #f59e0b; margin: 1rem 0; padding: .85rem; }
+    .signature { border: 1px solid #9ca3af; margin-top: 2rem; padding: 1rem; }
+    .legal { white-space: pre-line; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>{{ translation.title if translation else document.title }}</h1>
+    <div class="meta">{{ company_name }} / {{ brand_name }} / {{ company_location }}</div>
+    <div class="meta">{{ t('terms_document_type') }}: {{ document.document_type }} / {{ t('terms_version') }}: {{ version.version }} / {{ language }}</div>
+    <div class="meta">{{ t('terms_effective_from') }}: {{ version.effective_from|format_date or t('not_available') }}</div>
+  </header>
+  {% if legal_review_notice %}
+    <section class="notice">{{ legal_review_notice }}</section>
+  {% endif %}
+  <section>
+    <h2>{{ t('terms_plain_summary') }}</h2>
+    <p>{{ translation.plain_language_summary if translation else version.plain_language_summary }}</p>
+  </section>
+  {% if application %}
+    <section>
+      <h2>{{ t('application_step_personal') }}</h2>
+      <p>{{ application.applicant_first_name }} {{ application.applicant_last_name }} / {{ application.email }}</p>
+      <p>{{ application.selected_membership_type }} / {{ application.selected_payment_method }}</p>
+      <p>{{ t('electronic_signature_statement') }}</p>
+    </section>
+  {% endif %}
+  <section>
+    <h2>{{ t('terms_full_text') }}</h2>
+    <div class="legal">{{ translation.full_legal_text if translation else version.full_legal_text }}</div>
+  </section>
+  <section class="signature">
+    <strong>{{ t('application_step_signature') }}</strong>
+    <p>{{ t('signature_full_name') }}: ______________________________</p>
+    <p>{{ t('terms_effective_from') }}: ______________________________</p>
+  </section>
+</body>
+</html>

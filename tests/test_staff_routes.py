@@ -290,6 +290,41 @@ class StaffRouteTests(unittest.TestCase):
         self.assertEqual(db.session.get(MembershipApplication, application.id).status, "pending_frontdesk_payment")
         self.assertEqual(MembershipApplicationStatus.query.filter_by(application_id=application.id).count(), 1)
 
+    def test_staff_can_download_printable_agreement_pdf_and_generated_application_pdf(self):
+        seed_legal_documents()
+        application = MembershipApplication(
+            applicant_first_name="Ana",
+            applicant_last_name="Member",
+            email="ana@example.com",
+            selected_membership_type="6 months contract",
+            selected_payment_method="frontdesk_payment",
+            status="signed",
+            language="en",
+        )
+        db.session.add(application)
+        db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+
+        printable = self.client.get("/staff/terms-agreements/templates/gym_rules/en.pdf")
+
+        self.assertEqual(printable.status_code, 200)
+        self.assertEqual(printable.mimetype, "application/pdf")
+        self.assertTrue(printable.get_data().startswith(b"%PDF-1.4"))
+        self.assertIn(b"Dreamz Fitness Bonaire", printable.get_data())
+        self.assertIn(b"Version:", printable.get_data())
+
+        html = self.client.get("/staff/terms-agreements/templates/gym_rules/en/print")
+        self.assertEqual(html.status_code, 200)
+        self.assertIn("Dreamz Fitness Bonaire", html.get_data(as_text=True))
+        self.assertIn("Full legal text", html.get_data(as_text=True))
+
+        generated = self.client.get(f"/applications/{application.id}/documents/gym_rules.pdf")
+        self.assertEqual(generated.status_code, 200)
+        self.assertTrue(generated.get_data().startswith(b"%PDF-1.4"))
+        self.assertIn(b"Ana Member", generated.get_data())
+
     def test_staff_coach_activity_lists_coach_interactions(self):
         self.add_member(member_id="13659", name="Ron Soechit")
         db.session.add(CoachInteraction(

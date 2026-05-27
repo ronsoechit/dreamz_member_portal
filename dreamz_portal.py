@@ -2234,6 +2234,93 @@ def create_application_pdf_hash(application, document_type, audit_reference):
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def pdf_escape(value):
+    return str(value or "").replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def simple_text_pdf_bytes(title, lines):
+    visible_lines = [title] + [str(line or "") for line in lines]
+    text_commands = ["BT", "/F1 12 Tf", "50 792 Td", "14 TL"]
+    for index, line in enumerate(visible_lines[:52]):
+        prefix = "" if index == 0 else "T* "
+        text_commands.append(f"{prefix}({pdf_escape(line[:115])}) Tj")
+    text_commands.append("ET")
+    stream = "\n".join(text_commands).encode("latin-1", errors="replace")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
+    ]
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for number, obj in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{number} 0 obj\n".encode("ascii"))
+        pdf.extend(obj)
+        pdf.extend(b"\nendobj\n")
+    xref_offset = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    pdf.extend(f"trailer << /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n".encode("ascii"))
+    return bytes(pdf)
+
+
+def printable_agreement_context(document_type, language, application=None):
+    language = normalize_language(language)
+    document = LegalDocument.query.filter_by(document_type=document_type).first_or_404()
+    version = current_legal_version(document)
+    if not version:
+        abort(404)
+    translation = legal_translation_for_version(version, language)
+    return {
+        "document": document,
+        "version": version,
+        "translation": translation,
+        "language": language,
+        "application": application,
+        "company_name": "ABC Fitness & Health N.V.",
+        "brand_name": "Dreamz Fitness Bonaire",
+        "company_location": "Bonaire, Dutch Caribbean",
+        "legal_review_notice": LEGAL_TRANSLATION_DRAFT_NOTICE if document.legal_review_needed or (translation and translation.translation_status == "draft") else "",
+    }
+
+
+def printable_agreement_pdf(document_type, language, application=None):
+    context = printable_agreement_context(document_type, language, application=application)
+    translation = context["translation"]
+    version = context["version"]
+    application_lines = []
+    if application:
+        application_lines = [
+            f"Applicant: {application.applicant_first_name or ''} {application.applicant_last_name or ''}".strip(),
+            f"Email: {application.email or ''}",
+            f"Membership: {application.selected_membership_type or ''}",
+            f"Payment method: {application.selected_payment_method or ''}",
+            "Signed electronically through the Dreamz Fitness member portal.",
+        ]
+    lines = [
+        context["company_name"],
+        context["brand_name"],
+        context["company_location"],
+        f"Document type: {context['document'].document_type}",
+        f"Version: {version.version}",
+        f"Language: {context['language']}",
+        f"Effective from: {version.effective_from.isoformat() if version.effective_from else 'Not available'}",
+        context["legal_review_notice"],
+        translation.plain_language_summary if translation else version.plain_language_summary,
+        "",
+        *(application_lines or ["Manual signature field: ______________________________", "Date: __________________"]),
+        "",
+        translation.full_legal_text if translation else version.full_legal_text,
+    ]
+    title = translation.title if translation else context["document"].title
+    return simple_text_pdf_bytes(title, lines)
+
+
 def member_agreements_context(member):
     ensure_runtime_schema()
     language = current_language()
@@ -6204,6 +6291,21 @@ def membership_application_confirmation(application_id):
     return render_template("membership_application_confirmation.html", application=application, documents=documents)
 
 
+@app.get("/applications/<int:application_id>/documents/<document_type>.pdf")
+def membership_application_document_pdf(application_id, document_type):
+    require_staff_access()
+    ensure_runtime_schema()
+    application = db.session.get(MembershipApplication, application_id)
+    if not application:
+        abort(404)
+    pdf_bytes = printable_agreement_pdf(document_type, application.language or DEFAULT_LANGUAGE, application=application)
+    return Response(
+        pdf_bytes,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": f"inline; filename={secure_filename(document_type)}-{application.id}.pdf"},
+    )
+
+
 @app.get("/manifest.webmanifest")
 def web_manifest():
     response = send_from_directory(app.static_folder, "manifest.webmanifest", mimetype="application/manifest+json")
@@ -6861,6 +6963,25 @@ def staff_terms_agreements():
         "staff_terms_agreements.html",
         staff_role=staff_role,
         **terms_admin_context(),
+    )
+
+
+@app.get("/staff/terms-agreements/templates/<document_type>/<language>/print")
+def staff_printable_agreement_template(document_type, language):
+    require_staff_access()
+    ensure_runtime_schema()
+    return render_template("printable_agreement.html", **printable_agreement_context(document_type, language))
+
+
+@app.get("/staff/terms-agreements/templates/<document_type>/<language>.pdf")
+def staff_printable_agreement_pdf(document_type, language):
+    require_staff_access()
+    ensure_runtime_schema()
+    pdf_bytes = printable_agreement_pdf(document_type, language)
+    return Response(
+        pdf_bytes,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": f"inline; filename={secure_filename(document_type)}-{normalize_language(language)}.pdf"},
     )
 
 
