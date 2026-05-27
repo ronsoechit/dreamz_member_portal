@@ -14,7 +14,7 @@ if importlib.util.find_spec("flask") is None or importlib.util.find_spec("flask_
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
-from dreamz_portal import AppSetting, CancellationRequest, CoachInteraction, EmailLog, GroupClassOccurrence, GroupClassType, Member, MemberClassAttendance, MemberClassPlan, MemberDocument, PricingChangeLog, PricingItem, ScheduleChangeNotification, StaffUser, SyncRun, app, db, deliver_email, payment_status_for_member, pricing_visibility_list, seed_group_class_schedule, seed_pricing_catalog  # noqa: E402
+from dreamz_portal import AppSetting, CancellationRequest, CoachInteraction, DigitalSignatureRecord, EmailLog, GroupClassOccurrence, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, Member, MemberClassAttendance, MemberClassPlan, MemberDocument, MemberSignedDocument, MembershipApplication, MembershipApplicationStatus, PricingChangeLog, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, StaffUser, SyncRun, app, db, deliver_email, payment_status_for_member, pricing_visibility_list, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
 
 
 class FakeS3Body:
@@ -164,6 +164,131 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("Email Log", body)
         self.assertNotIn(">Settings</a>", body)
         self.assertIn("/staff/members/1206", body)
+
+    def test_staff_terms_agreements_page_lists_seeded_documents_and_warnings(self):
+        seed_legal_documents()
+        db.session.add(MembershipApplication(
+            applicant_first_name="Ron",
+            applicant_last_name="Soechit",
+            email="ron@example.com",
+            selected_membership_type="6 months contract",
+            selected_contract_term="6_months",
+            selected_payment_method="frontdesk_payment",
+            status="submitted",
+            language="en",
+        ))
+        db.session.add(DigitalSignatureRecord(
+            full_legal_name="Ron Soechit",
+            email="ron@example.com",
+            verification_method="email_link",
+            audit_reference_number="DS-TEST-001",
+        ))
+        db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+
+        response = self.client.get("/staff/terms-agreements")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Terms and agreements management", body)
+        self.assertIn("6-Month Membership Contract", body)
+        self.assertIn("Legal review needed", body)
+        self.assertIn("Legacy 6-month contract inconsistency", body)
+        self.assertIn("Required agreement rules", body)
+        self.assertIn("Membership applications", body)
+        self.assertIn("Digital signatures", body)
+        self.assertIn("Cancellation requests", body)
+        self.assertIn("Ron Soechit", body)
+        self.assertIn("DS-TEST-001", body)
+
+    def test_staff_terms_admin_can_add_version_rule_signed_document_and_update_application(self):
+        seed_legal_documents()
+        document = LegalDocument.query.filter_by(document_type="gym_rules").one()
+        application = MembershipApplication(
+            applicant_first_name="Ana",
+            applicant_last_name="Member",
+            email="ana@example.com",
+            selected_membership_type="No contract / 1 month",
+            status="submitted",
+            language="en",
+        )
+        db.session.add(application)
+        db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+            sess["_csrf_token"] = "token"
+
+        response = self.client.post(
+            "/staff/terms-agreements/versions",
+            data={
+                "csrf_token": "token",
+                "document_id": str(document.id),
+                "version": "2026-06-01-review",
+                "effective_from": "2026-06-01",
+                "legal_review_status": "reviewed",
+                "short_summary": "Updated gym rules",
+                "plain_language_summary": "Use the gym safely.",
+                "full_legal_text": "Updated gym rules legal text.",
+                "is_current": "1",
+                "legal_review_needed": "1",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        new_version = LegalDocumentVersion.query.filter_by(document_id=document.id, version="2026-06-01-review").one()
+        self.assertTrue(new_version.is_current)
+        self.assertEqual(new_version.legal_review_status, "reviewed")
+
+        response = self.client.post(
+            "/staff/terms-agreements/translations",
+            data={
+                "csrf_token": "token",
+                "version_id": str(new_version.id),
+                "language": "nl",
+                "title": "Gymregels",
+                "short_summary": "Samenvatting",
+                "plain_language_summary": "Gebruik de gym veilig.",
+                "full_legal_text": "Nederlandse concepttekst.",
+                "translation_status": "reviewed",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(LegalTranslation.query.filter_by(version_id=new_version.id, language="nl").one().translation_status, "reviewed")
+
+        response = self.client.post(
+            "/staff/terms-agreements/required-rules",
+            data={
+                "csrf_token": "token",
+                "applies_to_contract_term": "test_term",
+                "required_legal_document_types": "gym_rules\nliability_waiver",
+                "active": "1",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(RequiredAgreementRule.query.filter_by(applies_to_contract_term="test_term").first())
+
+        response = self.client.post(
+            "/staff/terms-agreements/signed-documents",
+            data={
+                "csrf_token": "token",
+                "member_id": "13659",
+                "document_type": "gym_rules",
+                "file_url": "/documents/signed/gym-rules.pdf",
+                "pdf_hash": "hash-123",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(MemberSignedDocument.query.filter_by(member_id="13659", document_type="gym_rules").count(), 1)
+
+        response = self.client.post(
+            f"/staff/terms-agreements/applications/{application.id}/status",
+            data={"csrf_token": "token", "status": "pending_frontdesk_payment", "note": "Waiting for first payment."},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(db.session.get(MembershipApplication, application.id).status, "pending_frontdesk_payment")
+        self.assertEqual(MembershipApplicationStatus.query.filter_by(application_id=application.id).count(), 1)
 
     def test_staff_coach_activity_lists_coach_interactions(self):
         self.add_member(member_id="13659", name="Ron Soechit")

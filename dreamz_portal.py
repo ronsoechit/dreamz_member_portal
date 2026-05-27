@@ -2018,6 +2018,92 @@ def pricing_admin_context():
     }
 
 
+def current_legal_version(document):
+    if not document:
+        return None
+    current = (
+        LegalDocumentVersion.query
+        .filter_by(document_id=document.id, is_current=True)
+        .order_by(LegalDocumentVersion.effective_from.desc(), LegalDocumentVersion.id.desc())
+        .first()
+    )
+    if current:
+        return current
+    return (
+        LegalDocumentVersion.query
+        .filter_by(document_id=document.id)
+        .order_by(LegalDocumentVersion.id.desc())
+        .first()
+    )
+
+
+def terms_admin_context():
+    ensure_runtime_schema()
+    documents = LegalDocument.query.order_by(LegalDocument.sort_order.asc(), LegalDocument.title.asc()).all()
+    versions = LegalDocumentVersion.query.order_by(LegalDocumentVersion.created_at.desc(), LegalDocumentVersion.id.desc()).limit(100).all()
+    translations = LegalTranslation.query.order_by(LegalTranslation.language.asc(), LegalTranslation.id.asc()).all()
+    translations_by_version = {}
+    for translation in translations:
+        translations_by_version.setdefault(translation.version_id, {})[translation.language] = translation
+    document_versions = {document.id: current_legal_version(document) for document in documents}
+    rules = RequiredAgreementRule.query.order_by(RequiredAgreementRule.id.asc()).all()
+    applications = MembershipApplication.query.order_by(MembershipApplication.created_at.desc(), MembershipApplication.id.desc()).limit(100).all()
+    signed_documents = MemberSignedDocument.query.order_by(MemberSignedDocument.uploaded_at.desc(), MemberSignedDocument.id.desc()).limit(100).all()
+    signatures = DigitalSignatureRecord.query.order_by(DigitalSignatureRecord.signed_at.desc(), DigitalSignatureRecord.id.desc()).limit(100).all()
+    signed_pdfs = SignedPdfRecord.query.order_by(SignedPdfRecord.generated_at.desc(), SignedPdfRecord.id.desc()).limit(100).all()
+    cancellations = CancellationRequest.query.order_by(CancellationRequest.requested_at.desc(), CancellationRequest.id.desc()).limit(100).all()
+    warnings = []
+    if any(document.legal_review_needed for document in documents):
+        warnings.append(translated_text("terms_warning_legal_review_needed", current_language()))
+    if any((document.internal_notes or "").lower().find("legacy 6-month") >= 0 for document in documents):
+        warnings.append(translated_text("terms_warning_legacy_contract", current_language()))
+    missing_translation_count = 0
+    draft_translation_count = 0
+    for document in documents:
+        version = document_versions.get(document.id)
+        if not version:
+            warnings.append(translated_text("terms_warning_missing_active_version", current_language()))
+            continue
+        language_map = translations_by_version.get(version.id, {})
+        missing_translation_count += len([language for language in LANGUAGES if language not in language_map])
+        draft_translation_count += len([
+            translation for translation in language_map.values()
+            if translation.translation_status == "draft"
+        ])
+    if missing_translation_count:
+        warnings.append(translated_text("terms_warning_missing_translations", current_language(), count=missing_translation_count))
+    if draft_translation_count:
+        warnings.append(translated_text("terms_warning_draft_translations", current_language(), count=draft_translation_count))
+    if RequiredAgreementRule.query.filter_by(active=True).count() == 0:
+        warnings.append(translated_text("terms_warning_required_rules_missing", current_language()))
+    pending_application_count = MembershipApplication.query.filter(
+        MembershipApplication.status.in_(["submitted", "signed", "pending_frontdesk_payment", "pending_staff_activation"])
+    ).count()
+    if pending_application_count:
+        warnings.append(translated_text("terms_warning_pending_applications", current_language(), count=pending_application_count))
+
+    return {
+        "agreement_categories": AgreementCategory.query.order_by(AgreementCategory.sort_order.asc(), AgreementCategory.name.asc()).all(),
+        "legal_documents": documents,
+        "legal_versions": versions,
+        "document_versions": document_versions,
+        "translations_by_version": translations_by_version,
+        "required_rules": rules,
+        "membership_applications": applications,
+        "application_statuses": MEMBERSHIP_APPLICATION_STATUSES,
+        "member_signed_documents": signed_documents,
+        "digital_signatures": signatures,
+        "signed_pdfs": signed_pdfs,
+        "cancellation_requests": cancellations,
+        "legal_languages": LANGUAGES,
+        "legal_review_statuses": LEGAL_REVIEW_STATUSES,
+        "translation_statuses": LEGAL_TRANSLATION_STATUSES,
+        "terms_admin_warnings": warnings,
+        "legal_translation_notice": setting_value("legal_translation_review_notice", LEGAL_TRANSLATION_DRAFT_NOTICE),
+        "current_legal_version": current_legal_version,
+    }
+
+
 def pricing_item_visible_to(item, visibility):
     return visibility in pricing_visibility_list(item)
 
@@ -3657,6 +3743,18 @@ def parse_optional_date(value):
         return None
 
 
+def parse_optional_datetime(value):
+    value = str(value or "").strip()
+    if not value:
+        return None
+    for date_format in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value, date_format)
+        except ValueError:
+            continue
+    return None
+
+
 def pregnancy_symptom_list(profile):
     if not profile or not profile.pregnancy_symptoms:
         return []
@@ -4827,6 +4925,13 @@ def current_staff_role():
 def current_staff_username():
     username = session.get("staff_username")
     return username if isinstance(username, str) else None
+
+
+def current_staff_user():
+    username = current_staff_username()
+    if not username:
+        return None
+    return StaffUser.query.filter_by(username=username).first()
 
 
 def parse_email_list(raw):
@@ -6408,6 +6513,192 @@ def staff_pricing_products():
         staff_role=staff_role,
         **pricing_admin_context(),
     )
+
+
+@app.get("/staff/terms-agreements")
+def staff_terms_agreements():
+    staff_role = require_staff_access()
+    return render_template(
+        "staff_terms_agreements.html",
+        staff_role=staff_role,
+        **terms_admin_context(),
+    )
+
+
+@app.post("/staff/terms-agreements/versions")
+def staff_legal_version_save():
+    validate_csrf_token()
+    require_staff_access(required_role="admin")
+    ensure_runtime_schema()
+
+    document_id = parse_optional_int(request.form.get("document_id"))
+    document = db.session.get(LegalDocument, document_id) if document_id else None
+    if not document:
+        document_type = request.form.get("document_type", "").strip()
+        title = request.form.get("title", "").strip()
+        category_key = request.form.get("category_key", "").strip()
+        category = AgreementCategory.query.filter_by(key=category_key).first()
+        if not document_type or not title or not category:
+            abort(400, translated_text("terms_required_fields", current_language()))
+        document = LegalDocument(
+            document_type=document_type,
+            title=title,
+            category_key=category_key,
+            active=True,
+            required_for=json.dumps([]),
+            legal_review_needed=True,
+        )
+        db.session.add(document)
+        db.session.flush()
+
+    version_value = request.form.get("version", "").strip()
+    full_legal_text = request.form.get("full_legal_text", "").strip()
+    if not version_value or not full_legal_text:
+        abort(400, translated_text("terms_required_fields", current_language()))
+
+    make_current = request.form.get("is_current") == "1"
+    if make_current:
+        LegalDocumentVersion.query.filter_by(document_id=document.id, is_current=True).update({"is_current": False})
+
+    version = LegalDocumentVersion(
+        document_id=document.id,
+        version=version_value,
+        effective_from=parse_optional_date(request.form.get("effective_from")) or date.today(),
+        effective_to=parse_optional_date(request.form.get("effective_to")),
+        source_language=request.form.get("source_language", DEFAULT_LANGUAGE).strip() or DEFAULT_LANGUAGE,
+        full_legal_text=full_legal_text,
+        short_summary=request.form.get("short_summary", "").strip(),
+        plain_language_summary=request.form.get("plain_language_summary", "").strip(),
+        pdf_template_key=request.form.get("pdf_template_key", "").strip() or document.document_type,
+        is_current=make_current,
+        legal_review_status=request.form.get("legal_review_status", "draft").strip() or "draft",
+    )
+    db.session.add(version)
+    document.legal_review_needed = request.form.get("legal_review_needed") == "1"
+    document.updated_at = datetime.now()
+    db.session.commit()
+    flash(translated_text("terms_version_saved", current_language()))
+    return redirect(url_for("staff_terms_agreements"))
+
+
+@app.post("/staff/terms-agreements/translations")
+def staff_legal_translation_save():
+    validate_csrf_token()
+    require_staff_access(required_role="admin")
+    ensure_runtime_schema()
+
+    version_id = parse_optional_int(request.form.get("version_id"))
+    version = db.session.get(LegalDocumentVersion, version_id) if version_id else None
+    language = normalize_language(request.form.get("language", DEFAULT_LANGUAGE))
+    if not version:
+        abort(400, translated_text("terms_required_fields", current_language()))
+    translation = LegalTranslation.query.filter_by(version_id=version.id, language=language).first()
+    if not translation:
+        translation = LegalTranslation(version_id=version.id, language=language, title="")
+        db.session.add(translation)
+
+    title = request.form.get("title", "").strip()
+    full_legal_text = request.form.get("full_legal_text", "").strip()
+    if not title or not full_legal_text:
+        abort(400, translated_text("terms_required_fields", current_language()))
+    translation.title = title
+    translation.short_summary = request.form.get("short_summary", "").strip()
+    translation.plain_language_summary = request.form.get("plain_language_summary", "").strip()
+    translation.full_legal_text = full_legal_text
+    translation.translation_status = request.form.get("translation_status", "draft").strip() or "draft"
+    translation.updated_at = datetime.now()
+    db.session.commit()
+    flash(translated_text("terms_translation_saved", current_language()))
+    return redirect(url_for("staff_terms_agreements"))
+
+
+@app.post("/staff/terms-agreements/required-rules")
+def staff_required_agreement_rule_save():
+    validate_csrf_token()
+    require_staff_access(required_role="admin")
+    ensure_runtime_schema()
+
+    required_types = [
+        line.strip()
+        for line in request.form.get("required_legal_document_types", "").splitlines()
+        if line.strip()
+    ]
+    if not required_types:
+        abort(400, translated_text("terms_required_fields", current_language()))
+    db.session.add(RequiredAgreementRule(
+        applies_to_membership_type=request.form.get("applies_to_membership_type", "").strip() or None,
+        applies_to_contract_term=request.form.get("applies_to_contract_term", "").strip() or None,
+        applies_to_payment_method=request.form.get("applies_to_payment_method", "").strip() or None,
+        applies_to_add_on=request.form.get("applies_to_add_on", "").strip() or None,
+        applies_to_under18=request.form.get("applies_to_under18") == "1" if "applies_to_under18" in request.form else None,
+        required_legal_document_types=json.dumps(required_types),
+        active=request.form.get("active", "1") == "1",
+    ))
+    db.session.commit()
+    flash(translated_text("terms_required_rule_saved", current_language()))
+    return redirect(url_for("staff_terms_agreements"))
+
+
+@app.post("/staff/terms-agreements/signed-documents")
+def staff_signed_document_save():
+    validate_csrf_token()
+    require_staff_access()
+    ensure_runtime_schema()
+
+    member_id = request.form.get("member_id", "").strip()
+    document_type = request.form.get("document_type", "").strip()
+    file_url = request.form.get("file_url", "").strip()
+    if not member_id or not document_type or not file_url:
+        abort(400, translated_text("terms_required_fields", current_language()))
+    db.session.add(MemberSignedDocument(
+        member_id=member_id,
+        application_id=parse_optional_int(request.form.get("application_id")),
+        document_type=document_type,
+        file_url=file_url,
+        storage_reference=file_url,
+        pdf_hash=request.form.get("pdf_hash", "").strip() or None,
+        signed_at=parse_optional_datetime(request.form.get("signed_at")) or datetime.now(),
+        related_contract_id=request.form.get("related_contract_id", "").strip() or None,
+        staff_user_id=current_staff_user().id if current_staff_user() else None,
+        language=normalize_language(request.form.get("language", DEFAULT_LANGUAGE)),
+        version=request.form.get("version", "").strip() or None,
+        status=request.form.get("status", "archived").strip() or "archived",
+    ))
+    db.session.commit()
+    flash(translated_text("terms_signed_document_saved", current_language()))
+    return redirect(url_for("staff_terms_agreements"))
+
+
+@app.post("/staff/terms-agreements/applications/<int:application_id>/status")
+def staff_membership_application_status_save(application_id):
+    validate_csrf_token()
+    require_staff_access()
+    ensure_runtime_schema()
+
+    application = db.session.get(MembershipApplication, application_id)
+    if not application:
+        abort(404)
+    status = request.form.get("status", "").strip()
+    if status not in MEMBERSHIP_APPLICATION_STATUSES:
+        abort(400, translated_text("terms_required_fields", current_language()))
+    application.status = status
+    application.internal_notes = request.form.get("internal_notes", application.internal_notes or "").strip() or application.internal_notes
+    application.updated_at = datetime.now()
+    if status == "active" and not application.activated_at:
+        application.activated_at = datetime.now()
+        staff_user = current_staff_user()
+        application.activated_by_staff_user_id = staff_user.id if staff_user else None
+    if status == "rejected":
+        application.rejection_reason = request.form.get("rejection_reason", "").strip() or application.rejection_reason
+    db.session.add(MembershipApplicationStatus(
+        application_id=application.id,
+        status=status,
+        note=request.form.get("note", "").strip(),
+        changed_by_staff_user_id=current_staff_user().id if current_staff_user() else None,
+    ))
+    db.session.commit()
+    flash(translated_text("terms_application_status_saved", current_language()))
+    return redirect(url_for("staff_terms_agreements"))
 
 
 @app.post("/staff/pricing-products/items")

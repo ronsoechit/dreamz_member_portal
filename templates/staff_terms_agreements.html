@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+{% block title %}{{ t('staff_terms_title') }} | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+  <div>
+    <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('staff_terms_label') }}</div>
+    <h2 class="text-2xl font-semibold">{{ t('staff_terms_title') }}</h2>
+    <p class="mt-1 max-w-3xl text-sm leading-6 text-gray-400">{{ t('staff_terms_intro') }}</p>
+  </div>
+  <div class="rounded border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm leading-6 text-yellow-100">
+    {{ legal_translation_notice }}
+  </div>
+</div>
+
+{% if terms_admin_warnings %}
+  <section class="mb-6 rounded border border-red-400/40 bg-red-500/10 p-4">
+    <div class="text-sm font-semibold uppercase tracking-wide text-red-100">{{ t('terms_admin_warnings') }}</div>
+    <ul class="mt-3 space-y-2 text-sm text-red-50">
+      {% for warning in terms_admin_warnings %}
+        <li>{{ warning }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+{% endif %}
+
+<section class="mb-6 rounded border border-gray-700 bg-gray-800/50 p-5">
+  <h3 class="text-lg font-semibold text-white">{{ t('terms_add_version') }}</h3>
+  <form method="post" action="{{ url_for('staff_legal_version_save') }}" class="mt-4 grid gap-3 lg:grid-cols-6">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label class="block lg:col-span-2">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('terms_document') }}</span>
+      <select name="document_id" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+        {% for document in legal_documents %}
+          <option value="{{ document.id }}">{{ document.title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('terms_version') }}</span>
+      <input name="version" required value="{{ current_date|default('', true) }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('terms_effective_from') }}</span>
+      <input name="effective_from" type="date" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('terms_review_status') }}</span>
+      <select name="legal_review_status" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+        {% for status in legal_review_statuses %}
+          <option value="{{ status }}">{{ status }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="flex items-end">
+      <button type="submit" class="w-full rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black hover:bg-yellow-400">{{ t('terms_save_version') }}</button>
+    </div>
+    <label class="block lg:col-span-3">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('terms_short_summary') }}</span>
+      <textarea name="short_summary" rows="2" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white"></textarea>
+    </label>
+    <label class="block lg:col-span-3">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('terms_plain_summary') }}</span>
+      <textarea name="plain_language_summary" rows="2" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white"></textarea>
+    </label>
+    <label class="block lg:col-span-6">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('terms_full_text') }}</span>
+      <textarea name="full_legal_text" required rows="6" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white"></textarea>
+    </label>
+    <div class="lg:col-span-6 flex flex-wrap gap-4 text-sm text-gray-200">
+      <label class="flex items-center gap-2"><input name="is_current" value="1" type="checkbox" checked class="h-4 w-4 accent-yellow-500">{{ t('terms_make_current') }}</label>
+      <label class="flex items-center gap-2"><input name="legal_review_needed" value="1" type="checkbox" checked class="h-4 w-4 accent-yellow-500">{{ t('terms_legal_review_needed') }}</label>
+    </div>
+  </form>
+</section>
+
+<section class="mb-6 grid gap-4 lg:grid-cols-2">
+  {% for document in legal_documents %}
+    {% set version = document_versions.get(document.id) %}
+    {% set language_map = translations_by_version.get(version.id, {}) if version else {} %}
+    <article class="rounded border border-gray-700 bg-gray-900/50 p-4">
+      <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ document.document_type }}</div>
+          <h3 class="mt-1 text-lg font-semibold text-white">{{ document.title }}</h3>
+          <p class="mt-2 text-sm text-gray-400">{{ document.category.name if document.category else t('not_available') }}</p>
+        </div>
+        <div class="text-right text-xs">
+          {% if document.legal_review_needed %}
+            <span class="rounded bg-red-500/20 px-2 py-1 font-semibold text-red-100">{{ t('terms_legal_review_needed') }}</span>
+          {% endif %}
+        </div>
+      </div>
+      {% if document.internal_notes %}
+        <div class="mt-3 rounded border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-50">{{ document.internal_notes }}</div>
+      {% endif %}
+      {% if version %}
+        <dl class="mt-4 grid gap-y-2 text-sm" style="grid-template-columns: 8rem minmax(0, 1fr);">
+          <dt class="font-semibold text-gray-300">{{ t('terms_version') }}:</dt>
+          <dd>{{ version.version }}</dd>
+          <dt class="font-semibold text-gray-300">{{ t('terms_review_status') }}:</dt>
+          <dd>{{ version.legal_review_status }}</dd>
+          <dt class="font-semibold text-gray-300">{{ t('terms_effective_from') }}:</dt>
+          <dd>{{ version.effective_from|format_date or t('not_available') }}</dd>
+        </dl>
+        <details class="mt-3 rounded border border-gray-800 bg-black/20 p-3">
+          <summary class="cursor-pointer text-sm font-semibold text-yellow-300">{{ t('terms_plain_summary') }}</summary>
+          <p class="mt-3 text-sm leading-6 text-gray-300">{{ version.plain_language_summary }}</p>
+        </details>
+        <div class="mt-3 flex flex-wrap gap-2 text-xs">
+          {% for language in legal_languages %}
+            {% set translation = language_map.get(language) %}
+            <span class="rounded border border-gray-700 px-2 py-1 {% if translation and translation.translation_status == 'draft' %}text-yellow-200{% elif translation %}text-green-200{% else %}text-red-200{% endif %}">
+              {{ language }}: {{ translation.translation_status if translation else t('terms_missing') }}
+            </span>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="mt-4 rounded border border-red-400/40 bg-red-500/10 p-3 text-sm text-red-50">{{ t('terms_warning_missing_active_version') }}</div>
+      {% endif %}
+    </article>
+  {% endfor %}
+</section>
+
+<section class="mb-6 grid gap-4 lg:grid-cols-2">
+  <article class="rounded border border-gray-700 bg-gray-800/50 p-5">
+    <h3 class="text-lg font-semibold text-white">{{ t('terms_required_rules') }}</h3>
+    <form method="post" action="{{ url_for('staff_required_agreement_rule_save') }}" class="mt-4 grid gap-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input name="applies_to_membership_type" placeholder="{{ t('terms_membership_type') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <input name="applies_to_contract_term" placeholder="{{ t('terms_contract_term') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <input name="applies_to_payment_method" placeholder="{{ t('terms_payment_method') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <input name="applies_to_add_on" placeholder="{{ t('terms_add_on') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <textarea name="required_legal_document_types" required rows="5" placeholder="{{ t('terms_required_documents_placeholder') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white"></textarea>
+      <label class="flex items-center gap-2 text-sm"><input name="active" value="1" type="checkbox" checked class="h-4 w-4 accent-yellow-500">{{ t('pricing_active') }}</label>
+      <button class="rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black">{{ t('terms_save_rule') }}</button>
+    </form>
+    <div class="mt-5 space-y-3">
+      {% for rule in required_rules %}
+        <div class="rounded border border-gray-700 bg-gray-900/60 p-3 text-sm">
+          <div class="font-semibold text-yellow-200">{{ rule.applies_to_contract_term or rule.applies_to_payment_method or rule.applies_to_add_on or t('terms_everyone') }}</div>
+          <div class="mt-1 break-words text-gray-300">{{ rule.required_legal_document_types }}</div>
+        </div>
+      {% else %}
+        <div class="text-sm text-gray-400">{{ t('terms_no_rules') }}</div>
+      {% endfor %}
+    </div>
+  </article>
+
+  <article class="rounded border border-gray-700 bg-gray-800/50 p-5">
+    <h3 class="text-lg font-semibold text-white">{{ t('terms_link_signed_pdf') }}</h3>
+    <form method="post" action="{{ url_for('staff_signed_document_save') }}" class="mt-4 grid gap-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input name="member_id" required placeholder="{{ t('member_id') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <input name="document_type" required placeholder="{{ t('terms_document_type') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <input name="file_url" required placeholder="{{ t('terms_file_url') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <input name="pdf_hash" placeholder="{{ t('terms_pdf_hash') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <button class="rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black">{{ t('terms_save_signed_document') }}</button>
+    </form>
+  </article>
+</section>
+
+<section class="mb-6 rounded border border-gray-700 bg-gray-800/50 p-5">
+  <h3 class="text-lg font-semibold text-white">{{ t('terms_membership_applications') }}</h3>
+  <div class="mt-4 grid gap-3">
+    {% for application in membership_applications %}
+      <form method="post" action="{{ url_for('staff_membership_application_status_save', application_id=application.id) }}" class="rounded border border-gray-700 bg-gray-900/60 p-4">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="grid gap-3 lg:grid-cols-5">
+          <div class="lg:col-span-2">
+            <div class="font-semibold text-white">{{ application.applicant_first_name }} {{ application.applicant_last_name }}</div>
+            <div class="mt-1 text-sm text-gray-400">{{ application.email }} / {{ application.selected_membership_type }}</div>
+          </div>
+          <select name="status" class="rounded border border-gray-700 bg-gray-950 p-2 text-sm text-white">
+            {% for status in application_statuses %}
+              <option value="{{ status }}" {% if application.status == status %}selected{% endif %}>{{ status }}</option>
+            {% endfor %}
+          </select>
+          <input name="note" placeholder="{{ t('staff_note') }}" class="rounded border border-gray-700 bg-gray-950 p-2 text-sm text-white">
+          <button class="rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black">{{ t('save') }}</button>
+        </div>
+      </form>
+    {% else %}
+      <div class="rounded border border-gray-700 bg-gray-900/60 p-4 text-sm text-gray-400">{{ t('terms_no_applications') }}</div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="grid gap-4 lg:grid-cols-3">
+  <article class="rounded border border-gray-700 bg-gray-800/50 p-5">
+    <h3 class="text-lg font-semibold text-white">{{ t('terms_signed_documents') }}</h3>
+    <div class="mt-4 space-y-3">
+      {% for document in member_signed_documents %}
+        <div class="rounded border border-gray-700 bg-gray-900/60 p-3 text-sm">
+          <div class="font-semibold text-yellow-200">{{ document.document_type }}</div>
+          <div class="mt-1 text-gray-300">{{ document.member_id }} / {{ document.status }}</div>
+          {% if document.file_url %}<div class="mt-1 break-words text-xs text-gray-500">{{ document.file_url }}</div>{% endif %}
+        </div>
+      {% else %}
+        <div class="text-sm text-gray-400">{{ t('terms_no_signed_documents') }}</div>
+      {% endfor %}
+    </div>
+  </article>
+  <article class="rounded border border-gray-700 bg-gray-800/50 p-5">
+    <h3 class="text-lg font-semibold text-white">{{ t('terms_digital_signatures') }}</h3>
+    <div class="mt-4 space-y-3">
+      {% for signature in digital_signatures %}
+        <div class="rounded border border-gray-700 bg-gray-900/60 p-3 text-sm">
+          <div class="font-semibold text-yellow-200">{{ signature.full_legal_name }}</div>
+          <div class="mt-1 text-gray-300">{{ signature.audit_reference_number }}</div>
+          <div class="mt-1 text-xs text-gray-500">{{ signature.signed_at|format_date('%d/%m/%Y %H:%M') }}</div>
+        </div>
+      {% else %}
+        <div class="text-sm text-gray-400">{{ t('terms_no_signatures') }}</div>
+      {% endfor %}
+    </div>
+  </article>
+  <article class="rounded border border-gray-700 bg-gray-800/50 p-5">
+    <h3 class="text-lg font-semibold text-white">{{ t('terms_cancellation_requests') }}</h3>
+    <div class="mt-4 space-y-3">
+      {% for cancellation in cancellation_requests %}
+        <div class="rounded border border-gray-700 bg-gray-900/60 p-3 text-sm">
+          <div class="font-semibold text-yellow-200">{{ cancellation.member_id }} / {{ cancellation.status }}</div>
+          <div class="mt-1 text-gray-300">{{ cancellation.confirmation_number or t('not_available') }}</div>
+          <div class="mt-1 text-xs text-gray-500">{{ cancellation.requested_at|format_date('%d/%m/%Y %H:%M') }}</div>
+        </div>
+      {% else %}
+        <div class="text-sm text-gray-400">{{ t('terms_no_cancellations') }}</div>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+{% endblock %}
