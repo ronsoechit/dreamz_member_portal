@@ -12,7 +12,7 @@
   </p>
 </div>
 
-<div class="grid gap-5 lg:grid-cols-2">
+<div class="grid gap-5 lg:grid-cols-3">
   <a
     href="{{ staff_portal_url }}"
     class="group rounded border border-gray-700 bg-gray-800/50 p-6 transition hover:border-yellow-400 hover:bg-gray-800"
@@ -33,6 +33,24 @@
       </p>
     {% endif %}
   </a>
+
+  {% if staff_is_authenticated %}
+    <a
+      href="{{ url_for('staff_group_classes') }}"
+      class="group rounded border border-gray-700 bg-gray-800/50 p-6 transition hover:border-yellow-400 hover:bg-gray-800"
+    >
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('staff_group_classes_label') }}</div>
+          <h3 class="mt-2 text-xl font-semibold text-white">{{ t('staff_group_classes_title') }}</h3>
+        </div>
+        <span class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition group-hover:bg-yellow-400">{{ t('open') }}</span>
+      </div>
+      <p class="mt-4 text-sm leading-6 text-gray-300">
+        {{ t('staff_group_classes_intro') }}
+      </p>
+    </a>
+  {% endif %}
 
   <a
     href="{{ fep_manager_url }}"

@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+{% block title %}{{ t('staff_group_classes_title') }} | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<div class="mb-6 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+  <div>
+    <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('staff_group_classes_label') }}</div>
+    <h2 class="text-2xl font-semibold">{{ t('staff_group_classes_title') }}</h2>
+    <p class="mt-1 max-w-3xl text-sm leading-6 text-gray-400">{{ t('staff_group_classes_intro') }}</p>
+  </div>
+  <form method="post" action="{{ url_for('staff_group_class_publish') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black hover:bg-yellow-400">
+      {{ t('group_class_publish_schedule') }}
+    </button>
+  </form>
+</div>
+
+<section class="mb-6 grid gap-3 md:grid-cols-3">
+  <div class="rounded border border-gray-700 bg-gray-800/60 p-4">
+    <div class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_schedule_name') }}</div>
+    <div class="mt-1 font-semibold text-white">{{ schedule.name if schedule else 'Dreamz Fitness Group Class Schedule' }}</div>
+  </div>
+  <div class="rounded border border-gray-700 bg-gray-800/60 p-4">
+    <div class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_status') }}</div>
+    <div class="mt-1 font-semibold text-yellow-300">{{ schedule.status if schedule else 'draft' }}</div>
+  </div>
+  <div class="rounded border border-gray-700 bg-gray-800/60 p-4">
+    <div class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_last_updated') }}</div>
+    <div class="mt-1 font-semibold text-white">
+      {{ schedule.last_updated_from_pdf|format_date('%d/%m/%Y') if schedule and schedule.last_updated_from_pdf else t('not_available') }}
+      <span class="block text-xs font-normal text-gray-400">{{ schedule.timezone if schedule else 'America/Kralendijk' }}</span>
+    </div>
+  </div>
+</section>
+
+<section class="mb-8 rounded border border-gray-700 bg-gray-800/50 p-5">
+  <h3 class="text-lg font-semibold text-white">{{ t('group_class_add_lesson') }}</h3>
+  <form method="post" action="{{ url_for('staff_group_class_occurrence_save') }}" class="mt-4 grid gap-3 lg:grid-cols-6">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_day') }}</span>
+      <select name="day_of_week" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+        {% for day, label in day_options %}
+          <option value="{{ day }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_time') }}</span>
+      <input name="start_time" type="time" required class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_end_time') }}</span>
+      <input name="end_time" type="time" required class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_type') }}</span>
+      <select name="class_type_id" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+        {% for class_type in class_types %}
+          <option value="{{ class_type.id }}">{{ class_type.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_room') }}</span>
+      <input name="room" required class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white" placeholder="AEROBICS ROOM">
+    </label>
+    <div class="flex items-end">
+      <button type="submit" class="w-full rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black hover:bg-yellow-400">
+        {{ t('group_class_add_lesson') }}
+      </button>
+    </div>
+    <label class="block lg:col-span-2">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_instructor') }}</span>
+      <input name="instructor" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_capacity') }}</span>
+      <input name="capacity" type="number" min="0" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_status') }}</span>
+      <select name="status" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+        {% for status in statuses %}
+          <option value="{{ status }}">{{ t('group_class_status_' ~ status) }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="block lg:col-span-2">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_note') }}</span>
+      <input name="note" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+    </label>
+    <label class="flex items-center gap-2 text-sm text-gray-200">
+      <input name="is_bookable" value="1" type="checkbox" checked class="h-4 w-4 accent-yellow-500">
+      {{ t('group_class_bookable') }}
+    </label>
+    <label class="flex items-center gap-2 text-sm text-gray-200">
+      <input name="is_published" value="1" type="checkbox" checked class="h-4 w-4 accent-yellow-500">
+      {{ t('group_class_published') }}
+    </label>
+  </form>
+</section>
+
+<section class="mb-8">
+  <div class="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+    <h3 class="text-lg font-semibold text-white">{{ t('group_class_weekly_schedule') }}</h3>
+    <form method="get" action="{{ url_for('staff_group_classes') }}" class="grid gap-2 sm:grid-cols-4">
+      <select name="day" class="rounded border border-gray-700 bg-gray-900 p-2 text-sm text-white">
+        <option value="">{{ t('group_class_all_days') }}</option>
+        {% for day, label in day_options %}
+          <option value="{{ day }}" {% if selected_day|string == day|string %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <select name="room" class="rounded border border-gray-700 bg-gray-900 p-2 text-sm text-white">
+        <option value="">{{ t('group_class_all_rooms') }}</option>
+        {% for room in rooms %}
+          <option value="{{ room }}" {% if selected_room == room %}selected{% endif %}>{{ room }}</option>
+        {% endfor %}
+      </select>
+      <select name="class_type" class="rounded border border-gray-700 bg-gray-900 p-2 text-sm text-white">
+        <option value="">{{ t('group_class_all_types') }}</option>
+        {% for class_type in class_types %}
+          <option value="{{ class_type.id }}" {% if selected_type|string == class_type.id|string %}selected{% endif %}>{{ class_type.name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="rounded bg-gray-700 px-3 py-2 text-sm font-semibold text-white hover:bg-gray-600">{{ t('apply') }}</button>
+    </form>
+  </div>
+
+  <div class="overflow-x-auto rounded border border-gray-700">
+    <table class="min-w-full text-sm">
+      <thead class="bg-gray-800 text-gray-200">
+        <tr>
+          <th class="p-3 text-left">{{ t('group_class_day') }}</th>
+          <th class="p-3 text-left">{{ t('group_class_time') }}</th>
+          <th class="p-3 text-left">{{ t('group_class_type') }}</th>
+          <th class="p-3 text-left">{{ t('group_class_room') }}</th>
+          <th class="p-3 text-left">{{ t('group_class_admin_details') }}</th>
+          <th class="p-3 text-left">{{ t('group_class_actions') }}</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-800">
+        {% for occurrence in occurrences %}
+          <tr class="bg-gray-900/40">
+            <form method="post" action="{{ url_for('staff_group_class_occurrence_save') }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="occurrence_id" value="{{ occurrence.id }}">
+              <td class="p-3 align-top">
+                <select name="day_of_week" class="w-full rounded border border-gray-700 bg-gray-900 p-2 text-white">
+                  {% for day, label in day_options %}
+                    <option value="{{ day }}" {% if occurrence.day_of_week == day %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </td>
+              <td class="p-3 align-top">
+                <div class="grid gap-2">
+                  <input name="start_time" type="time" value="{{ time_label(occurrence.start_time) }}" class="rounded border border-gray-700 bg-gray-900 p-2 text-white">
+                  <input name="end_time" type="time" value="{{ time_label(occurrence.end_time) }}" class="rounded border border-gray-700 bg-gray-900 p-2 text-white">
+                </div>
+              </td>
+              <td class="p-3 align-top">
+                <select name="class_type_id" class="w-full rounded border border-gray-700 bg-gray-900 p-2 text-white">
+                  {% for class_type in class_types %}
+                    <option value="{{ class_type.id }}" {% if occurrence.class_type_id == class_type.id %}selected{% endif %}>{{ class_type.name }}</option>
+                  {% endfor %}
+                </select>
+                {% if occurrence.class_type and occurrence.class_type.name == 'RESERVED' %}
+                  <div class="mt-2 rounded border border-yellow-500/30 bg-yellow-500/10 p-2 text-xs text-yellow-100">{{ t('group_class_reserved_hint') }}</div>
+                {% endif %}
+              </td>
+              <td class="p-3 align-top">
+                <input name="room" value="{{ occurrence.room }}" class="w-full rounded border border-gray-700 bg-gray-900 p-2 text-white">
+                <input name="instructor" value="{{ occurrence.instructor or '' }}" placeholder="{{ t('group_class_instructor') }}" class="mt-2 w-full rounded border border-gray-700 bg-gray-900 p-2 text-white">
+              </td>
+              <td class="p-3 align-top">
+                <div class="grid gap-2">
+                  <input name="capacity" type="number" min="0" value="{{ occurrence.capacity if occurrence.capacity is not none else '' }}" placeholder="{{ t('group_class_capacity') }}" class="rounded border border-gray-700 bg-gray-900 p-2 text-white">
+                  <select name="status" class="rounded border border-gray-700 bg-gray-900 p-2 text-white">
+                    {% for status in statuses %}
+                      <option value="{{ status }}" {% if occurrence.status == status %}selected{% endif %}>{{ t('group_class_status_' ~ status) }}</option>
+                    {% endfor %}
+                  </select>
+                  <input name="note" value="{{ occurrence.note or '' }}" placeholder="{{ t('group_class_note') }}" class="rounded border border-gray-700 bg-gray-900 p-2 text-white">
+                  <label class="flex items-center gap-2 text-xs text-gray-200"><input name="is_bookable" value="1" type="checkbox" {% if occurrence.is_bookable %}checked{% endif %} class="h-4 w-4 accent-yellow-500">{{ t('group_class_bookable') }}</label>
+                  <label class="flex items-center gap-2 text-xs text-gray-200"><input name="is_published" value="1" type="checkbox" {% if occurrence.is_published %}checked{% endif %} class="h-4 w-4 accent-yellow-500">{{ t('group_class_published') }}</label>
+                  {% set planned_count = future_plan_counts.get(occurrence.id, 0) %}
+                  {% if planned_count %}
+                    <div class="rounded border border-yellow-500/30 bg-yellow-500/10 p-2 text-xs text-yellow-100">
+                      {{ t('group_class_member_impact') }}: {{ planned_count }}
+                    </div>
+                  {% endif %}
+                </div>
+              </td>
+              <td class="p-3 align-top">
+                <button type="submit" class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black hover:bg-yellow-400">{{ t('save') }}</button>
+              </td>
+            </form>
+          </tr>
+        {% else %}
+          <tr><td colspan="6" class="p-6 text-center text-gray-400">{{ t('group_class_empty_schedule') }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="mb-8 rounded border border-gray-700 bg-gray-800/50 p-5">
+  <h3 class="text-lg font-semibold text-white">{{ t('group_class_types_title') }}</h3>
+  <div class="mt-4 grid gap-4 lg:grid-cols-2">
+    {% for class_type in class_types %}
+      <form method="post" action="{{ url_for('staff_group_class_type_save') }}" class="rounded border border-gray-700 bg-gray-900/60 p-4">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="class_type_id" value="{{ class_type.id }}">
+        <div class="grid gap-3 sm:grid-cols-2">
+          <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_type') }}</span>
+            <input name="name" value="{{ class_type.name }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-2 text-white">
+          </label>
+          <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_category') }}</span>
+            <input name="category" value="{{ class_type.category }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-2 text-white">
+          </label>
+          <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_intensity') }}</span>
+            <input name="intensity" value="{{ class_type.intensity }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-2 text-white">
+          </label>
+          <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_muscle_focus') }}</span>
+            <input name="muscle_focus" value="{{ class_type.muscle_focus or '' }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-2 text-white">
+          </label>
+          <label class="block"><span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_cardio_load') }}</span><input name="cardio_load" value="{{ class_type.cardio_load or '' }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-2 text-white"></label>
+          <label class="block"><span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_strength_load') }}</span><input name="strength_load" value="{{ class_type.strength_load or '' }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-2 text-white"></label>
+          <label class="block"><span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_recovery_impact') }}</span><input name="recovery_impact" value="{{ class_type.recovery_impact or '' }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-2 text-white"></label>
+          <label class="block"><span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_impact_level') }}</span><input name="impact_level" value="{{ class_type.impact_level or '' }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-2 text-white"></label>
+          <label class="block sm:col-span-2"><span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_pregnancy_safety') }}</span><input name="pregnancy_safety_level" value="{{ class_type.pregnancy_safety_level or '' }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-2 text-white"></label>
+          <label class="block sm:col-span-2"><span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_description') }}</span><textarea name="description" rows="2" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-2 text-white">{{ class_type.description or '' }}</textarea></label>
+        </div>
+        <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex flex-wrap gap-3 text-sm text-gray-200">
+            <label class="flex items-center gap-2"><input name="default_bookable" value="1" type="checkbox" {% if class_type.default_bookable %}checked{% endif %} class="h-4 w-4 accent-yellow-500">{{ t('group_class_bookable') }}</label>
+            <label class="flex items-center gap-2"><input name="default_publish" value="1" type="checkbox" {% if class_type.default_publish %}checked{% endif %} class="h-4 w-4 accent-yellow-500">{{ t('group_class_published') }}</label>
+          </div>
+          <button type="submit" class="rounded bg-gray-700 px-3 py-2 text-sm font-semibold text-white hover:bg-gray-600">{{ t('save') }}</button>
+        </div>
+      </form>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="rounded border border-gray-700 bg-gray-800/50 p-5">
+  <h3 class="text-lg font-semibold text-white">{{ t('group_class_schedule_changes') }}</h3>
+  <div class="mt-4 space-y-3">
+    {% for change in changes %}
+      <div class="rounded border border-gray-700 bg-gray-900/60 p-3 text-sm">
+        <div class="font-semibold text-yellow-200">{{ t('group_class_notification_' ~ change.change_type) }}</div>
+        <div class="mt-1 text-gray-200">{{ change.message }}</div>
+        <div class="mt-1 text-xs text-gray-500">{{ change.created_at|format_date('%d/%m/%Y %H:%M') }}{% if change.member_id %} / {{ change.member_id }}{% endif %}</div>
+      </div>
+    {% else %}
+      <div class="rounded border border-gray-700 bg-gray-900/60 p-4 text-sm text-gray-400">{{ t('group_class_no_changes') }}</div>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

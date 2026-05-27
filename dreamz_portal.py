@@ -440,6 +440,7 @@ class GroupClassOccurrence(db.Model):
     instructor = db.Column(db.String)
     capacity = db.Column(db.Integer)
     note = db.Column(db.String)
+    status = db.Column(db.String, default="scheduled", nullable=False, index=True)
     is_bookable = db.Column(db.Boolean, default=True, nullable=False)
     is_published = db.Column(db.Boolean, default=True, nullable=False)
     blocks_room = db.Column(db.Boolean, default=True, nullable=False)
@@ -528,6 +529,16 @@ GROUP_CLASS_SCHEDULE_NAME = "Dreamz Fitness Group Class Schedule"
 GROUP_CLASS_SCHEDULE_SOURCE = "uploaded PDF schedule converted to database seed"
 GROUP_CLASS_SCHEDULE_TIMEZONE = "America/Kralendijk"
 GROUP_CLASS_SCHEDULE_LAST_UPDATED_FROM_PDF = date(2026, 5, 18)
+GROUP_CLASS_DAY_KEYS = {
+    0: "monday",
+    1: "tuesday",
+    2: "wednesday",
+    3: "thursday",
+    4: "friday",
+    5: "saturday",
+    6: "sunday",
+}
+GROUP_CLASS_OCCURRENCE_STATUSES = {"scheduled", "cancelled", "reserved"}
 
 GROUP_CLASS_TYPE_SEED = {
     "BODYPUMP": {
@@ -737,6 +748,7 @@ def ensure_runtime_schema():
     ensure_model_column("coach_profile", "pregnancy_symptoms", "TEXT")
     ensure_model_column("coach_profile", "pregnancy_consent", "BOOLEAN")
     ensure_model_column("coach_plan", "plan_version", "VARCHAR")
+    ensure_model_column("group_class_occurrence", "status", "VARCHAR DEFAULT 'scheduled' NOT NULL")
     ensure_model_column("member", "password_hash", "VARCHAR(512)")
     ensure_model_column("member", "password_set_at", "TIMESTAMP")
     db.create_all()
@@ -865,6 +877,7 @@ def seed_group_class_schedule():
             end_time=parse_group_class_seed_time(end_at),
             room=room,
             note=note,
+            status="reserved" if is_reserved else "scheduled",
             is_bookable=not is_reserved and class_type.default_bookable,
             is_published=not is_reserved and class_type.default_publish,
             blocks_room=True,
@@ -874,6 +887,191 @@ def seed_group_class_schedule():
 
     db.session.commit()
     return schedule
+
+
+def group_class_day_label(day_of_week, language=None):
+    day_key = GROUP_CLASS_DAY_KEYS.get(day_of_week, "monday")
+    return translated_text(f"group_class_day_{day_key}", language or current_language())
+
+
+def group_class_time_label(value):
+    return value.strftime("%H:%M") if value else ""
+
+
+def parse_group_class_time(value):
+    value = (value or "").strip()
+    try:
+        return datetime.strptime(value, "%H:%M").time()
+    except ValueError:
+        abort(400, translated_text("group_class_invalid_time", current_language()))
+
+
+def group_class_occurrence_snapshot(occurrence):
+    return {
+        "class_type_id": occurrence.class_type_id,
+        "class_name": occurrence.class_type.name if occurrence.class_type else "",
+        "day_of_week": occurrence.day_of_week,
+        "start_time": group_class_time_label(occurrence.start_time),
+        "end_time": group_class_time_label(occurrence.end_time),
+        "room": occurrence.room,
+        "instructor": occurrence.instructor or "",
+        "capacity": occurrence.capacity,
+        "status": occurrence.status,
+        "is_bookable": bool(occurrence.is_bookable),
+        "is_published": bool(occurrence.is_published),
+    }
+
+
+def group_class_change_type(old_data, new_data):
+    if old_data.get("status") != "cancelled" and new_data.get("status") == "cancelled":
+        return "class_cancelled"
+    if old_data.get("class_type_id") != new_data.get("class_type_id"):
+        return "class_type_changed"
+    if (
+        old_data.get("day_of_week") != new_data.get("day_of_week")
+        or old_data.get("start_time") != new_data.get("start_time")
+        or old_data.get("end_time") != new_data.get("end_time")
+    ):
+        return "class_time_changed"
+    if old_data.get("room") != new_data.get("room"):
+        return "room_changed"
+    if old_data.get("instructor") != new_data.get("instructor"):
+        return "instructor_changed"
+    if old_data != new_data:
+        return "schedule_updated"
+    return None
+
+
+def group_class_change_message(occurrence, change_type, old_data, new_data):
+    class_name = new_data.get("class_name") or old_data.get("class_name") or "Class"
+    day_name = group_class_day_label(new_data.get("day_of_week", occurrence.day_of_week), DEFAULT_LANGUAGE)
+    start_time = new_data.get("start_time") or group_class_time_label(occurrence.start_time)
+    if change_type == "class_cancelled":
+        return f"{class_name} on {day_name} at {start_time} has been cancelled."
+    if change_type == "class_time_changed":
+        return f"{class_name} on {day_name} has moved to {start_time}."
+    if change_type == "room_changed":
+        return f"{class_name} on {day_name} at {start_time} has moved to {new_data.get('room')}."
+    if change_type == "instructor_changed":
+        return f"{class_name} on {day_name} at {start_time} has a new instructor."
+    if change_type == "class_type_changed":
+        return f"The class on {day_name} at {start_time} changed from {old_data.get('class_name')} to {class_name}."
+    return f"{class_name} on {day_name} at {start_time} has been updated."
+
+
+def future_member_class_plans_for_occurrence(occurrence_id, today=None):
+    today = today or local_datetime(datetime.now(timezone.utc)).date()
+    return (
+        MemberClassPlan.query
+        .filter_by(occurrence_id=occurrence_id)
+        .filter(MemberClassPlan.class_date >= today)
+        .filter(MemberClassPlan.status.in_(["planned", "adjusted"]))
+        .all()
+    )
+
+
+def create_group_class_change_notifications(occurrence, change_type, old_data, new_data):
+    if not change_type:
+        return 0
+    affected_plans = future_member_class_plans_for_occurrence(occurrence.id)
+    message = group_class_change_message(occurrence, change_type, old_data, new_data)
+    old_value = json.dumps(old_data, sort_keys=True)
+    new_value = json.dumps(new_data, sort_keys=True)
+
+    if not affected_plans:
+        db.session.add(ScheduleChangeNotification(
+            occurrence_id=occurrence.id,
+            change_type=change_type,
+            message_key=f"group_class_notification_{change_type}",
+            message=message,
+            old_value=old_value,
+            new_value=new_value,
+            published_at=datetime.now(),
+        ))
+        return 0
+
+    for plan in affected_plans:
+        db.session.add(ScheduleChangeNotification(
+            member_id=plan.member_id,
+            occurrence_id=occurrence.id,
+            plan_id=plan.id,
+            change_type=change_type,
+            message_key=f"group_class_notification_{change_type}",
+            message=message,
+            old_value=old_value,
+            new_value=new_value,
+            published_at=datetime.now(),
+        ))
+        if change_type in {"class_cancelled", "class_time_changed", "class_type_changed"}:
+            plan.status = "adjusted"
+            plan.note = message
+            plan.updated_at = datetime.now()
+    return len(affected_plans)
+
+
+def group_class_admin_context():
+    ensure_runtime_schema()
+    schedule = GroupClassSchedule.query.filter_by(name=GROUP_CLASS_SCHEDULE_NAME).first()
+    class_types = GroupClassType.query.order_by(GroupClassType.name.asc()).all()
+    occurrences_query = (
+        GroupClassOccurrence.query
+        .join(GroupClassType)
+        .order_by(GroupClassOccurrence.day_of_week.asc(), GroupClassOccurrence.start_time.asc(), GroupClassType.name.asc())
+    )
+    selected_day = request.args.get("day", "").strip()
+    selected_room = request.args.get("room", "").strip()
+    selected_type = request.args.get("class_type", "").strip()
+    if selected_day != "":
+        try:
+            occurrences_query = occurrences_query.filter(GroupClassOccurrence.day_of_week == int(selected_day))
+        except ValueError:
+            selected_day = ""
+    if selected_room:
+        occurrences_query = occurrences_query.filter(GroupClassOccurrence.room == selected_room)
+    if selected_type:
+        try:
+            occurrences_query = occurrences_query.filter(GroupClassOccurrence.class_type_id == int(selected_type))
+        except ValueError:
+            selected_type = ""
+
+    occurrences = occurrences_query.all()
+    rooms = [
+        room for (room,) in
+        db.session.query(GroupClassOccurrence.room).distinct().order_by(GroupClassOccurrence.room.asc()).all()
+        if room
+    ]
+    today = local_datetime(datetime.now(timezone.utc)).date()
+    future_plan_counts = {
+        occurrence_id: count
+        for occurrence_id, count in (
+            db.session.query(MemberClassPlan.occurrence_id, db.func.count(MemberClassPlan.id))
+            .filter(MemberClassPlan.class_date >= today)
+            .filter(MemberClassPlan.status.in_(["planned", "adjusted"]))
+            .group_by(MemberClassPlan.occurrence_id)
+            .all()
+        )
+    }
+    changes = (
+        ScheduleChangeNotification.query
+        .order_by(ScheduleChangeNotification.created_at.desc(), ScheduleChangeNotification.id.desc())
+        .limit(25)
+        .all()
+    )
+    return {
+        "schedule": schedule,
+        "class_types": class_types,
+        "occurrences": occurrences,
+        "rooms": rooms,
+        "selected_day": selected_day,
+        "selected_room": selected_room,
+        "selected_type": selected_type,
+        "day_options": [(day, group_class_day_label(day)) for day in range(7)],
+        "statuses": sorted(GROUP_CLASS_OCCURRENCE_STATUSES),
+        "future_plan_counts": future_plan_counts,
+        "changes": changes,
+        "time_label": group_class_time_label,
+        "day_label": group_class_day_label,
+    }
 
 
 @app.before_request
@@ -4305,6 +4503,142 @@ def staff_coach_activity():
         interactions=interactions,
         members=members,
     )
+
+
+@app.get("/staff/group-classes")
+def staff_group_classes():
+    staff_role = require_staff_access()
+    return render_template(
+        "staff_group_classes.html",
+        staff_role=staff_role,
+        **group_class_admin_context(),
+    )
+
+
+@app.post("/staff/group-classes/class-types")
+def staff_group_class_type_save():
+    validate_csrf_token()
+    require_staff_access()
+    ensure_runtime_schema()
+
+    class_type_id = parse_optional_int(request.form.get("class_type_id"))
+    class_type = db.session.get(GroupClassType, class_type_id) if class_type_id else None
+    if not class_type:
+        class_type = GroupClassType()
+        db.session.add(class_type)
+
+    name = request.form.get("name", "").strip().upper()
+    category = request.form.get("category", "").strip()
+    intensity = request.form.get("intensity", "").strip()
+    if not name or not category or not intensity:
+        abort(400, translated_text("group_class_required_fields", current_language()))
+
+    class_type.name = name
+    class_type.category = category
+    class_type.intensity = intensity
+    class_type.muscle_focus = request.form.get("muscle_focus", "").strip() or None
+    class_type.cardio_load = request.form.get("cardio_load", "").strip() or None
+    class_type.strength_load = request.form.get("strength_load", "").strip() or None
+    class_type.recovery_impact = request.form.get("recovery_impact", "").strip() or None
+    class_type.impact_level = request.form.get("impact_level", "").strip() or None
+    class_type.pregnancy_safety_level = request.form.get("pregnancy_safety_level", "").strip() or None
+    class_type.default_bookable = request.form.get("default_bookable") == "1"
+    class_type.default_publish = request.form.get("default_publish") == "1"
+    class_type.description = request.form.get("description", "").strip() or None
+    class_type.updated_at = datetime.now()
+    db.session.commit()
+    flash(translated_text("group_class_type_saved", current_language()))
+    return redirect(url_for("staff_group_classes"))
+
+
+@app.post("/staff/group-classes/occurrences")
+def staff_group_class_occurrence_save():
+    validate_csrf_token()
+    require_staff_access()
+    ensure_runtime_schema()
+
+    occurrence_id = parse_optional_int(request.form.get("occurrence_id"))
+    occurrence = db.session.get(GroupClassOccurrence, occurrence_id) if occurrence_id else None
+    is_new = occurrence is None
+    if is_new:
+        schedule = GroupClassSchedule.query.filter_by(name=GROUP_CLASS_SCHEDULE_NAME).first()
+        if not schedule:
+            schedule = seed_group_class_schedule()
+        occurrence = GroupClassOccurrence(schedule_id=schedule.id)
+        db.session.add(occurrence)
+
+    old_data = group_class_occurrence_snapshot(occurrence) if not is_new else None
+    class_type_id = parse_optional_int(request.form.get("class_type_id"))
+    class_type = db.session.get(GroupClassType, class_type_id) if class_type_id else None
+    if not class_type:
+        abort(400, translated_text("group_class_required_fields", current_language()))
+
+    try:
+        day_of_week = int(request.form.get("day_of_week", ""))
+    except ValueError:
+        day_of_week = -1
+    if day_of_week not in GROUP_CLASS_DAY_KEYS:
+        abort(400, translated_text("group_class_required_fields", current_language()))
+
+    start_time = parse_group_class_time(request.form.get("start_time"))
+    end_time = parse_group_class_time(request.form.get("end_time"))
+    if end_time <= start_time:
+        abort(400, translated_text("group_class_invalid_time_range", current_language()))
+
+    status = request.form.get("status", "scheduled").strip()
+    if status not in GROUP_CLASS_OCCURRENCE_STATUSES:
+        status = "scheduled"
+    if class_type.name == "RESERVED":
+        status = "reserved"
+
+    occurrence.class_type = class_type
+    occurrence.day_of_week = day_of_week
+    occurrence.start_time = start_time
+    occurrence.end_time = end_time
+    occurrence.room = request.form.get("room", "").strip().upper()
+    occurrence.instructor = request.form.get("instructor", "").strip() or None
+    occurrence.capacity = parse_optional_int(request.form.get("capacity"))
+    occurrence.note = request.form.get("note", "").strip() or None
+    occurrence.status = status
+    occurrence.blocks_room = True
+    occurrence.is_bookable = (
+        request.form.get("is_bookable") == "1"
+        and status == "scheduled"
+        and class_type.name != "RESERVED"
+    )
+    occurrence.is_published = request.form.get("is_published") == "1"
+    occurrence.updated_at = datetime.now()
+    if not occurrence.room:
+        abort(400, translated_text("group_class_required_fields", current_language()))
+
+    affected_count = 0
+    if not is_new:
+        new_data = group_class_occurrence_snapshot(occurrence)
+        change_type = group_class_change_type(old_data, new_data)
+        affected_count = create_group_class_change_notifications(occurrence, change_type, old_data, new_data)
+
+    db.session.commit()
+    if affected_count:
+        flash(translated_text("group_class_saved_with_members", current_language(), count=affected_count))
+    else:
+        flash(translated_text("group_class_saved", current_language()))
+    return redirect(url_for("staff_group_classes"))
+
+
+@app.post("/staff/group-classes/publish")
+def staff_group_class_publish():
+    validate_csrf_token()
+    require_staff_access()
+    ensure_runtime_schema()
+    schedule = GroupClassSchedule.query.filter_by(name=GROUP_CLASS_SCHEDULE_NAME).first()
+    if not schedule:
+        schedule = seed_group_class_schedule()
+    schedule.status = "published"
+    schedule.published_at = datetime.now()
+    schedule.updated_at = datetime.now()
+    db.session.commit()
+    flash(translated_text("group_class_schedule_published", current_language()))
+    return redirect(url_for("staff_group_classes"))
 
 
 @app.post("/staff/email-log/<int:email_id>/review")

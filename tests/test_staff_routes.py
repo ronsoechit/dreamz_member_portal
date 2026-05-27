@@ -14,7 +14,7 @@ if importlib.util.find_spec("flask") is None or importlib.util.find_spec("flask_
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
-from dreamz_portal import AppSetting, CancellationRequest, CoachInteraction, EmailLog, Member, MemberDocument, StaffUser, SyncRun, app, db, deliver_email, payment_status_for_member  # noqa: E402
+from dreamz_portal import AppSetting, CancellationRequest, CoachInteraction, EmailLog, GroupClassOccurrence, GroupClassType, Member, MemberClassAttendance, MemberClassPlan, MemberDocument, ScheduleChangeNotification, StaffUser, SyncRun, app, db, deliver_email, payment_status_for_member, seed_group_class_schedule  # noqa: E402
 
 
 class FakeS3Body:
@@ -197,6 +197,123 @@ class StaffRouteTests(unittest.TestCase):
         response = self.client.get("/staff/coach")
 
         self.assertEqual(response.status_code, 403)
+
+    def test_staff_group_classes_requires_staff_access(self):
+        response = self.client.get("/staff/group-classes")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_staff_group_classes_lists_seeded_schedule(self):
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "manager"
+
+        response = self.client.get("/staff/group-classes")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Group Class Management", body)
+        self.assertIn("BODYPUMP", body)
+        self.assertIn("RESERVED", body)
+        self.assertIn("AEROBICS ROOM", body)
+
+    def test_staff_can_create_group_class_type(self):
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+            sess["_csrf_token"] = "token"
+
+        response = self.client.post(
+            "/staff/group-classes/class-types",
+            data={
+                "csrf_token": "token",
+                "name": "CORE FLOW",
+                "category": "core_mobility",
+                "intensity": "low_medium",
+                "muscle_focus": "core",
+                "cardio_load": "low",
+                "strength_load": "low_medium",
+                "recovery_impact": "low",
+                "impact_level": "low",
+                "pregnancy_safety_level": "suitable_or_requires_modification",
+                "default_bookable": "1",
+                "default_publish": "1",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(GroupClassType.query.filter_by(name="CORE FLOW").count(), 1)
+        self.assertIn("CORE FLOW", response.get_data(as_text=True))
+
+    def test_staff_schedule_update_notifies_future_member_plans_only(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        seed_group_class_schedule()
+        bodypump = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "BODYPUMP", GroupClassOccurrence.day_of_week == 0)
+            .order_by(GroupClassOccurrence.start_time.asc())
+            .first()
+        )
+        future_plan = MemberClassPlan(
+            member_id="13659",
+            occurrence_id=bodypump.id,
+            class_date=date.today() + timedelta(days=7),
+            status="planned",
+        )
+        past_plan = MemberClassPlan(
+            member_id="13659",
+            occurrence_id=bodypump.id,
+            class_date=date.today() - timedelta(days=7),
+            status="planned",
+        )
+        db.session.add_all([future_plan, past_plan])
+        db.session.commit()
+        attendance = MemberClassAttendance(
+            member_id="13659",
+            plan_id=past_plan.id,
+            occurrence_id=bodypump.id,
+            class_date=past_plan.class_date,
+        )
+        db.session.add(attendance)
+        db.session.commit()
+
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+            sess["_csrf_token"] = "token"
+
+        response = self.client.post(
+            "/staff/group-classes/occurrences",
+            data={
+                "csrf_token": "token",
+                "occurrence_id": str(bodypump.id),
+                "day_of_week": "0",
+                "start_time": "20:00",
+                "end_time": "21:00",
+                "class_type_id": str(bodypump.class_type_id),
+                "room": "AEROBICS ROOM",
+                "instructor": "Christel",
+                "capacity": "24",
+                "status": "scheduled",
+                "is_bookable": "1",
+                "is_published": "1",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        updated = db.session.get(GroupClassOccurrence, bodypump.id)
+        self.assertEqual(updated.start_time.strftime("%H:%M"), "20:00")
+        self.assertEqual(updated.instructor, "Christel")
+        self.assertEqual(updated.capacity, 24)
+        self.assertEqual(db.session.get(MemberClassPlan, future_plan.id).status, "adjusted")
+        self.assertEqual(db.session.get(MemberClassPlan, past_plan.id).status, "planned")
+        self.assertEqual(MemberClassAttendance.query.filter_by(plan_id=past_plan.id).count(), 1)
+        notification = ScheduleChangeNotification.query.filter_by(member_id="13659").one()
+        self.assertEqual(notification.change_type, "class_time_changed")
+        self.assertIn("moved to 20:00", notification.message)
 
     def test_staff_cancellations_status_filter(self):
         self.add_request(member_id="1206", member_name="Accepted Member", status="accepted")
