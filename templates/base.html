@@ -54,6 +54,7 @@
             <a class="rounded px-3 py-2 {% if request.endpoint == 'dashboard' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('dashboard', id=current_member_id) }}">{{ t('dashboard') }}</a>
             <a class="rounded px-3 py-2 {% if request.endpoint == 'member_coach' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('member_coach') }}">{{ t('my_coach') }}</a>
             <a class="rounded px-3 py-2 text-gray-300 hover:bg-gray-700 hover:text-white" href="{{ url_for('dashboard', id=current_member_id) }}#account-membership">{{ t('account') }}</a>
+            <a class="rounded px-3 py-2 {% if request.endpoint == 'set_member_password' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('set_member_password') }}">{{ t('password_settings') }}</a>
             <a class="rounded px-3 py-2 text-yellow-400 hover:bg-gray-700 hover:text-yellow-300" href="{{ url_for('logout') }}">{{ t('logout') }}</a>
           </nav>
         {% endif %}

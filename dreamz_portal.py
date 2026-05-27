@@ -82,12 +82,14 @@ app.config["COACH_AI_MODE"] = os.getenv("COACH_AI_MODE") or ("openai" if app.con
 app.config["OPENAI_MODEL"] = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 app.config["EMAIL_DELIVERY_MODE"] = os.getenv("EMAIL_DELIVERY_MODE", "log")
 app.config["MEMBER_LOGIN_CODE_TTL_MINUTES"] = int(os.getenv("MEMBER_LOGIN_CODE_TTL_MINUTES", "15"))
+app.config["MEMBER_SESSION_DAYS"] = int(os.getenv("MEMBER_SESSION_DAYS", "90"))
+app.config["MEMBER_PASSWORD_MIN_LENGTH"] = int(os.getenv("MEMBER_PASSWORD_MIN_LENGTH", "8"))
 app.config["DIRECT_DEBIT_DAY"] = int(os.getenv("DIRECT_DEBIT_DAY", "28"))
 app.config["SESSION_COOKIE_NAME"] = "dreamz_member_portal_session"
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = os.getenv("SESSION_COOKIE_SECURE", "").lower() in ("1", "true", "yes")
-app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=8)
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=app.config["MEMBER_SESSION_DAYS"])
 app.config["GYM_ASSISTANT_ATTACHMENTS_ROOT"] = os.getenv(
     "GYM_ASSISTANT_ATTACHMENTS_ROOT",
     r"D:\Dreamz Fitness\Gym Assistant 2.6\Data\Attachments",
@@ -181,6 +183,8 @@ class Member(db.Model):
     mobile           = db.Column(db.String)
     visits           = db.Column(db.Integer)
     photo_path       = db.Column(db.String)
+    password_hash    = db.Column(db.String(512))
+    password_set_at  = db.Column(db.DateTime)
 
 
 class MemberDocument(db.Model):
@@ -462,6 +466,8 @@ def ensure_runtime_schema():
     ensure_model_column("sync_run", "change_summary", "TEXT")
     ensure_model_column("coach_profile", "home_equipment", "TEXT")
     ensure_model_column("coach_plan", "plan_version", "VARCHAR")
+    ensure_model_column("member", "password_hash", "VARCHAR(512)")
+    ensure_model_column("member", "password_set_at", "TIMESTAMP")
     db.create_all()
     seed_default_settings()
     seed_default_staff_users()
@@ -1285,6 +1291,28 @@ def current_member_or_redirect():
         return None, redirect(url_for("login"))
 
     return member, None
+
+
+def start_member_session(member, password_verified=False):
+    csrf_token = session.get("_csrf_token")
+    language = session.get("language")
+    session.clear()
+    if csrf_token:
+        session["_csrf_token"] = csrf_token
+    if language:
+        session["language"] = language
+    session["member_id"] = member.member_id
+    if password_verified:
+        session["member_password_verified"] = True
+    session.permanent = True
+
+
+def validate_member_password(password, confirmation):
+    if password != confirmation:
+        return "member_password_mismatch"
+    if len(password or "") < app.config["MEMBER_PASSWORD_MIN_LENGTH"]:
+        return "member_password_too_short"
+    return None
 
 
 COACH_GOALS = ["lose_weight", "build_muscle", "get_fitter", "strength", "health"]
@@ -4485,6 +4513,16 @@ def login():
         validate_csrf_token()
         step = request.form.get("step", "email")
 
+        if step == "password":
+            email = normalize_email(request.form.get("email"))
+            password = request.form.get("password", "")
+            member = member_by_email(email)
+            if member and member.password_hash and check_password_hash(member.password_hash, password):
+                start_member_session(member, password_verified=True)
+                return redirect(url_for("dashboard", id=member.member_id))
+            flash(translated_text("member_password_login_failed", current_language()), "error")
+            return redirect(url_for("login"))
+
         if step == "email":
             email = normalize_email(request.form.get("email"))
             member = member_by_email(email)
@@ -4531,15 +4569,10 @@ def login():
                 return redirect(url_for("login"))
             login_code.used_at = datetime.now()
             db.session.commit()
-            csrf_token = session.get("_csrf_token")
-            language = session.get("language")
-            session.clear()
-            if csrf_token:
-                session["_csrf_token"] = csrf_token
-            if language:
-                session["language"] = language
-            session["member_id"] = member.member_id
-            session.permanent = True
+            start_member_session(member, password_verified=True)
+            if not member.password_hash:
+                flash(translated_text("member_password_required_after_code", current_language()), "success")
+                return redirect(url_for("set_member_password"))
             return redirect(url_for("dashboard", id=member.member_id))
 
         db.session.commit()
@@ -4558,6 +4591,35 @@ def login():
     return render_template("login.html", step="email")
 
 
+@app.route("/set-password", methods=["GET", "POST"])
+def set_member_password():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+
+    if request.method == "POST":
+        validate_csrf_token()
+        password = request.form.get("password", "")
+        confirmation = request.form.get("password_confirm", "")
+        error_key = validate_member_password(password, confirmation)
+        if error_key:
+            flash(translated_text(error_key, current_language()), "error")
+            return redirect(url_for("set_member_password"))
+        member.password_hash = generate_password_hash(password)
+        member.password_set_at = datetime.now()
+        db.session.commit()
+        session["member_password_verified"] = True
+        flash(translated_text("member_password_saved", current_language()), "success")
+        return redirect(url_for("dashboard", id=member.member_id))
+
+    return render_template(
+        "set_password.html",
+        member=member,
+        is_update=bool(member.password_hash),
+        min_length=app.config["MEMBER_PASSWORD_MIN_LENGTH"],
+    )
+
+
 @app.get("/member")
 def member_login_alias():
     return redirect(url_for("login"))
@@ -4565,5 +4627,6 @@ def member_login_alias():
 @app.get("/logout")
 def logout():
     session.pop("member_id", None)
+    session.pop("member_password_verified", None)
     flash(translated_text("logged_out", current_language()))
     return redirect(url_for("login"))

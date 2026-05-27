@@ -8,6 +8,7 @@ import re
 import tempfile
 import unittest
 from unittest.mock import patch
+from werkzeug.security import generate_password_hash
 
 
 if importlib.util.find_spec("flask") is None or importlib.util.find_spec("flask_sqlalchemy") is None:
@@ -117,17 +118,18 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIsNotNone(match)
         return match.group(1)
 
-    def test_login_page_shows_email_code_login(self):
+    def test_login_page_shows_password_and_email_code_login(self):
         response = self.client.get("/login")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
         self.assertIn("Email address", body)
+        self.assertIn("Password", body)
+        self.assertIn("Sign in", body)
         self.assertIn("Send login code", body)
         self.assertIn("data-loading-form", body)
         self.assertIn("Sending code...", body)
         self.assertIn("button.disabled = true", body)
-        self.assertNotIn("Password", body)
         self.assertNotIn("Birthdate", body)
 
     def test_login_page_shows_language_choices(self):
@@ -159,7 +161,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Leden Login", response.get_data(as_text=True))
         self.assertIn("E-mailadres", response.get_data(as_text=True))
 
-    def test_login_with_valid_email_code_redirects_to_dashboard(self):
+    def test_first_code_login_requires_password_setup(self):
         self.add_member(member_id="1206", email="member@example.com")
         token = self.get_login_csrf_token()
 
@@ -173,8 +175,43 @@ class PortalRouteTests(unittest.TestCase):
 
         response = self.client.post("/login", data={"step": "code", "code": code, "csrf_token": "test-csrf-token"})
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/dashboard?id=1206", response.headers["Location"])
+        self.assertIn("/set-password", response.headers["Location"])
         self.assertIsNotNone(db.session.get(MemberLoginCode, login_code.id).used_at)
+
+    def test_member_can_create_password_after_code_login(self):
+        member = self.add_member(member_id="1206", email="member@example.com")
+        self.login_as("1206")
+
+        response = self.client.post(
+            "/set-password",
+            data={"password": "strong-pass-123", "password_confirm": "strong-pass-123", "csrf_token": "test-csrf-token"},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/dashboard?id=1206", response.headers["Location"])
+        self.assertTrue(Member.query.get(member.id).password_hash)
+
+    def test_member_can_login_with_password(self):
+        self.add_member(
+            member_id="1206",
+            email="member@example.com",
+            password_hash=generate_password_hash("strong-pass-123"),
+            password_set_at=datetime.now(),
+        )
+        token = self.get_login_csrf_token()
+
+        response = self.client.post(
+            "/login",
+            data={
+                "step": "password",
+                "email": "member@example.com",
+                "password": "strong-pass-123",
+                "csrf_token": token,
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/dashboard?id=1206", response.headers["Location"])
 
     def test_repeated_login_code_request_does_not_send_multiple_codes(self):
         self.add_member(member_id="1206", email="member@example.com")
