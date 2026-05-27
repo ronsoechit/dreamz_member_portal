@@ -2242,6 +2242,32 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Cancellation confirmation available", body)
         self.assertIn(request_record.confirmation_number, body)
 
+    def test_final_agreements_qa_covers_i18n_direct_debit_and_app_cancellation_wording(self):
+        seed_legal_documents()
+
+        self.assertEqual(set(LANGUAGES), {"en", "nl", "pap", "es"})
+        self.assertEqual(LegalDocument.query.count(), 13)
+        self.assertEqual(LegalTranslation.query.count(), 13 * len(LANGUAGES))
+        self.assertTrue(all(document.legal_review_needed for document in LegalDocument.query.all()))
+
+        payment_rules = LegalDocument.query.filter_by(document_type="payment_rules").one()
+        payment_version = LegalDocumentVersion.query.filter_by(document_id=payment_rules.id, is_current=True).one()
+        self.assertIn("Savings accounts are not accepted", payment_version.full_legal_text)
+        self.assertIn("No exceptions", payment_version.full_legal_text)
+
+        cancellation_rules = LegalDocument.query.filter_by(document_type="cancellation_renewal_rules").one()
+        cancellation_version = LegalDocumentVersion.query.filter_by(document_id=cancellation_rules.id, is_current=True).one()
+        self.assertIn("Cancellation must be handled through the Dreamz Fitness member portal", cancellation_version.full_legal_text)
+        self.assertIn("30 calendar days", cancellation_version.full_legal_text)
+        self.assertIn("10 calendar days", cancellation_version.full_legal_text)
+
+        for language in LANGUAGES:
+            self.assertNotIn("final only after", TRANSLATIONS[language]["cancellation_request_received_body"].lower())
+            self.assertNotIn("confirmation by email", TRANSLATIONS[language]["cancellation_request_received_body"].lower())
+            self.assertTrue(TRANSLATIONS[language]["member_agreements_title"])
+            self.assertTrue(TRANSLATIONS[language]["application_title"])
+            self.assertTrue(TRANSLATIONS[language]["staff_terms_title"])
+
     def test_feature_access_rule_seed_creates_premium_readiness_foundation(self):
         seed_feature_access_rules()
 
