@@ -1579,6 +1579,17 @@ class PortalRouteTests(unittest.TestCase):
         with patch.object(db.session, "execute", side_effect=SQLAlchemyError("missing member column")):
             self.assertEqual(member_account_notification_count("13659"), 0)
 
+    def test_runtime_schema_failure_does_not_break_static_app_shell_routes(self):
+        original_testing = app.config["TESTING"]
+        app.config["TESTING"] = False
+        try:
+            with patch("dreamz_portal.ensure_runtime_schema", side_effect=RuntimeError("migration failed")):
+                response = self.client.get("/manifest.webmanifest")
+        finally:
+            app.config["TESTING"] = original_testing
+
+        self.assertEqual(response.status_code, 200)
+
     def test_view_balance_opens_account_balance_section(self):
         self.add_member(
             member_id="13659",

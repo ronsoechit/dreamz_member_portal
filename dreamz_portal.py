@@ -3115,7 +3115,13 @@ def group_class_training_load_context(member, profile=None):
 
 @app.before_request
 def prepare_runtime_schema():
-    ensure_runtime_schema()
+    try:
+        ensure_runtime_schema()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Runtime schema preparation failed; continuing with existing schema.")
+        if app.config.get("TESTING") or os.getenv("RUNTIME_SCHEMA_STRICT", "").lower() in ("1", "true", "yes"):
+            raise
 
 
 # lijst met labels in de volgorde van je export
@@ -3752,14 +3758,22 @@ def active_cancellation_request_for_member(member):
 
 
 def open_cancellation_count():
-    return CancellationRequest.query.filter(
-        CancellationRequest.status == "accepted",
-        CancellationRequest.admin_status.in_(["new", "reviewed"]),
-    ).count()
+    try:
+        return CancellationRequest.query.filter(
+            CancellationRequest.status == "accepted",
+            CancellationRequest.admin_status.in_(["new", "reviewed"]),
+        ).count()
+    except SQLAlchemyError:
+        db.session.rollback()
+        return 0
 
 
 def open_email_log_count():
-    return EmailLog.query.filter(email_log_review_required_filter()).count()
+    try:
+        return EmailLog.query.filter(email_log_review_required_filter()).count()
+    except SQLAlchemyError:
+        db.session.rollback()
+        return 0
 
 
 def member_account_notification_count(member_id):
