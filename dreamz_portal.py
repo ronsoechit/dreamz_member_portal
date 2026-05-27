@@ -1176,6 +1176,89 @@ def member_group_class_attendance_count(member_id, start_date=None, end_date=Non
     return query.count()
 
 
+def group_class_load_text(occurrence, profile=None):
+    class_type = occurrence.class_type
+    parts = [
+        class_type.name,
+        f"intensity={class_type.intensity}",
+        f"muscle_focus={class_type.muscle_focus or 'unknown'}",
+        f"cardio_load={class_type.cardio_load or 'unknown'}",
+        f"strength_load={class_type.strength_load or 'unknown'}",
+        f"recovery_impact={class_type.recovery_impact or 'unknown'}",
+        f"impact_level={class_type.impact_level or 'unknown'}",
+    ]
+    if is_pregnant_profile(profile):
+        parts.append(f"pregnancy_safety_level={class_type.pregnancy_safety_level or 'unknown'}")
+    return ", ".join(parts)
+
+
+def group_class_training_load_context(member, profile=None):
+    if not member:
+        return "group_classes=unavailable"
+    today = local_datetime(datetime.now(timezone.utc)).date()
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+    planned = member_planned_group_classes(member.member_id, today, today + timedelta(days=6))
+    attended = (
+        MemberClassAttendance.query
+        .filter_by(member_id=member.member_id)
+        .filter(MemberClassAttendance.class_date >= week_start)
+        .filter(MemberClassAttendance.class_date <= week_end)
+        .order_by(MemberClassAttendance.class_date.asc(), MemberClassAttendance.id.asc())
+        .all()
+    )
+    preference = member_group_class_preference(member.member_id)
+    favorite_names = [
+        class_type.name for class_type in GroupClassType.query
+        .join(MemberClassPreference)
+        .filter(MemberClassPreference.member_id == member.member_id)
+        .filter(MemberClassPreference.is_favorite.is_(True))
+        .filter(MemberClassPreference.class_type_id.isnot(None))
+        .order_by(GroupClassType.name.asc())
+        .all()
+    ]
+    changes = (
+        ScheduleChangeNotification.query
+        .filter_by(member_id=member.member_id)
+        .order_by(ScheduleChangeNotification.created_at.desc(), ScheduleChangeNotification.id.desc())
+        .limit(5)
+        .all()
+    )
+
+    planned_text = "; ".join(
+        f"{plan.class_date.isoformat()} {group_class_load_text(plan.occurrence, profile)} room={plan.occurrence.room} status={plan.status} replaces_personal_workout={plan.replaces_personal_workout}"
+        for plan in planned
+    ) or "none"
+    attended_text = "; ".join(
+        f"{entry.class_date.isoformat()} {group_class_load_text(entry.occurrence, profile)} room={entry.occurrence.room}"
+        for entry in attended
+    ) or "none"
+    high_recovery_count = sum(
+        1 for plan in planned
+        if plan.occurrence.class_type.recovery_impact in {"medium_high", "high"}
+    )
+    strength_count = sum(
+        1 for plan in planned
+        if plan.occurrence.class_type.strength_load in {"medium_high", "high"}
+    )
+    cardio_count = sum(
+        1 for plan in planned
+        if plan.occurrence.class_type.cardio_load in {"medium", "medium_high", "high"}
+    )
+    changes_text = "; ".join(change.message for change in changes) or "none"
+    return (
+        "group_class_preferences="
+        f"preferred_per_week={preference.preferred_classes_per_week if preference else 'unknown'}, "
+        f"mode={preference.plan_mode if preference else 'supplement'}, favorites={','.join(favorite_names) or 'none'}; "
+        f"planned_group_classes_this_week={planned_text}; "
+        f"attended_group_classes_this_week={attended_text}; "
+        "weekly_group_class_training_load="
+        f"planned_count={len(planned)}, attended_count={len(attended)}, "
+        f"cardio_classes={cardio_count}, strength_classes={strength_count}, high_recovery_impact_classes={high_recovery_count}; "
+        f"schedule_changes={changes_text}"
+    )
+
+
 @app.before_request
 def prepare_runtime_schema():
     ensure_runtime_schema()
@@ -2539,6 +2622,9 @@ def generate_openai_coach_plan(member, profile, fallback_plan, language=None):
         "Nutrition must be realistic for Bonaire: budget-aware, common supermarket foods, simple repeatable meals, enough protein. Allergies and foods to avoid are strict constraints: never suggest those foods or close substitutes. "
         "For injuries or medical limitations, adjust exercise choices and intensity conservatively. "
         f"{pregnancy_rules} "
+        "Group classes count toward total training load. Use planned and attended group classes, class intensity, muscle focus, cardio load, strength load and recovery impact to adjust the personal workout week. "
+        "Do not schedule heavy full-body or lower-body strength immediately after high recovery-impact classes such as BODYPUMP, TOTAL BODY, SPINNING or BOOTY SHAPE. Yoga and Pilates can count as mobility/recovery/core work. "
+        "If schedule changes are present, explain practical future adjustments without modifying completed history. "
         "Use the member selected language for every visible value. "
         "The number of sessions must match the fallback sessions. Each session should fit the requested minutes including warm-up and cool-down. "
         "JSON schema: {"
@@ -2640,6 +2726,21 @@ def recent_coach_workout_summary(member_id, limit=3):
         summaries.append(
             f"{activity.activity_date}: extra activity {activity.activity_type}, "
             f"{activity.duration_minutes or '-'} min, intensity={activity.intensity or '-'}, notes={activity.notes or '-'}"
+        )
+    attended_classes = (
+        MemberClassAttendance.query
+        .filter_by(member_id=member_id)
+        .order_by(MemberClassAttendance.class_date.desc(), MemberClassAttendance.id.desc())
+        .limit(limit)
+        .all()
+    )
+    for attendance in attended_classes:
+        summaries.append(
+            f"{attendance.class_date}: group class attended {attendance.occurrence.class_type.name}, "
+            f"intensity={attendance.occurrence.class_type.intensity}, "
+            f"cardio_load={attendance.occurrence.class_type.cardio_load or '-'}, "
+            f"strength_load={attendance.occurrence.class_type.strength_load or '-'}, "
+            f"recovery_impact={attendance.occurrence.class_type.recovery_impact or '-'}"
         )
     progress_entries = (
         CoachProgressEntry.query
@@ -2920,7 +3021,8 @@ def coach_context_summary(member, profile):
         f"nutrition={profile.nutrition_goal}, food={profile.dietary_preferences or 'none'}, "
         f"allergies={profile.allergies or 'none'}, home_equipment={profile.home_equipment or 'none'}, "
         f"{pregnancy_context_summary(profile)}"
-        f"{progress_text}"
+        f"{progress_text}; "
+        f"{group_class_training_load_context(member, profile)}"
     )
 
 
@@ -2987,6 +3089,8 @@ def generate_coach_reply(member, profile, user_message=None, workout_logs=None, 
         "For serious red flags such as chest pain, fainting, severe injury, severe dizziness or medical emergencies, tell the member to stop and seek qualified medical help. "
         "Never mention pregnancy, prenatal training, pregnancy_status, pregnancy weight, or prenatal nutrition unless biological_sex=female and pregnancy_status=pregnant. "
         "Pregnancy safety rules only apply when biological_sex=female and pregnancy_status=pregnant: do not advise aggressive fat loss/cutting, max-effort/PR training, high-impact/contact sport, high fall-risk exercises, overheating, dehydration, or prolonged supine exercises after 16 weeks. Use talk-test moderate intensity, safe strength, mobility, breathing, pelvic floor and hydration guidance. Provider restrictions always override. If warning symptoms are present or provider_cleared_exercise=no, do not give a workout progression; advise contacting doctor/midwife/healthcare provider before exercise. If clearance is unknown, keep advice cautious and low/moderate while recommending clearance. "
+        "Group classes count toward total training load. Use planned and attended group classes, intensity, muscle focus, cardio load, strength load, recovery impact and schedule changes when giving next-session, recovery, nutrition and progress advice. Never silently change completed history. "
+        "If the member planned BODYPUMP, TOTAL BODY, SPINNING or BOOTY SHAPE this week, adjust nearby strength/cardio volume accordingly. "
         "Use Bonaire-friendly, realistic and budget-aware training and nutrition advice. "
         "Format the reply for a mobile app: start with a short Coach Summary, then 3-5 concrete action bullets, then an optional Details section. Keep it concise and avoid long essays.\n\n"
         f"Language: {language}\n"

@@ -18,7 +18,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
-from dreamz_portal import CancellationRequest, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, EmailLog, GroupClassOccurrence, GroupClassSchedule, GroupClassType, Member, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, ScheduleChangeNotification, app, cancellation_message, coach_profile_completion, db, next_date_for_group_class, seed_group_class_schedule  # noqa: E402
+from dreamz_portal import CancellationRequest, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, EmailLog, GroupClassOccurrence, GroupClassSchedule, GroupClassType, Member, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, ScheduleChangeNotification, app, cancellation_message, coach_context_summary, coach_plan_for_member, coach_profile_completion, db, next_date_for_group_class, seed_group_class_schedule  # noqa: E402
 
 
 class FakeS3Body:
@@ -1810,6 +1810,124 @@ class PortalRouteTests(unittest.TestCase):
         progress_body = progress_response.get_data(as_text=True)
         self.assertIn("Classes this week", progress_body)
         self.assertIn(">1</strong>", progress_body)
+
+    def test_coach_context_includes_group_classes_without_male_pregnancy_context(self):
+        member = self.add_member(member_id="13659", name="Ron Soechit")
+        profile = CoachProfile(
+            member_id="13659",
+            primary_goal="build_muscle",
+            experience_level="intermediate",
+            training_days=4,
+            session_minutes=45,
+            training_place="dreamz_gym",
+            height_cm=180,
+            weight_kg=82,
+            injuries="none",
+            nutrition_goal="muscle_gain",
+            dietary_preferences="local food",
+            allergies="none",
+            sex="male",
+            pregnancy_status="not_pregnant",
+        )
+        db.session.add(profile)
+        seed_group_class_schedule()
+        bodypump = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "BODYPUMP", GroupClassOccurrence.is_bookable.is_(True))
+            .first()
+        )
+        class_date = next_date_for_group_class(bodypump.day_of_week)
+        db.session.add(MemberClassPlan(member_id="13659", occurrence_id=bodypump.id, class_date=class_date))
+        db.session.commit()
+
+        context = coach_context_summary(member, profile)
+
+        self.assertIn("planned_group_classes_this_week", context)
+        self.assertIn("BODYPUMP", context)
+        self.assertIn("strength_load=high", context)
+        self.assertIn("biological_sex=male", context)
+        self.assertNotIn("pregnancy_safety_level", context)
+        self.assertNotIn("pregnancy_status=not_pregnant", context)
+
+    def test_coach_context_includes_pregnancy_class_safety_for_pregnant_female(self):
+        member = self.add_member(member_id="13659", name="Ron Soechit")
+        profile = CoachProfile(
+            member_id="13659",
+            primary_goal="health",
+            experience_level="beginner",
+            training_days=3,
+            session_minutes=45,
+            training_place="dreamz_gym",
+            height_cm=165,
+            weight_kg=74,
+            injuries="none",
+            nutrition_goal="healthier",
+            dietary_preferences="local food",
+            allergies="none",
+            sex="female",
+            pregnancy_status="pregnant",
+            gestational_weeks=18,
+            multiple_pregnancy="no",
+            provider_cleared_exercise="unknown",
+            pregnancy_consent=True,
+        )
+        db.session.add(profile)
+        seed_group_class_schedule()
+        combat = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "BODYCOMBAT", GroupClassOccurrence.is_bookable.is_(True))
+            .first()
+        )
+        db.session.add(MemberClassPlan(member_id="13659", occurrence_id=combat.id, class_date=next_date_for_group_class(combat.day_of_week)))
+        db.session.commit()
+
+        context = coach_context_summary(member, profile)
+
+        self.assertIn("biological_sex=female, pregnancy_status=pregnant", context)
+        self.assertIn("BODYCOMBAT", context)
+        self.assertIn("pregnancy_safety_level=not_recommended_or_requires_modification", context)
+
+    def test_coach_plan_prompt_context_records_group_class_load(self):
+        member = self.add_member(member_id="13659", name="Ron Soechit")
+        profile = CoachProfile(
+            member_id="13659",
+            primary_goal="get_fitter",
+            experience_level="intermediate",
+            training_days=3,
+            session_minutes=45,
+            training_place="dreamz_gym",
+            height_cm=178,
+            weight_kg=80,
+            injuries="none",
+            nutrition_goal="healthier",
+            dietary_preferences="local food",
+            allergies="none",
+            sex="male",
+            pregnancy_status="not_pregnant",
+        )
+        db.session.add(profile)
+        seed_group_class_schedule()
+        spinning = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "SPINNING", GroupClassOccurrence.is_bookable.is_(True))
+            .first()
+        )
+        class_date = next_date_for_group_class(spinning.day_of_week)
+        db.session.add(MemberClassPlan(member_id="13659", occurrence_id=spinning.id, class_date=class_date))
+        db.session.add(MemberClassAttendance(member_id="13659", occurrence_id=spinning.id, class_date=class_date))
+        db.session.commit()
+
+        plan = coach_plan_for_member(member, profile, language="en", force=True)
+        record = CoachPlan.query.filter_by(member_id="13659").one()
+
+        self.assertTrue(plan)
+        self.assertIn("SPINNING", record.prompt_context)
+        self.assertIn("cardio_load=high", record.prompt_context)
+        self.assertIn("attended_group_classes_this_week", record.prompt_context)
+        self.assertNotIn("pregnancy_safety_level", record.prompt_context)
 
 
 if __name__ == "__main__":
