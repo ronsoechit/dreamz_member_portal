@@ -3508,6 +3508,41 @@ for language, values in APPLICATION_TRANSLATIONS.items():
     TRANSLATIONS.setdefault(language, {}).update(values)
 
 
+CANCELLATION_APP_TRANSLATIONS = {
+    "en": {
+        "cancellation_request_received_body": "Your cancellation request has been received through the Dreamz Fitness member portal and is being reviewed by Dreamz Fitness. Keep the app confirmation for your records.",
+        "cancel_request_received_flash": "Your cancellation request was received through the app. Dreamz Fitness will review it and keep the confirmation in your Agreements & Rules center.",
+        "email_cancel_request_note": "Your request was submitted through the Dreamz Fitness member portal and is being reviewed by Dreamz Fitness. Keep the app confirmation for your records.",
+        "cancellation_confirmation_available": "Cancellation confirmation available",
+        "confirmation_number": "Confirmation number",
+    },
+    "nl": {
+        "cancellation_request_received_body": "Je opzegverzoek is via de Dreamz Fitness member portal ontvangen en wordt beoordeeld door Dreamz Fitness. Bewaar de app-bevestiging voor je administratie.",
+        "cancel_request_received_flash": "Je opzegverzoek is via de app ontvangen. Dreamz Fitness beoordeelt het en bewaart de bevestiging in je Afspraken & regels center.",
+        "email_cancel_request_note": "Je verzoek is via de Dreamz Fitness member portal ingediend en wordt beoordeeld door Dreamz Fitness. Bewaar de app-bevestiging voor je administratie.",
+        "cancellation_confirmation_available": "Opzegbevestiging beschikbaar",
+        "confirmation_number": "Bevestigingsnummer",
+    },
+    "pap": {
+        "cancellation_request_received_body": "Bo petishon di cancelashon a wordu risibi via Dreamz Fitness member portal i Dreamz Fitness ta revisando esaki. Warda e konfirmashon den app pa bo archivo.",
+        "cancel_request_received_flash": "Bo petishon di cancelashon a wordu risibi via app. Dreamz Fitness lo revisa esaki i warda e konfirmashon den bo centro di Akuerdo i reglanan.",
+        "email_cancel_request_note": "Bo petishon a wordu manda via Dreamz Fitness member portal i Dreamz Fitness ta revisando esaki. Warda e konfirmashon den app pa bo archivo.",
+        "cancellation_confirmation_available": "Konfirmashon di cancelashon disponibel",
+        "confirmation_number": "Number di konfirmashon",
+    },
+    "es": {
+        "cancellation_request_received_body": "Tu solicitud de cancelacion fue recibida por el portal de miembros Dreamz Fitness y esta siendo revisada por Dreamz Fitness. Guarda la confirmacion de la app para tus registros.",
+        "cancel_request_received_flash": "Tu solicitud de cancelacion fue recibida por la app. Dreamz Fitness la revisara y guardara la confirmacion en tu centro de Acuerdos y reglas.",
+        "email_cancel_request_note": "Tu solicitud fue enviada por el portal de miembros Dreamz Fitness y esta siendo revisada por Dreamz Fitness. Guarda la confirmacion de la app para tus registros.",
+        "cancellation_confirmation_available": "Confirmacion de cancelacion disponible",
+        "confirmation_number": "Numero de confirmacion",
+    },
+}
+
+for language, values in CANCELLATION_APP_TRANSLATIONS.items():
+    TRANSLATIONS.setdefault(language, {}).update(values)
+
+
 DASHBOARD_CLASS_STATUS_TRANSLATIONS = {
     "en": {
         "class_status_ended": "Ended",

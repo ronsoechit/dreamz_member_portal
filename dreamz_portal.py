@@ -3571,6 +3571,8 @@ def create_cancellation_request(member, policy, reason, status, mail_status="not
         current_term_end=policy.current_term_end,
         window_open=policy.window_open,
         window_close_exclusive=policy.window_close_exclusive,
+        cancellation_window_open_date=policy.window_open,
+        cancellation_window_close_date=policy.last_request_date,
         last_request_date=policy.last_request_date,
         next_window_open=policy.next_window_open,
         next_window_last_request_date=policy.next_window_last_request_date,
@@ -3584,6 +3586,35 @@ def create_cancellation_request(member, policy, reason, status, mail_status="not
     )
     db.session.add(request_record)
     return request_record
+
+
+def generate_cancellation_confirmation_number(request_record):
+    today_part = datetime.now().strftime("%Y%m%d")
+    member_part = re.sub(r"\W+", "", request_record.member_id or "")[-6:] or "member"
+    return f"CAN-{today_part}-{member_part}-{request_record.id:05d}"
+
+
+def create_cancellation_confirmation_record(request_record, language=None):
+    if not request_record.confirmation_number:
+        request_record.confirmation_number = generate_cancellation_confirmation_number(request_record)
+    if not request_record.pdf_receipt_url:
+        request_record.pdf_receipt_url = f"/cancellations/{request_record.id}/confirmation.pdf"
+    existing = CancellationConfirmation.query.filter_by(cancellation_request_id=request_record.id).first()
+    if existing:
+        return existing
+    pdf_hash = hashlib.sha256(
+        f"{request_record.id}|{request_record.member_id}|{request_record.confirmation_number}".encode("utf-8")
+    ).hexdigest()
+    confirmation = CancellationConfirmation(
+        cancellation_request_id=request_record.id,
+        confirmation_number=request_record.confirmation_number,
+        pdf_receipt_url=request_record.pdf_receipt_url,
+        pdf_hash=pdf_hash,
+        language=normalize_language(language or request_record.language or DEFAULT_LANGUAGE),
+        status="generated",
+    )
+    db.session.add(confirmation)
+    return confirmation
 
 
 def active_cancellation_request_for_member(member):
@@ -8096,6 +8127,8 @@ def cancel():
         mail_status="pending",
         language=current_language(),
     )
+    db.session.flush()
+    create_cancellation_confirmation_record(request_record, language=current_language())
     db.session.commit()
 
     try:
@@ -8112,7 +8145,7 @@ def cancel():
     request_record.mail_error = None
     db.session.commit()
     flash(translated_text("cancel_request_received_flash", current_language()))
-    return redirect(url_for("member_account"))
+    return redirect(url_for("member_agreements"))
 
 @app.route("/login", methods=["GET", "POST"])
 def login():

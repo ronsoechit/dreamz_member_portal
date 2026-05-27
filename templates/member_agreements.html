@@ -25,6 +25,15 @@
       <dt class="font-semibold text-gray-300">{{ t('cancellation_closes') }}:</dt>
       <dd>{{ cancel_window_close or t('not_available') }}</dd>
     </dl>
+    {% if cancellation_request %}
+      <div class="mt-4 rounded border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-50">
+        <div class="font-semibold">{{ t('cancellation_confirmation_available') }}</div>
+        <div class="mt-1">{{ t('confirmation_number') }}: {{ cancellation_request.confirmation_number or t('not_available') }}</div>
+        {% if cancellation_request.pdf_receipt_url %}
+          <div class="mt-1 break-words">{{ cancellation_request.pdf_receipt_url }}</div>
+        {% endif %}
+      </div>
+    {% endif %}
   </article>
   <article class="rounded-lg border border-gray-700 bg-gray-800/50 p-5">
     <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('payment_direct_debit') }}</div>

@@ -1383,6 +1383,10 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(request_record.mail_status, "sent")
         self.assertEqual(request_record.term_months, 12)
         self.assertEqual(request_record.current_term_end, today + timedelta(days=30))
+        self.assertTrue(request_record.confirmation_number.startswith("CAN-"))
+        self.assertEqual(request_record.cancellation_window_open_date, today)
+        self.assertEqual(request_record.cancellation_window_close_date, today + timedelta(days=9))
+        self.assertEqual(CancellationConfirmation.query.filter_by(cancellation_request_id=request_record.id).count(), 1)
 
     def test_cancel_other_reason_stores_custom_text(self):
         today = date.today()
@@ -1455,7 +1459,7 @@ class PortalRouteTests(unittest.TestCase):
 
         body = response.get_data(as_text=True)
         self.assertIn("Cancellation request received", body)
-        self.assertIn("final only after you receive confirmation by email", body)
+        self.assertIn("app confirmation", body)
         self.assertNotIn("I want to cancel my contract", body)
 
     def test_staff_membership_hides_cancellation_policy(self):
@@ -1673,6 +1677,8 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(request_record.status, "accepted")
         self.assertEqual(request_record.mail_status, "failed")
         self.assertIn("SMTP offline", request_record.mail_error)
+        self.assertTrue(request_record.confirmation_number.startswith("CAN-"))
+        self.assertEqual(CancellationConfirmation.query.filter_by(cancellation_request_id=request_record.id).count(), 1)
 
     def test_group_class_schedule_seed_creates_initial_weekly_data(self):
         schedule = seed_group_class_schedule()
@@ -2202,6 +2208,35 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Application submitted", confirmation_body)
         self.assertIn("front desk", confirmation_body.lower())
         self.assertNotIn("Pay now", confirmation_body)
+
+    def test_app_cancellation_redirects_to_agreements_with_confirmation_receipt(self):
+        today = date.today()
+        self.add_member(
+            member_id="1206",
+            plan_type="contract Dreamz 12 m",
+            contract_type="12-months",
+            start_date=today - timedelta(days=335),
+            end_date=today + timedelta(days=30),
+            signup_date=today - timedelta(days=335),
+        )
+        self.login_as("1206")
+
+        with patch("dreamz_portal.send_cancel_email", return_value="sent"), patch("dreamz_portal.send_member_cancellation_request_email", return_value="sent"):
+            response = self.client.post(
+                "/cancel",
+                data=self.csrf_form_data(member_id="1206", reason="Moving away"),
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/account/agreements", response.headers["Location"])
+        request_record = CancellationRequest.query.filter_by(member_id="1206").one()
+        self.assertTrue(request_record.confirmation_number.startswith("CAN-"))
+        self.assertEqual(request_record.pdf_receipt_url, f"/cancellations/{request_record.id}/confirmation.pdf")
+
+        agreements = self.client.get("/account/agreements")
+        body = agreements.get_data(as_text=True)
+        self.assertIn("Cancellation confirmation available", body)
+        self.assertIn(request_record.confirmation_number, body)
 
     def test_feature_access_rule_seed_creates_premium_readiness_foundation(self):
         seed_feature_access_rules()
