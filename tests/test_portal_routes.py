@@ -2091,6 +2091,55 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("No documents available yet.", body)
         self.assertNotIn("Documents 0", body)
 
+    def test_member_agreements_center_shows_relevant_rules_and_signed_documents(self):
+        self.add_member(
+            member_id="13659",
+            plan_type="contract Dreamz 6 months",
+            contract_type="6-months",
+            billing_option="MCB Direct Debit",
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 7, 1),
+        )
+        seed_legal_documents()
+        contract = LegalDocument.query.filter_by(document_type="membership_contract_6_months").one()
+        contract_version = LegalDocumentVersion.query.filter_by(document_id=contract.id, is_current=True).one()
+        db.session.add(MemberAgreementAcceptance(
+            member_id="13659",
+            legal_document_version_id=contract_version.id,
+            language_accepted="en",
+            acceptance_method="digital_signature",
+            accepted_at=datetime(2026, 5, 27, 9, 0),
+        ))
+        db.session.add(MemberSignedDocument(
+            member_id="13659",
+            document_type="membership_contract_6_months",
+            file_url="/documents/signed/13659-contract.pdf",
+            signed_at=datetime(2026, 5, 27, 9, 5),
+            status="signed",
+            language="en",
+            version=contract_version.version,
+        ))
+        db.session.commit()
+        self.login_as("13659")
+
+        account_response = self.client.get("/account")
+        account_body = account_response.get_data(as_text=True)
+        self.assertIn("Agreements &amp; Rules", account_body)
+        self.assertIn("/account/agreements", account_body)
+
+        response = self.client.get("/account/agreements")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Agreements &amp; Rules", body)
+        self.assertIn("6-Month Membership Contract", body)
+        self.assertIn("Payment &amp; direct debit", body)
+        self.assertIn("Cancellation &amp; renewal", body)
+        self.assertIn("Gym Rules", body)
+        self.assertIn("Accepted", body)
+        self.assertIn("/documents/signed/13659-contract.pdf", body)
+        self.assertNotIn("External Personal Trainer Package Terms", body)
+
     def test_feature_access_rule_seed_creates_premium_readiness_foundation(self):
         seed_feature_access_rules()
 

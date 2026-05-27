@@ -2167,6 +2167,80 @@ def member_pricing_context(member):
     }
 
 
+def member_relevant_legal_document_types(member):
+    text = " ".join([member.plan_type or "", member.contract_type or "", member.billing_option or "", member.billing_type or ""]).lower()
+    document_types = [
+        "general_terms",
+        "gym_rules",
+        "liability_waiver",
+        "media_security_consent",
+        "payment_rules",
+        "cancellation_renewal_rules",
+        "personal_training_business_rules",
+    ]
+    if "6" in (member.contract_type or "") or "6 month" in text or "6-month" in text:
+        document_types.append("membership_contract_6_months")
+    if "12" in (member.contract_type or "") or "12 month" in text or "12-month" in text:
+        document_types.append("membership_contract_12_months")
+    if "direct debit" in text or "mcb" in text:
+        document_types.append("direct_debit_mandate")
+    if "group pt" in text or "group personal" in text:
+        document_types.append("group_pt_addon_waiver")
+    return document_types
+
+
+def member_agreements_context(member):
+    ensure_runtime_schema()
+    language = current_language()
+    document_types = member_relevant_legal_document_types(member)
+    documents = (
+        LegalDocument.query
+        .filter(LegalDocument.active.is_(True))
+        .filter(LegalDocument.document_type.in_(document_types))
+        .order_by(LegalDocument.sort_order.asc(), LegalDocument.title.asc())
+        .all()
+    )
+    agreement_cards = []
+    for document in documents:
+        version = current_legal_version(document)
+        translation = legal_translation_for_version(version, language)
+        agreement_cards.append({
+            "document": document,
+            "version": version,
+            "translation": translation,
+            "accepted": (
+                MemberAgreementAcceptance.query
+                .filter_by(member_id=member.member_id, legal_document_version_id=version.id)
+                .order_by(MemberAgreementAcceptance.accepted_at.desc())
+                .first()
+                if version else None
+            ),
+        })
+    signed_documents = (
+        MemberSignedDocument.query
+        .filter_by(member_id=member.member_id)
+        .order_by(MemberSignedDocument.signed_at.desc(), MemberSignedDocument.uploaded_at.desc())
+        .all()
+    )
+    policy = cancellation_policy_for_member(member)
+    policy_summary, policy_detail = cancellation_message_parts(policy, language=language)
+    return {
+        "member": member,
+        "display_name": display_member_name(member.name),
+        "agreement_cards": agreement_cards,
+        "signed_documents": signed_documents,
+        "policy": policy,
+        "cancellation_summary": policy_summary,
+        "cancellation_detail": policy_detail,
+        "cancel_window_open": fmt_policy_date(policy.window_open, language),
+        "cancel_window_close": fmt_policy_date(policy.last_request_date, language),
+        "current_term_end": fmt_policy_date(policy.current_term_end, language),
+        "cancellation_request": active_cancellation_request_for_member(member),
+        "gym_balance": member.balance or 0,
+        "is_contract_member": is_contract_member_record(member),
+    }
+
+
 def legal_translation_seed_text(document, language, field):
     if language == "en":
         return document[field]
@@ -2177,6 +2251,16 @@ def legal_translation_seed_text(document, language, field):
     }
     notice = language_labels.get(language, "Draft translation")
     return f"{notice}. {LEGAL_TRANSLATION_DRAFT_NOTICE}\n\n{document[field]}"
+
+
+def legal_translation_for_version(version, language):
+    if not version:
+        return None
+    language = normalize_language(language)
+    translation = LegalTranslation.query.filter_by(version_id=version.id, language=language).first()
+    if translation:
+        return translation
+    return LegalTranslation.query.filter_by(version_id=version.id, language=DEFAULT_LANGUAGE).first()
 
 
 def seed_required_agreement_rules():
@@ -7216,6 +7300,15 @@ def member_account():
         return redirect_response
 
     return render_template("account.html", **member_dashboard_context(member))
+
+
+@app.get("/account/agreements")
+def member_agreements():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+
+    return render_template("member_agreements.html", **member_agreements_context(member))
 
 
 @app.get("/membership-options")

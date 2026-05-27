@@ -135,6 +135,15 @@
     </div>
   </details>
 
+  {% if not staff_admin_view %}
+    <section class="rounded-lg border border-yellow-500/25 bg-yellow-500/10 p-5">
+      <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('agreements_rules') }}</div>
+      <h3 class="mt-1 text-xl font-semibold text-white">{{ t('member_agreements_title') }}</h3>
+      <p class="mt-2 text-sm leading-6 text-yellow-50/90">{{ t('member_agreements_account_intro') }}</p>
+      <a class="mt-4 inline-flex rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black" href="{{ url_for('member_agreements') }}">{{ t('view_agreements_rules') }}</a>
+    </section>
+  {% endif %}
+
   <details class="dashboard-card account-details-card bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6" {% if staff_admin_view %}open{% endif %}>
     <summary>
       <span>{{ t('member_information') }}</span>

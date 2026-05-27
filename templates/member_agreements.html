@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}{{ t('member_agreements_title') }} | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<section class="mb-6 rounded-lg border border-yellow-500/30 bg-gray-900/70 p-6">
+  <div class="text-xs font-semibold uppercase tracking-wide text-yellow-400">{{ t('agreements_rules') }}</div>
+  <h2 class="mt-1 text-2xl font-semibold text-white">{{ t('member_agreements_title') }}</h2>
+  <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-300">{{ t('member_agreements_intro') }}</p>
+</section>
+
+<section class="mb-6 grid gap-4 lg:grid-cols-3">
+  <article class="rounded-lg border border-gray-700 bg-gray-800/50 p-5">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('current_membership') }}</div>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ member.plan_type or t('not_available') }}</h3>
+    <p class="mt-2 text-sm text-gray-300">{{ member.contract_type or t('not_available') }}</p>
+  </article>
+  <article class="rounded-lg border border-gray-700 bg-gray-800/50 p-5">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('member_cancellation_renewal') }}</div>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ cancellation_summary }}</h3>
+    <dl class="mt-4 grid gap-y-2 text-sm" style="grid-template-columns: 9rem minmax(0, 1fr);">
+      <dt class="font-semibold text-gray-300">{{ t('current_term_ends') }}:</dt>
+      <dd>{{ current_term_end or t('not_available') }}</dd>
+      <dt class="font-semibold text-gray-300">{{ t('cancellation_opens') }}:</dt>
+      <dd>{{ cancel_window_open or t('not_available') }}</dd>
+      <dt class="font-semibold text-gray-300">{{ t('cancellation_closes') }}:</dt>
+      <dd>{{ cancel_window_close or t('not_available') }}</dd>
+    </dl>
+  </article>
+  <article class="rounded-lg border border-gray-700 bg-gray-800/50 p-5">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('payment_direct_debit') }}</div>
+    <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('payment_direct_debit_member_summary') }}</p>
+    {% if gym_balance > 0 %}
+      <a class="mt-4 inline-flex rounded border border-yellow-500/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200" href="{{ url_for('member_account', section='gym-balance') }}">{{ t('view_balance') }}</a>
+    {% endif %}
+  </article>
+</section>
+
+<section class="mb-6 rounded-lg border border-gray-700 bg-gray-800/50 p-5">
+  <h3 class="text-xl font-semibold text-white">{{ t('my_signed_documents') }}</h3>
+  <div class="mt-4 grid gap-3 lg:grid-cols-2">
+    {% for document in signed_documents %}
+      <article class="rounded border border-gray-700 bg-gray-900/60 p-4 text-sm">
+        <div class="font-semibold text-yellow-200">{{ document.document_type }}</div>
+        <div class="mt-1 text-gray-300">{{ document.status }}{% if document.signed_at %} / {{ document.signed_at|format_date('%d/%m/%Y') }}{% endif %}</div>
+        {% if document.file_url %}
+          <a class="mt-3 inline-flex rounded border border-gray-700 px-3 py-2 text-yellow-200" href="{{ document.file_url }}">{{ t('view_signed_pdf') }}</a>
+        {% endif %}
+      </article>
+    {% else %}
+      <div class="rounded border border-gray-700 bg-gray-900/60 p-4 text-sm text-gray-400">{{ t('no_signed_documents_available') }}</div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="grid gap-4">
+  {% for card in agreement_cards %}
+    {% set document = card.document %}
+    {% set version = card.version %}
+    {% set translation = card.translation %}
+    {% set accepted = card.accepted %}
+    <article class="rounded-lg border border-gray-700 bg-gray-800/50 p-5">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ document.document_type }}</div>
+          <h3 class="mt-1 text-xl font-semibold text-white">{{ translation.title if translation else document.title }}</h3>
+          {% if version %}
+            <p class="mt-1 text-xs text-gray-500">{{ t('terms_version') }} {{ version.version }} / {{ version.legal_review_status }}</p>
+          {% endif %}
+        </div>
+        <div class="text-sm">
+          {% if accepted %}
+            <span class="rounded bg-green-500/20 px-3 py-1 font-semibold text-green-100">{{ t('accepted') }} {{ accepted.accepted_at|format_date('%d/%m/%Y') }}</span>
+          {% else %}
+            <span class="rounded bg-yellow-500/20 px-3 py-1 font-semibold text-yellow-100">{{ t('available_to_review') }}</span>
+          {% endif %}
+        </div>
+      </div>
+      {% if translation %}
+        <p class="mt-4 text-sm leading-6 text-gray-300">{{ translation.plain_language_summary }}</p>
+        <details class="mt-4 rounded border border-gray-700 bg-gray-950/50 p-4">
+          <summary class="cursor-pointer font-semibold text-yellow-300">{{ t('view_full_terms') }}</summary>
+          <div class="mt-4 whitespace-pre-line text-sm leading-6 text-gray-300">{{ translation.full_legal_text }}</div>
+        </details>
+      {% else %}
+        <p class="mt-4 text-sm text-red-100">{{ t('terms_missing') }}</p>
+      {% endif %}
+    </article>
+  {% else %}
+    <div class="rounded border border-gray-700 bg-gray-900/60 p-4 text-sm text-gray-400">{{ t('no_agreements_available') }}</div>
+  {% endfor %}
+</section>
+{% endblock %}
