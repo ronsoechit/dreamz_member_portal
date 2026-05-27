@@ -1363,6 +1363,46 @@ def pricing_admin_context():
     }
 
 
+def pricing_item_visible_to(item, visibility):
+    return visibility in pricing_visibility_list(item)
+
+
+def active_pricing_items_for_visibility(visibility_values):
+    today = date.today()
+    query = PricingItem.query.filter(PricingItem.is_active.is_(True))
+    query = query.filter(db.or_(PricingItem.effective_from.is_(None), PricingItem.effective_from <= today))
+    query = query.filter(db.or_(PricingItem.effective_to.is_(None), PricingItem.effective_to >= today))
+    visibility_filters = [
+        PricingItem.visibility.like(f"%{visibility}%")
+        for visibility in visibility_values
+    ]
+    if visibility_filters:
+        query = query.filter(db.or_(*visibility_filters))
+    return query.order_by(PricingItem.sort_order.asc(), PricingItem.name.asc()).all()
+
+
+def pricing_items_by_category(items):
+    grouped = {}
+    for item in items:
+        grouped.setdefault(item.category_key, []).append(item)
+    return grouped
+
+
+def public_pricing_context():
+    ensure_runtime_schema()
+    items = [
+        item for item in active_pricing_items_for_visibility(["public", "public_business"])
+        if "staff_only" not in pricing_visibility_list(item) or pricing_item_visible_to(item, "public_business")
+    ]
+    categories = PricingCategory.query.order_by(PricingCategory.sort_order.asc(), PricingCategory.name.asc()).all()
+    return {
+        "pricing_categories": categories,
+        "pricing_items_by_category": pricing_items_by_category(items),
+        "pricing_terms_list": pricing_terms_list,
+        "pricing_global_rule": setting_value("pricing_catalog_global_rule", PRICING_CATALOG_GLOBAL_RULE),
+    }
+
+
 def seed_pricing_catalog():
     metadata = {
         "pricing_catalog_source": PRICING_CATALOG_SOURCE,
@@ -4777,6 +4817,11 @@ def send_cancellation_confirmation_email(member, request_record):
 @app.route("/")
 def home():
     return redirect(url_for("login"))
+
+
+@app.get("/pricing")
+def public_pricing():
+    return render_template("pricing.html", **public_pricing_context())
 
 
 @app.get("/manifest.webmanifest")

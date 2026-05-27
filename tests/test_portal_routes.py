@@ -1771,6 +1771,50 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Direct Debit only", mcb_terms)
         self.assertIn("No exceptions", mcb_terms)
 
+    def test_public_pricing_page_shows_public_catalog_without_staff_only_items(self):
+        seed_pricing_catalog()
+        db.session.add(PricingItem(
+            name="Internal Staff Test Product",
+            category_key="fees_other",
+            price_amount=999,
+            currency="USD",
+            billing_interval="one_time",
+            visibility="staff_only",
+            is_active=True,
+            sort_order=999,
+            terms=json.dumps(["Internal only"]),
+        ))
+        db.session.commit()
+
+        response = self.client.get("/pricing")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Dreamz Fitness Pricing", body)
+        self.assertIn("No contract / 1 month", body)
+        self.assertIn("1 Day Pass", body)
+        self.assertIn("Delfins Resort Guests", body)
+        self.assertIn("First-time registration fee", body)
+        self.assertIn("External Personal Trainer Package", body)
+        self.assertIn("This is a business package for external personal trainers", body)
+        self.assertIn("All prices and fees are non-negotiable.", body)
+        self.assertIn("Contact front desk", body)
+        self.assertNotIn("Internal Staff Test Product", body)
+        self.assertNotIn("Pay now", body)
+
+    def test_public_pricing_page_renders_in_all_supported_languages(self):
+        seed_pricing_catalog()
+        for language in LANGUAGES:
+            with self.subTest(language=language):
+                with self.client.session_transaction() as sess:
+                    sess["language"] = language
+                response = self.client.get("/pricing")
+                self.assertEqual(response.status_code, 200)
+                body = response.get_data(as_text=True)
+                self.assertIn("No contract / 1 month", body)
+                self.assertIn(TRANSLATIONS[language]["public_pricing_title"], body)
+                self.assertIn(TRANSLATIONS[language]["contact_front_desk"], body)
+
     def test_group_class_member_plan_attendance_and_notifications_models(self):
         self.add_member(member_id="13659", name="Ron Soechit")
         seed_group_class_schedule()

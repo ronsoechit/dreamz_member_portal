@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}{{ t('public_pricing_title') }} | Dreamz Fitness{% endblock %}
+
+{% macro pricing_card(item, business=False) %}
+  {% set terms = pricing_terms_list(item) %}
+  <article class="rounded-lg border border-gray-700 bg-gray-900/60 p-5 shadow-xl shadow-black/20">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div>
+        <h3 class="text-lg font-semibold text-white">{{ item.name }}</h3>
+        {% if item.description %}
+          <p class="mt-2 text-sm leading-6 text-gray-300">{{ item.description }}</p>
+        {% endif %}
+      </div>
+      <div class="shrink-0 rounded border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-right">
+        <div class="text-2xl font-bold text-yellow-300">
+          {% if item.price_amount == 0 %}{{ t('pricing_included') }}{% else %}${{ '%.2f'|format(item.price_amount) }}{% endif %}
+        </div>
+        <div class="text-xs font-semibold uppercase tracking-wide text-yellow-100">{{ t('pricing_interval_' ~ item.billing_interval) }}</div>
+      </div>
+    </div>
+    <div class="mt-4 flex flex-wrap gap-2 text-xs">
+      {% if item.duration %}
+        <span class="rounded-full border border-gray-700 bg-gray-950 px-3 py-1 text-gray-200">{{ item.duration }}</span>
+      {% endif %}
+      {% if item.requires_front_desk_handling %}
+        <span class="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-1 text-yellow-100">{{ t('contact_front_desk') }}</span>
+      {% endif %}
+    </div>
+    {% if terms %}
+      <details class="mt-4 rounded border border-gray-800 bg-black/20 p-3">
+        <summary class="cursor-pointer text-sm font-semibold text-yellow-300">{{ t('pricing_view_terms') }}</summary>
+        <ul class="mt-3 space-y-2 text-sm leading-6 text-gray-300">
+          {% for term in terms %}
+            <li>{{ term }}</li>
+          {% endfor %}
+        </ul>
+      </details>
+    {% endif %}
+    <div class="mt-4">
+      <span class="inline-flex rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black">
+        {{ t('ask_about_this_package') if business else t('contact_front_desk') }}
+      </span>
+    </div>
+  </article>
+{% endmacro %}
+
+{% block content %}
+<section class="mb-8 rounded-lg border border-yellow-500/30 bg-gray-900/70 p-6">
+  <div class="max-w-4xl">
+    <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">Dreamz Fitness</div>
+    <h2 class="mt-2 text-3xl font-bold text-white">{{ t('public_pricing_title') }}</h2>
+    <p class="mt-3 max-w-3xl text-sm leading-6 text-gray-300">{{ t('public_pricing_intro') }}</p>
+    <div class="mt-5 flex flex-wrap gap-3">
+      <span class="rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black">{{ t('join_dreamz') }}</span>
+      <span class="rounded border border-gray-700 bg-gray-950 px-4 py-3 text-sm font-semibold text-yellow-200">{{ t('contact_front_desk') }}</span>
+    </div>
+  </div>
+</section>
+
+{% set section_order = [
+  ('memberships', 'pricing_section_memberships', 'pricing_section_memberships_intro'),
+  ('mcb_direct_debit_contracts', 'pricing_section_mcb', 'pricing_section_mcb_intro'),
+  ('day_week_passes', 'pricing_section_passes', 'pricing_section_passes_intro'),
+  ('group_class_add_ons', 'pricing_section_group_addons', 'pricing_section_group_addons_intro'),
+  ('delfins_resort_guests', 'pricing_section_delfins', 'pricing_section_delfins_intro'),
+  ('fees_other', 'pricing_section_fees', 'pricing_section_fees_intro')
+] %}
+
+{% for category_key, title_key, intro_key in section_order %}
+  {% set items = pricing_items_by_category.get(category_key, []) %}
+  {% if items %}
+    <section class="mb-8">
+      <div class="mb-4">
+        <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t(title_key) }}</div>
+        <p class="mt-1 max-w-3xl text-sm leading-6 text-gray-400">{{ t(intro_key) }}</p>
+      </div>
+      <div class="grid gap-4 lg:grid-cols-3">
+        {% for item in items %}
+          {{ pricing_card(item) }}
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+{% endfor %}
+
+{% set business_items = pricing_items_by_category.get('external_trainer_b2b', []) %}
+{% if business_items %}
+  <section class="mb-8 rounded-lg border border-yellow-500/20 bg-gray-800/40 p-5">
+    <div class="mb-4">
+      <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('pricing_section_trainers') }}</div>
+      <h3 class="mt-1 text-xl font-semibold text-white">{{ t('pricing_trainers_title') }}</h3>
+      <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-300">{{ t('pricing_trainers_intro') }}</p>
+    </div>
+    <div class="grid gap-4 lg:grid-cols-2">
+      {% for item in business_items %}
+        {{ pricing_card(item, business=True) }}
+      {% endfor %}
+    </div>
+  </section>
+{% endif %}
+
+<section class="rounded border border-yellow-500/30 bg-yellow-500/10 p-4 text-sm font-semibold text-yellow-100">
+  {{ pricing_global_rule }}
+</section>
+{% endblock %}
