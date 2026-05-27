@@ -1967,7 +1967,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(RequiredAgreementRule.query.count(), 5)
 
         notice = AppSetting.query.filter_by(key="legal_translation_review_notice").one()
-        self.assertIn("Final legal wording should be reviewed", notice.value)
+        self.assertIn("marked as legally reviewed", notice.value)
 
         cancellation = LegalDocument.query.filter_by(document_type="cancellation_renewal_rules").one()
         cancellation_version = LegalDocumentVersion.query.filter_by(document_id=cancellation.id, is_current=True).one()
@@ -1983,11 +1983,14 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("No exceptions", direct_debit_version.full_legal_text)
 
         six_month = LegalDocument.query.filter_by(document_type="membership_contract_6_months").one()
-        self.assertTrue(six_month.legal_review_needed)
+        self.assertFalse(six_month.legal_review_needed)
         self.assertIn("Legacy 6-month PDF", six_month.internal_notes)
         self.assertIn("minimum of 12 months", six_month.internal_notes)
+        self.assertNotIn("Legal review needed", six_month.internal_notes)
         six_month_version = LegalDocumentVersion.query.filter_by(document_id=six_month.id).one()
         self.assertNotIn("minimum of 12 months", six_month_version.full_legal_text)
+        self.assertEqual(six_month_version.version, "2026-05-27-legal-reviewed")
+        self.assertEqual(six_month_version.legal_review_status, "legal_reviewed")
 
         for language in LANGUAGES:
             with self.subTest(language=language):
@@ -1995,10 +1998,9 @@ class PortalRouteTests(unittest.TestCase):
                     version_id=cancellation_version.id,
                     language=language,
                 ).one()
-                self.assertEqual(translation.translation_status, "draft")
+                self.assertEqual(translation.translation_status, "legal_reviewed")
                 self.assertTrue(translation.full_legal_text)
-                if language != "en":
-                    self.assertIn("Final legal wording should be reviewed", translation.full_legal_text)
+                self.assertNotIn("Final legal wording should be reviewed", translation.full_legal_text)
 
         seed_legal_documents()
         self.assertEqual(LegalDocument.query.count(), 13)
@@ -2248,7 +2250,9 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(set(LANGUAGES), {"en", "nl", "pap", "es"})
         self.assertEqual(LegalDocument.query.count(), 13)
         self.assertEqual(LegalTranslation.query.count(), 13 * len(LANGUAGES))
-        self.assertTrue(all(document.legal_review_needed for document in LegalDocument.query.all()))
+        self.assertTrue(all(not document.legal_review_needed for document in LegalDocument.query.all()))
+        self.assertTrue(all(version.legal_review_status == "legal_reviewed" for version in LegalDocumentVersion.query.all()))
+        self.assertTrue(all(translation.translation_status == "legal_reviewed" for translation in LegalTranslation.query.all()))
 
         payment_rules = LegalDocument.query.filter_by(document_type="payment_rules").one()
         payment_version = LegalDocumentVersion.query.filter_by(document_id=payment_rules.id, is_current=True).one()

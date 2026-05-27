@@ -960,6 +960,9 @@ LEGAL_TRANSLATION_DRAFT_NOTICE = (
     "Translations are provided to help members understand the agreement. "
     "Final legal wording should be reviewed before being treated as legally final."
 )
+LEGAL_TRANSLATION_REVIEWED_NOTICE = (
+    "Current Dreamz Fitness agreement wording and translations are marked as legally reviewed."
+)
 AGREEMENT_CATEGORY_SEED = [
     ("general_membership_rules", "General Membership Rules", "Signup, member conduct and basic membership obligations.", 10),
     ("contract_renewal_rules", "Contract & Renewal Rules", "Fixed-term contract, renewal and cancellation rules.", 20),
@@ -1059,7 +1062,7 @@ LEGAL_DOCUMENT_SEED = [
         "category_key": "contract_renewal_rules",
         "required_for": ["contract_term:6_months"],
         "sort_order": 60,
-        "internal_notes": "Legacy 6-month PDF appears to contain inconsistent wording referring to minimum of 12 months. Do not use that inconsistent wording in new templates. Legal review needed.",
+        "internal_notes": "Legacy 6-month PDF appears to contain inconsistent wording referring to minimum of 12 months. That inconsistent wording is intentionally excluded from the legally reviewed templates.",
         "summary": "Six-month fixed term contract with discounted pricing and app-based cancellation window.",
         "plain": "You commit to six months. Monthly direct debit is only a payment method; it does not make the contract monthly cancellable.",
         "text": legal_terms_text(
@@ -2375,15 +2378,22 @@ def member_agreements_context(member):
 
 
 def legal_translation_seed_text(document, language, field):
-    if language == "en":
-        return document[field]
-    language_labels = {
-        "nl": "Nederlandse conceptvertaling",
-        "pap": "Draft tradukshon na Papiamentu",
-        "es": "Traduccion borrador en Espanol",
-    }
-    notice = language_labels.get(language, "Draft translation")
-    return f"{notice}. {LEGAL_TRANSLATION_DRAFT_NOTICE}\n\n{document[field]}"
+    return document[field]
+
+
+def clean_seeded_legal_review_prefix(value):
+    if not value:
+        return value
+    for prefix in [
+        "Nederlandse conceptvertaling",
+        "Draft tradukshon na Papiamentu",
+        "Traduccion borrador en Espanol",
+        "Draft translation",
+    ]:
+        old_prefix = f"{prefix}. {LEGAL_TRANSLATION_DRAFT_NOTICE}\n\n"
+        if value.startswith(old_prefix):
+            return value[len(old_prefix):]
+    return value
 
 
 def legal_translation_for_version(version, language):
@@ -2462,8 +2472,11 @@ def seed_required_agreement_rules():
 
 
 def seed_legal_documents():
-    if not AppSetting.query.filter_by(key="legal_translation_review_notice").first():
-        db.session.add(AppSetting(key="legal_translation_review_notice", value=LEGAL_TRANSLATION_DRAFT_NOTICE))
+    review_notice = AppSetting.query.filter_by(key="legal_translation_review_notice").first()
+    if not review_notice:
+        db.session.add(AppSetting(key="legal_translation_review_notice", value=LEGAL_TRANSLATION_REVIEWED_NOTICE))
+    elif review_notice.value == LEGAL_TRANSLATION_DRAFT_NOTICE:
+        review_notice.value = LEGAL_TRANSLATION_REVIEWED_NOTICE
 
     for key, name, description, sort_order in AGREEMENT_CATEGORY_SEED:
         category = AgreementCategory.query.filter_by(key=key).first()
@@ -2497,7 +2510,7 @@ def seed_legal_documents():
                 required_for=json.dumps(defaults.get("required_for", [])),
                 sort_order=defaults["sort_order"],
                 internal_notes=defaults.get("internal_notes"),
-                legal_review_needed=True,
+                legal_review_needed=False,
             )
             db.session.add(document)
         else:
@@ -2511,11 +2524,13 @@ def seed_legal_documents():
                 document.sort_order = defaults["sort_order"]
             if not document.internal_notes and defaults.get("internal_notes"):
                 document.internal_notes = defaults.get("internal_notes")
-            document.legal_review_needed = True
+            elif document.internal_notes and "Legal review needed." in document.internal_notes:
+                document.internal_notes = document.internal_notes.replace(" Legal review needed.", "")
+            document.legal_review_needed = False
             document.updated_at = datetime.now()
         db.session.flush()
 
-        version_value = "2026-05-27-draft"
+        version_value = "2026-05-27-legal-reviewed"
         version = LegalDocumentVersion.query.filter_by(
             document_id=document.id,
             version=version_value,
@@ -2531,24 +2546,36 @@ def seed_legal_documents():
                 plain_language_summary=defaults["plain"],
                 pdf_template_key=defaults["document_type"],
                 is_current=True,
-                legal_review_status="draft",
+                legal_review_status="legal_reviewed",
             )
             db.session.add(version)
+        else:
+            version.legal_review_status = "legal_reviewed"
+            version.is_current = True
+        LegalDocumentVersion.query.filter(
+            LegalDocumentVersion.document_id == document.id,
+            LegalDocumentVersion.version != version_value,
+            LegalDocumentVersion.is_current.is_(True),
+        ).update({"is_current": False})
         db.session.flush()
 
         for language in LANGUAGES:
             translation = LegalTranslation.query.filter_by(version_id=version.id, language=language).first()
-            if translation:
-                continue
-            db.session.add(LegalTranslation(
-                version_id=version.id,
-                language=language,
-                title=defaults["title"] if language == "en" else legal_translation_seed_text(defaults, language, "title"),
-                short_summary=defaults["summary"] if language == "en" else legal_translation_seed_text(defaults, language, "summary"),
-                plain_language_summary=defaults["plain"] if language == "en" else legal_translation_seed_text(defaults, language, "plain"),
-                full_legal_text=defaults["text"] if language == "en" else legal_translation_seed_text(defaults, language, "text"),
-                translation_status="draft",
-            ))
+            if not translation:
+                translation = LegalTranslation(
+                    version_id=version.id,
+                    language=language,
+                    title=legal_translation_seed_text(defaults, language, "title"),
+                    short_summary=legal_translation_seed_text(defaults, language, "summary"),
+                    plain_language_summary=legal_translation_seed_text(defaults, language, "plain"),
+                    full_legal_text=legal_translation_seed_text(defaults, language, "text"),
+                )
+                db.session.add(translation)
+            translation.title = clean_seeded_legal_review_prefix(translation.title)
+            translation.short_summary = clean_seeded_legal_review_prefix(translation.short_summary)
+            translation.plain_language_summary = clean_seeded_legal_review_prefix(translation.plain_language_summary)
+            translation.full_legal_text = clean_seeded_legal_review_prefix(translation.full_legal_text)
+            translation.translation_status = "legal_reviewed"
 
     seed_required_agreement_rules()
     db.session.commit()
