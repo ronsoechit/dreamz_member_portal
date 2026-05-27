@@ -399,6 +399,120 @@ class CoachPlan(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
 
 
+class GroupClassType(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String, unique=True, nullable=False, index=True)
+    category = db.Column(db.String, nullable=False)
+    intensity = db.Column(db.String, nullable=False)
+    muscle_focus = db.Column(db.String)
+    cardio_load = db.Column(db.String)
+    strength_load = db.Column(db.String)
+    recovery_impact = db.Column(db.String)
+    impact_level = db.Column(db.String)
+    pregnancy_safety_level = db.Column(db.String)
+    default_bookable = db.Column(db.Boolean, default=True, nullable=False)
+    default_publish = db.Column(db.Boolean, default=True, nullable=False)
+    description = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+
+class GroupClassSchedule(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String, unique=True, nullable=False, index=True)
+    source = db.Column(db.String)
+    timezone = db.Column(db.String, default="America/Kralendijk", nullable=False)
+    last_updated_from_pdf = db.Column(db.Date)
+    status = db.Column(db.String, default="draft", nullable=False)
+    published_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+
+class GroupClassOccurrence(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    schedule_id = db.Column(db.Integer, db.ForeignKey("group_class_schedule.id"), nullable=False, index=True)
+    class_type_id = db.Column(db.Integer, db.ForeignKey("group_class_type.id"), nullable=False, index=True)
+    day_of_week = db.Column(db.Integer, nullable=False, index=True)
+    start_time = db.Column(db.Time, nullable=False)
+    end_time = db.Column(db.Time, nullable=False)
+    room = db.Column(db.String, nullable=False, index=True)
+    instructor = db.Column(db.String)
+    capacity = db.Column(db.Integer)
+    note = db.Column(db.String)
+    is_bookable = db.Column(db.Boolean, default=True, nullable=False)
+    is_published = db.Column(db.Boolean, default=True, nullable=False)
+    blocks_room = db.Column(db.Boolean, default=True, nullable=False)
+    seed_key = db.Column(db.String, unique=True, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    schedule = db.relationship("GroupClassSchedule", backref=db.backref("occurrences", lazy=True))
+    class_type = db.relationship("GroupClassType", backref=db.backref("occurrences", lazy=True))
+
+
+class MemberClassPreference(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.String, nullable=False, index=True)
+    class_type_id = db.Column(db.Integer, db.ForeignKey("group_class_type.id"), index=True)
+    preferred_classes_per_week = db.Column(db.Integer)
+    plan_mode = db.Column(db.String, default="supplement", nullable=False)
+    is_favorite = db.Column(db.Boolean, default=False, nullable=False)
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    class_type = db.relationship("GroupClassType")
+
+
+class MemberClassPlan(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.String, nullable=False, index=True)
+    occurrence_id = db.Column(db.Integer, db.ForeignKey("group_class_occurrence.id"), nullable=False, index=True)
+    class_date = db.Column(db.Date, nullable=False, index=True)
+    status = db.Column(db.String, default="planned", nullable=False, index=True)
+    replaces_personal_workout = db.Column(db.Boolean, default=False, nullable=False)
+    source = db.Column(db.String, default="member", nullable=False)
+    note = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    occurrence = db.relationship("GroupClassOccurrence")
+
+
+class MemberClassAttendance(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.String, nullable=False, index=True)
+    plan_id = db.Column(db.Integer, db.ForeignKey("member_class_plan.id"), index=True)
+    occurrence_id = db.Column(db.Integer, db.ForeignKey("group_class_occurrence.id"), nullable=False, index=True)
+    class_date = db.Column(db.Date, nullable=False, index=True)
+    attended_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+    source = db.Column(db.String, default="member", nullable=False)
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    plan = db.relationship("MemberClassPlan")
+    occurrence = db.relationship("GroupClassOccurrence")
+
+
+class ScheduleChangeNotification(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.String, index=True)
+    occurrence_id = db.Column(db.Integer, db.ForeignKey("group_class_occurrence.id"), index=True)
+    plan_id = db.Column(db.Integer, db.ForeignKey("member_class_plan.id"), index=True)
+    change_type = db.Column(db.String, nullable=False, index=True)
+    message_key = db.Column(db.String)
+    message = db.Column(db.Text, nullable=False)
+    old_value = db.Column(db.Text)
+    new_value = db.Column(db.Text)
+    is_read = db.Column(db.Boolean, default=False, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+    published_at = db.Column(db.DateTime)
+
+    occurrence = db.relationship("GroupClassOccurrence")
+    plan = db.relationship("MemberClassPlan")
+
+
 DEFAULT_SETTINGS = {
     "admin_email": "ron@dreamzfitness.com",
     "notification_to": "ron@dreamzfitness.com",
@@ -410,6 +524,143 @@ DEFAULT_PORTAL_TIMEZONE_OFFSET_HOURS = -4
 STALE_SYNC_RUN_MINUTES = 15
 LOGIN_CODE_RESEND_COOLDOWN_SECONDS = 60
 COACH_PLAN_SCHEMA_VERSION = "2026-05-27a"
+GROUP_CLASS_SCHEDULE_NAME = "Dreamz Fitness Group Class Schedule"
+GROUP_CLASS_SCHEDULE_SOURCE = "uploaded PDF schedule converted to database seed"
+GROUP_CLASS_SCHEDULE_TIMEZONE = "America/Kralendijk"
+GROUP_CLASS_SCHEDULE_LAST_UPDATED_FROM_PDF = date(2026, 5, 18)
+
+GROUP_CLASS_TYPE_SEED = {
+    "BODYPUMP": {
+        "category": "strength",
+        "intensity": "medium_high",
+        "muscle_focus": "full_body",
+        "cardio_load": "medium",
+        "strength_load": "high",
+        "recovery_impact": "medium_high",
+        "impact_level": "low_medium",
+        "pregnancy_safety_level": "caution",
+    },
+    "BODYCOMBAT": {
+        "category": "cardio",
+        "intensity": "high",
+        "muscle_focus": "full_body_cardio",
+        "cardio_load": "high",
+        "strength_load": "low_medium",
+        "recovery_impact": "high",
+        "impact_level": "high",
+        "pregnancy_safety_level": "not_recommended_or_requires_modification",
+    },
+    "ZUMBA": {
+        "category": "cardio",
+        "intensity": "medium",
+        "muscle_focus": "full_body_cardio",
+        "cardio_load": "medium",
+        "strength_load": "low",
+        "recovery_impact": "medium",
+        "impact_level": "medium",
+        "pregnancy_safety_level": "caution",
+    },
+    "TOTAL BODY": {
+        "category": "hybrid",
+        "intensity": "medium_high",
+        "muscle_focus": "full_body",
+        "cardio_load": "medium",
+        "strength_load": "medium_high",
+        "recovery_impact": "medium_high",
+        "impact_level": "medium",
+        "pregnancy_safety_level": "caution",
+    },
+    "YOGA": {
+        "category": "mobility_recovery",
+        "intensity": "low_medium",
+        "muscle_focus": "mobility",
+        "cardio_load": "low",
+        "strength_load": "low",
+        "recovery_impact": "low",
+        "impact_level": "low",
+        "pregnancy_safety_level": "suitable_or_requires_modification_after_16_weeks",
+    },
+    "SPINNING": {
+        "category": "cardio",
+        "intensity": "medium_high",
+        "muscle_focus": "lower_body_cardio",
+        "cardio_load": "high",
+        "strength_load": "low_medium",
+        "recovery_impact": "medium_high",
+        "impact_level": "low",
+        "pregnancy_safety_level": "caution",
+    },
+    "STEP AEROBICS": {
+        "category": "cardio",
+        "intensity": "medium_high",
+        "muscle_focus": "lower_body_cardio",
+        "cardio_load": "high",
+        "strength_load": "low_medium",
+        "recovery_impact": "medium_high",
+        "impact_level": "medium_high",
+        "pregnancy_safety_level": "caution_or_not_recommended_depending_on_balance_and_weeks",
+    },
+    "BOOTY SHAPE": {
+        "category": "strength",
+        "intensity": "medium_high",
+        "muscle_focus": "glutes_lower_body",
+        "cardio_load": "low_medium",
+        "strength_load": "medium_high",
+        "recovery_impact": "medium_high",
+        "impact_level": "low_medium",
+        "pregnancy_safety_level": "caution",
+    },
+    "PILATES": {
+        "category": "core_mobility",
+        "intensity": "low_medium",
+        "muscle_focus": "core_mobility",
+        "cardio_load": "low",
+        "strength_load": "low_medium",
+        "recovery_impact": "low_medium",
+        "impact_level": "low",
+        "pregnancy_safety_level": "suitable_or_requires_modification",
+    },
+    "RESERVED": {
+        "category": "unavailable_reserved",
+        "intensity": "none",
+        "muscle_focus": None,
+        "cardio_load": None,
+        "strength_load": None,
+        "recovery_impact": None,
+        "impact_level": None,
+        "pregnancy_safety_level": None,
+        "default_bookable": False,
+        "default_publish": False,
+        "description": "Blocks the room/time in admin schedule and is hidden from members by default.",
+    },
+}
+
+GROUP_CLASS_WEEKLY_SCHEDULE_SEED = [
+    (0, "08:00", "09:00", "BODYPUMP", "AEROBICS ROOM", None),
+    (0, "18:00", "19:00", "BODYCOMBAT", "AEROBICS ROOM", None),
+    (0, "19:00", "20:00", "ZUMBA", "AEROBICS ROOM", None),
+    (0, "20:00", "21:00", "BODYPUMP", "AEROBICS ROOM", None),
+    (1, "08:00", "09:00", "TOTAL BODY", "AEROBICS ROOM", None),
+    (1, "17:00", "18:00", "RESERVED", "DOJO", None),
+    (1, "18:00", "19:00", "BODYPUMP", "AEROBICS ROOM", None),
+    (1, "19:00", "20:00", "TOTAL BODY", "AEROBICS ROOM", None),
+    (2, "08:00", "09:00", "BODYPUMP", "AEROBICS ROOM", None),
+    (2, "09:00", "10:00", "YOGA", "AEROBICS ROOM", None),
+    (2, "18:00", "19:00", "ZUMBA", "AEROBICS ROOM", None),
+    (2, "18:00", "19:00", "SPINNING", "SPINNING ROOM", None),
+    (3, "08:00", "09:00", "STEP AEROBICS", "DOJO", None),
+    (3, "17:00", "18:00", "RESERVED", "DOJO", None),
+    (3, "18:00", "19:00", "BOOTY SHAPE", "AEROBICS ROOM", None),
+    (3, "20:00", "21:00", "BODYPUMP", "AEROBICS ROOM", None),
+    (4, "08:00", "09:00", "TOTAL BODY", "AEROBICS ROOM", None),
+    (4, "09:00", "10:00", "BODYPUMP", "AEROBICS ROOM", None),
+    (4, "18:00", "19:00", "ZUMBA", "AEROBICS ROOM", None),
+    (4, "18:00", "19:00", "SPINNING", "SPINNING ROOM", None),
+    (5, "08:00", "09:00", "PILATES", "AEROBICS ROOM", "NEW"),
+    (5, "09:00", "10:00", "ZUMBA", "AEROBICS ROOM", None),
+    (5, "10:00", "11:00", "BODYCOMBAT", "AEROBICS ROOM", None),
+    (5, "11:00", "12:00", "BODYPUMP", "AEROBICS ROOM", None),
+]
 
 
 def portal_timezone():
@@ -491,6 +742,7 @@ def ensure_runtime_schema():
     db.create_all()
     seed_default_settings()
     seed_default_staff_users()
+    seed_group_class_schedule()
     app.config["_RUNTIME_SCHEMA_READY"] = True
 
 
@@ -546,6 +798,82 @@ def seed_default_staff_users():
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
+
+
+def parse_group_class_seed_time(value):
+    return datetime.strptime(value, "%H:%M").time()
+
+
+def group_class_seed_key(day_of_week, start_at, end_at, class_name, room):
+    key_parts = [
+        GROUP_CLASS_SCHEDULE_LAST_UPDATED_FROM_PDF.isoformat(),
+        str(day_of_week),
+        start_at.replace(":", ""),
+        end_at.replace(":", ""),
+        class_name.lower().replace(" ", "-"),
+        room.lower().replace(" ", "-"),
+    ]
+    return "-".join(key_parts)
+
+
+def seed_group_class_schedule():
+    schedule = GroupClassSchedule.query.filter_by(name=GROUP_CLASS_SCHEDULE_NAME).first()
+    if not schedule:
+        schedule = GroupClassSchedule(
+            name=GROUP_CLASS_SCHEDULE_NAME,
+            status="published",
+            published_at=datetime.now(),
+        )
+        db.session.add(schedule)
+
+    schedule.source = schedule.source or GROUP_CLASS_SCHEDULE_SOURCE
+    schedule.timezone = schedule.timezone or GROUP_CLASS_SCHEDULE_TIMEZONE
+    schedule.last_updated_from_pdf = schedule.last_updated_from_pdf or GROUP_CLASS_SCHEDULE_LAST_UPDATED_FROM_PDF
+    schedule.updated_at = datetime.now()
+
+    class_types = {}
+    for class_name, defaults in GROUP_CLASS_TYPE_SEED.items():
+        class_type = GroupClassType.query.filter_by(name=class_name).first()
+        if not class_type:
+            class_type = GroupClassType(name=class_name)
+            db.session.add(class_type)
+
+        for field, value in defaults.items():
+            if getattr(class_type, field, None) in (None, ""):
+                setattr(class_type, field, value)
+        if class_type.default_bookable is None:
+            class_type.default_bookable = defaults.get("default_bookable", True)
+        if class_type.default_publish is None:
+            class_type.default_publish = defaults.get("default_publish", True)
+        class_type.updated_at = datetime.now()
+        class_types[class_name] = class_type
+
+    db.session.flush()
+
+    for day_of_week, start_at, end_at, class_name, room, note in GROUP_CLASS_WEEKLY_SCHEDULE_SEED:
+        seed_key = group_class_seed_key(day_of_week, start_at, end_at, class_name, room)
+        if GroupClassOccurrence.query.filter_by(seed_key=seed_key).first():
+            continue
+
+        class_type = class_types[class_name]
+        is_reserved = class_name == "RESERVED"
+        occurrence = GroupClassOccurrence(
+            schedule_id=schedule.id,
+            class_type_id=class_type.id,
+            day_of_week=day_of_week,
+            start_time=parse_group_class_seed_time(start_at),
+            end_time=parse_group_class_seed_time(end_at),
+            room=room,
+            note=note,
+            is_bookable=not is_reserved and class_type.default_bookable,
+            is_published=not is_reserved and class_type.default_publish,
+            blocks_room=True,
+            seed_key=seed_key,
+        )
+        db.session.add(occurrence)
+
+    db.session.commit()
+    return schedule
 
 
 @app.before_request

@@ -18,7 +18,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
-from dreamz_portal import CancellationRequest, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, EmailLog, Member, MemberDocument, MemberLoginCode, app, cancellation_message, coach_profile_completion, db  # noqa: E402
+from dreamz_portal import CancellationRequest, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, EmailLog, GroupClassOccurrence, GroupClassSchedule, GroupClassType, Member, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, ScheduleChangeNotification, app, cancellation_message, coach_profile_completion, db, seed_group_class_schedule  # noqa: E402
 
 
 class FakeS3Body:
@@ -1594,6 +1594,112 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(request_record.status, "accepted")
         self.assertEqual(request_record.mail_status, "failed")
         self.assertIn("SMTP offline", request_record.mail_error)
+
+    def test_group_class_schedule_seed_creates_initial_weekly_data(self):
+        schedule = seed_group_class_schedule()
+
+        self.assertEqual(schedule.name, "Dreamz Fitness Group Class Schedule")
+        self.assertEqual(schedule.timezone, "America/Kralendijk")
+        self.assertEqual(schedule.last_updated_from_pdf, date(2026, 5, 18))
+        self.assertEqual(GroupClassType.query.count(), 10)
+        self.assertEqual(GroupClassOccurrence.query.count(), 24)
+
+        reserved = GroupClassType.query.filter_by(name="RESERVED").one()
+        self.assertFalse(reserved.default_bookable)
+        self.assertFalse(reserved.default_publish)
+
+        reserved_occurrences = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "RESERVED")
+            .all()
+        )
+        self.assertEqual(len(reserved_occurrences), 2)
+        self.assertTrue(all(occurrence.blocks_room for occurrence in reserved_occurrences))
+        self.assertTrue(all(not occurrence.is_bookable for occurrence in reserved_occurrences))
+        self.assertTrue(all(not occurrence.is_published for occurrence in reserved_occurrences))
+
+        pilates = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "PILATES")
+            .one()
+        )
+        self.assertEqual(pilates.day_of_week, 5)
+        self.assertEqual(pilates.start_time.strftime("%H:%M"), "08:00")
+        self.assertEqual(pilates.room, "AEROBICS ROOM")
+        self.assertEqual(pilates.note, "NEW")
+
+    def test_group_class_schedule_seed_is_idempotent_and_preserves_admin_edits(self):
+        seed_group_class_schedule()
+        occurrence = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "BODYPUMP", GroupClassOccurrence.day_of_week == 0)
+            .order_by(GroupClassOccurrence.start_time.asc())
+            .first()
+        )
+        occurrence.room = "MAIN ROOM"
+        occurrence.capacity = 18
+        db.session.commit()
+
+        seed_group_class_schedule()
+
+        self.assertEqual(GroupClassType.query.count(), 10)
+        self.assertEqual(GroupClassOccurrence.query.count(), 24)
+        edited = db.session.get(GroupClassOccurrence, occurrence.id)
+        self.assertEqual(edited.room, "MAIN ROOM")
+        self.assertEqual(edited.capacity, 18)
+
+    def test_group_class_member_plan_attendance_and_notifications_models(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        seed_group_class_schedule()
+        bodypump = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "BODYPUMP")
+            .first()
+        )
+        preference = MemberClassPreference(
+            member_id="13659",
+            class_type_id=bodypump.class_type_id,
+            preferred_classes_per_week=2,
+            plan_mode="replace_or_supplement",
+            is_favorite=True,
+        )
+        plan = MemberClassPlan(
+            member_id="13659",
+            occurrence_id=bodypump.id,
+            class_date=date(2026, 6, 1),
+            status="planned",
+        )
+        db.session.add_all([preference, plan])
+        db.session.commit()
+
+        attendance = MemberClassAttendance(
+            member_id="13659",
+            plan_id=plan.id,
+            occurrence_id=bodypump.id,
+            class_date=plan.class_date,
+            source="member",
+        )
+        notification = ScheduleChangeNotification(
+            member_id="13659",
+            occurrence_id=bodypump.id,
+            plan_id=plan.id,
+            change_type="class_time_changed",
+            message_key="group_class_time_changed",
+            message="BODYPUMP on Monday has moved to 20:00.",
+            old_value="18:00",
+            new_value="20:00",
+        )
+        db.session.add_all([attendance, notification])
+        db.session.commit()
+
+        self.assertEqual(MemberClassPreference.query.filter_by(member_id="13659").count(), 1)
+        self.assertEqual(MemberClassPlan.query.filter_by(member_id="13659").count(), 1)
+        self.assertEqual(MemberClassAttendance.query.filter_by(member_id="13659").count(), 1)
+        self.assertEqual(ScheduleChangeNotification.query.filter_by(member_id="13659").count(), 1)
 
 
 if __name__ == "__main__":
