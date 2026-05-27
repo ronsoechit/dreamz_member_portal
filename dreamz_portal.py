@@ -2214,6 +2214,32 @@ def member_document_groups(member):
         group["first_order"] = min(group["first_order"], document.display_order)
         group["first_id"] = min(group["first_id"], document.id)
 
+    legacy_documents = [
+        ("signup_form", "signup-form", "form_path", 10),
+        ("contract", "contract", "contract_path", 20),
+        ("direct_debit_mandate", "mandate", "mandate_path", 30),
+    ]
+    for document_type, route_type, field_name, display_order in legacy_documents:
+        if document_type in groups:
+            continue
+        document_path = getattr(member, field_name, None)
+        if not document_path:
+            continue
+        group = groups.setdefault(
+            document_type,
+            {
+                "document_type": document_type,
+                "documents": [],
+                "first_order": display_order,
+                "first_id": 0,
+            },
+        )
+        normalized_path = document_path.replace("\\", "/")
+        group["documents"].append({
+            "route_type": route_type,
+            "source_filename": Path(normalized_path).name,
+        })
+
     return sorted(
         groups.values(),
         key=lambda group: (
@@ -4016,7 +4042,7 @@ def view_document(document_type):
         document_type=logical_document_type,
         pdf_url=url_for("document_file", document_type=document_type),
         download_url=url_for("document_file", document_type=document_type, download="1"),
-        close_url=url_for("dashboard", id=member.member_id),
+        close_url=url_for("member_account"),
     )
 
 
@@ -4069,7 +4095,7 @@ def view_member_document(document_id):
         close_url=(
             url_for("staff_member_detail", member_id=member.member_id)
             if is_staff_user()
-            else url_for("dashboard", id=member.member_id)
+            else url_for("member_account")
         ),
     )
 
@@ -4169,6 +4195,31 @@ def dashboard():
         return abort(404, "Member not found.")
 
     return render_template("dashboard.html", **member_dashboard_context(member))
+
+
+@app.get("/account")
+def member_account():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+
+    return render_template("account.html", **member_dashboard_context(member))
+
+
+@app.get("/progress")
+def member_progress():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+
+    return render_template(
+        "progress.html",
+        member=member,
+        display_name=display_member_name(member.name),
+        member_photo_available=bool(is_s3_uri(member.photo_path) or resolved_photo_path(member.photo_path)),
+        workout_history=coach_workout_history(member.member_id),
+        progress_entries=coach_progress_history(member.member_id),
+    )
 
 
 @app.route("/coach", methods=["GET", "POST"])
@@ -4451,15 +4502,15 @@ def cancel():
     existing_request = active_cancellation_request_for_member(member)
     if not cancellation_portal_available_for_member(member):
         flash(translated_text("cancel_not_available_for_membership", current_language()))
-        return redirect(url_for("dashboard", id=member_id))
+        return redirect(url_for("member_account"))
 
     if existing_request:
         flash(translated_text("cancel_already_reviewing", current_language()))
-        return redirect(url_for("dashboard", id=member_id))
+        return redirect(url_for("member_account"))
 
     if not reason:
         flash(translated_text("cancel_choose_reason", current_language()))
-        return redirect(url_for("dashboard", id=member_id))
+        return redirect(url_for("member_account"))
 
     if not policy.can_request:
         request_record = create_cancellation_request(member, policy, reason, status="blocked", language=current_language())
@@ -4479,7 +4530,7 @@ def cancel():
             request_record.mail_error = str(exc)
         db.session.commit()
         flash(cancellation_message(policy, language=current_language()))
-        return redirect(url_for("dashboard", id=member_id))
+        return redirect(url_for("member_account"))
 
     request_record = create_cancellation_request(
         member,
@@ -4505,7 +4556,7 @@ def cancel():
     request_record.mail_error = None
     db.session.commit()
     flash(translated_text("cancel_request_received_flash", current_language()))
-    return redirect(url_for("dashboard", id=member_id))
+    return redirect(url_for("member_account"))
 
 @app.route("/login", methods=["GET", "POST"])
 def login():

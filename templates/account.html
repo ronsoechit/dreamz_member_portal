@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}{{ t('account') }} | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<section class="account-hero mb-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+  <div>
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-400">{{ t('account') }}</div>
+    <h2 class="mt-1 text-2xl font-semibold">{{ t('account_title') }}</h2>
+    <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-300">{{ t('account_intro') }}</p>
+  </div>
+  {% include "_member_photo.html" %}
+</section>
+
+{% include "_account_sections.html" %}
+{% endblock %}

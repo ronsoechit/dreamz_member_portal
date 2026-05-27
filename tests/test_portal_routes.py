@@ -252,12 +252,12 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("We could not verify this login. Please contact Dreamz Fitness.", body)
         self.assertIn("text-red-200", body)
 
-    def test_member_dashboard_shows_logout_link(self):
+    def test_member_account_shows_logout_link(self):
         self.add_member(member_id="13659", name="Ron Soechit")
         self.client.get("/language?lang=pap&next=/login")
         self.login_as("13659")
 
-        response = self.client.get("/dashboard?id=13659")
+        response = self.client.get("/account")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
@@ -300,7 +300,7 @@ class PortalRouteTests(unittest.TestCase):
 
         body = response.get_data(as_text=True)
         self.assertIn("Continue your Dreamz training", body)
-        self.assertIn("View My Coach", body)
+        self.assertIn("Start next workout", body)
         self.assertNotIn("Set your goals, training rhythm", body)
 
     def test_coach_page_requires_member_login(self):
@@ -880,7 +880,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login", response.headers["Location"])
 
-    def test_dashboard_shows_available_document_view_links(self):
+    def test_account_shows_available_document_view_links(self):
         self.add_member(
             member_id="1206",
             form_path="forms/1206_signup_form.pdf",
@@ -889,7 +889,7 @@ class PortalRouteTests(unittest.TestCase):
         )
         self.login_as("1206")
 
-        response = self.client.get("/dashboard?id=1206")
+        response = self.client.get("/account")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
@@ -917,14 +917,14 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Contract", body)
         self.assertIn("/documents/contract/file#toolbar=0", body)
         self.assertIn("/documents/contract/file?download=1", body)
-        self.assertIn("/dashboard?id=1206", body)
+        self.assertIn("/account", body)
 
-    def test_dashboard_shows_member_document_records(self):
+    def test_account_shows_member_document_records(self):
         self.add_member(member_id="1206")
         document = self.add_document(member_id="1206")
         self.login_as("1206")
 
-        response = self.client.get("/dashboard?id=1206")
+        response = self.client.get("/account")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
@@ -933,7 +933,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn(f"/documents/item/{document.id}", body)
         self.assertNotIn('target="_blank"', body)
 
-    def test_dashboard_groups_repeated_document_types(self):
+    def test_account_groups_repeated_document_types(self):
         self.add_member(member_id="80")
         first = self.add_document(
             member_id="80",
@@ -957,7 +957,7 @@ class PortalRouteTests(unittest.TestCase):
         )
         self.login_as("80")
 
-        response = self.client.get("/dashboard?id=80")
+        response = self.client.get("/account")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
@@ -1196,7 +1196,7 @@ class PortalRouteTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/dashboard?id=1206", response.headers["Location"])
+        self.assertIn("/account", response.headers["Location"])
         send_mail.assert_called_once()
         request_record = CancellationRequest.query.filter_by(member_id="1206").one()
         self.assertEqual(request_record.status, "accepted")
@@ -1251,7 +1251,7 @@ class PortalRouteTests(unittest.TestCase):
         send_mail.assert_not_called()
         self.assertEqual(CancellationRequest.query.filter_by(member_id="1206").count(), 0)
 
-    def test_dashboard_shows_pending_cancellation_after_submission(self):
+    def test_account_shows_pending_cancellation_after_submission(self):
         today = date.today()
         member = self.add_member(
             member_id="1206",
@@ -1273,7 +1273,7 @@ class PortalRouteTests(unittest.TestCase):
         db.session.commit()
         self.login_as("1206")
 
-        response = self.client.get("/dashboard?id=1206")
+        response = self.client.get("/account")
 
         body = response.get_data(as_text=True)
         self.assertIn("Cancellation request received", body)
@@ -1384,7 +1384,7 @@ class PortalRouteTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/dashboard?id=1206", response.headers["Location"])
+        self.assertIn("/account", response.headers["Location"])
         send_mail.assert_called_once()
         request_record = CancellationRequest.query.filter_by(member_id="1206").one()
         self.assertEqual(request_record.status, "blocked")
@@ -1410,7 +1410,7 @@ class PortalRouteTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/dashboard?id=1206", response.headers["Location"])
+        self.assertIn("/account", response.headers["Location"])
         send_mail.assert_called_once()
         request_record = CancellationRequest.query.filter_by(member_id="1206").one()
         self.assertEqual(request_record.status, "blocked")

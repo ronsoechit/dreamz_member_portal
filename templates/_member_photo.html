@@ -1,0 +1,21 @@
+<div class="member-photo-frame h-28 w-28 shrink-0 overflow-hidden rounded-md border border-gray-600 bg-gray-900 sm:h-32 sm:w-32">
+  {% if member_photo_available %}
+    <img
+      src="{{ url_for('member_photo', member_id=member.member_id) }}"
+      alt=""
+      class="h-full w-full object-cover"
+      onerror="this.classList.add('hidden'); this.nextElementSibling.classList.remove('hidden');"
+    >
+    <div class="hidden flex h-full w-full items-center justify-center bg-gray-900">
+      <div class="flex h-24 w-24 items-center justify-center rounded-full border border-gray-600 bg-gray-800">
+        <div class="h-12 w-12 rounded-full bg-gray-700"></div>
+      </div>
+    </div>
+  {% else %}
+    <div class="flex h-full w-full items-center justify-center bg-gray-900">
+      <div class="flex h-24 w-24 items-center justify-center rounded-full border border-gray-600 bg-gray-800">
+        <div class="h-12 w-12 rounded-full bg-gray-700"></div>
+      </div>
+    </div>
+  {% endif %}
+</div>

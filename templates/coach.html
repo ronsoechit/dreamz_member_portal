@@ -34,27 +34,18 @@
     </div>
   </div>
   {% if coach_complete %}
-    <div class="flex flex-wrap gap-2">
+    <div class="flex flex-wrap items-center gap-2">
+      <span class="rounded-full border border-green-500/30 bg-green-500/10 px-3 py-2 text-sm font-semibold text-green-100">
+        {{ t('coach_profile_status') }} · {{ completion }}% {{ t('coach_profile_complete') }}
+      </span>
       <button type="button" class="rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400" data-edit-coach>
         {{ t('coach_profile_edit') }}
       </button>
-      <a class="rounded border border-gray-700 bg-gray-800 px-4 py-3 text-sm font-semibold text-yellow-300 transition hover:border-yellow-400 hover:bg-gray-800" href="{{ url_for('dashboard', id=member.member_id) }}">
-        {{ t('back_to_dashboard') }}
-      </a>
     </div>
   {% endif %}
 </div>
 
 {% if coach_complete %}
-  <div class="coach-profile-strip coach-profile-compact mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-green-500/20 bg-green-500/5 px-4 py-3">
-    <div class="text-sm text-green-50/90">
-      <span class="font-semibold uppercase tracking-wide text-green-200">{{ t('coach_profile_status') }}</span>
-      <span class="ml-2">{{ t('coach_profile_status_ready_intro') }}</span>
-    </div>
-    <div class="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-1 text-sm font-semibold text-yellow-200">
-      {{ completion }}% {{ t('coach_profile_complete') }}
-    </div>
-  </div>
   <section class="coach-quick-actions mb-4 grid gap-3 lg:grid-cols-[1.2fr_1fr_1fr]">
     <a href="#coach-plan" data-open-coach-view="training" class="coach-action-card rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4 transition hover:border-yellow-300 hover:bg-yellow-500/15">
       <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('coach_next_session_title') }}</div>
