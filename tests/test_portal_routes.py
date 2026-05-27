@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import importlib.util
 import json
 import os
@@ -602,6 +602,51 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(body["status"], "success")
         self.assertIn("reply", body)
         self.assertEqual(CoachInteraction.query.filter_by(member_id="13659").count(), 2)
+
+    def test_coach_conversation_is_newest_first_and_collapsed(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        db.session.add(
+            CoachProfile(
+                member_id="13659",
+                primary_goal="build_muscle",
+                experience_level="intermediate",
+                training_days=2,
+                session_minutes=45,
+                training_place="dreamz_gym",
+                height_cm=165,
+                weight_kg=68,
+                injuries="none",
+                nutrition_goal="muscle_gain",
+                dietary_preferences="none",
+                allergies="none",
+            )
+        )
+        db.session.add(
+            CoachInteraction(
+                member_id="13659",
+                actor="member",
+                message="Older question about training.",
+                created_at=datetime(2026, 5, 26, 17, 0),
+            )
+        )
+        db.session.add(
+            CoachInteraction(
+                member_id="13659",
+                actor="coach",
+                message="Newest answer about training.",
+                created_at=datetime(2026, 5, 26, 21, 0),
+            )
+        )
+        db.session.commit()
+        self.login_as("13659")
+
+        response = self.client.get("/coach")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertLess(body.index("Newest answer about training."), body.index("Older question about training."))
+        self.assertIn("data-coach-message-card", body)
+        self.assertIn("<details", body)
 
     def test_coach_profile_requires_all_fields(self):
         self.add_member(member_id="13659", name="Ron Soechit")

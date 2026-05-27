@@ -530,14 +530,20 @@
       <h4 class="text-lg font-semibold text-green-200">{{ t('coach_chat_title') }}</h4>
       <p class="mt-1 text-sm leading-6 text-gray-300">{{ t('coach_chat_intro') }}</p>
       <div class="mt-4 max-h-[26rem] space-y-3 overflow-y-auto rounded border border-gray-700 bg-gray-900/60 p-3" data-coach-chat-thread>
-        {% for item in coach_interactions|reverse %}
-          <article class="max-w-[92%] rounded-lg border p-3 text-sm leading-6 {% if item.actor == 'member' %}ml-auto border-yellow-500/30 bg-yellow-500/10 text-yellow-50{% else %}border-green-500/30 bg-green-500/10 text-green-50{% endif %}">
-            <div class="mb-1 flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-wide {% if item.actor == 'member' %}text-yellow-200{% else %}text-green-200{% endif %}">
-              <span>{{ t('coach_member_label') if item.actor == 'member' else t('coach_reply_label') }}</span>
-              <span>{{ item.created_at|format_date('%d/%m/%Y %H:%M') }}</span>
-            </div>
-            <div class="whitespace-pre-wrap" data-format-coach-message>{{ item.message }}</div>
-          </article>
+        {% for item in coach_interactions %}
+          <details class="rounded-lg border text-sm leading-6 {% if item.actor == 'member' %}border-yellow-500/30 bg-yellow-500/10 text-yellow-50{% else %}border-green-500/30 bg-green-500/10 text-green-50{% endif %}" data-coach-message-card>
+            <summary class="cursor-pointer list-none p-3">
+              <div class="flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-wide {% if item.actor == 'member' %}text-yellow-200{% else %}text-green-200{% endif %}">
+                <span>{{ t('coach_member_label') if item.actor == 'member' else t('coach_reply_label') }}</span>
+                <span>{{ item.created_at|format_date('%d/%m/%Y %H:%M') }}</span>
+              </div>
+              <div class="mt-2 flex items-start justify-between gap-3">
+                <p class="line-clamp-2 text-sm leading-6 text-white/90">{{ item.message|replace('\n', ' ')|truncate(150, True) }}</p>
+                <span class="shrink-0 rounded-full border border-white/20 px-2 py-0.5 text-xs text-white/70">+</span>
+              </div>
+            </summary>
+            <div class="border-t border-white/10 p-3 pt-3" data-format-coach-message>{{ item.message }}</div>
+          </details>
         {% else %}
           <div class="rounded border border-gray-700 bg-gray-950/50 p-3 text-sm text-gray-300" data-empty-chat>{{ t('coach_chat_empty') }}</div>
         {% endfor %}
@@ -721,22 +727,37 @@
       const thread = document.querySelector("[data-coach-chat-thread]");
       if (!thread || !message) return;
       thread.querySelector("[data-empty-chat]")?.remove();
-      const card = document.createElement("article");
       const isMember = actor === "member";
-      card.className = `max-w-[92%] rounded-lg border p-3 text-sm leading-6 ${isMember ? "ml-auto border-yellow-500/30 bg-yellow-500/10 text-yellow-50" : "border-green-500/30 bg-green-500/10 text-green-50"}`;
+      const card = document.createElement("details");
+      card.open = true;
+      card.dataset.coachMessageCard = "";
+      card.className = `rounded-lg border text-sm leading-6 ${isMember ? "border-yellow-500/30 bg-yellow-500/10 text-yellow-50" : "border-green-500/30 bg-green-500/10 text-green-50"}`;
+      const summary = document.createElement("summary");
+      summary.className = "cursor-pointer list-none p-3";
       const header = document.createElement("div");
-      header.className = `mb-1 flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-wide ${isMember ? "text-yellow-200" : "text-green-200"}`;
+      header.className = `flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-wide ${isMember ? "text-yellow-200" : "text-green-200"}`;
       const label = document.createElement("span");
       label.textContent = isMember ? "{{ t('coach_member_label') }}" : "{{ t('coach_reply_label') }}";
       const time = document.createElement("span");
       time.textContent = new Date().toLocaleString();
+      const previewRow = document.createElement("div");
+      previewRow.className = "mt-2 flex items-start justify-between gap-3";
+      const preview = document.createElement("p");
+      preview.className = "line-clamp-2 text-sm leading-6 text-white/90";
+      preview.textContent = message.replace(/\s+/g, " ").slice(0, 150);
+      const plus = document.createElement("span");
+      plus.className = "shrink-0 rounded-full border border-white/20 px-2 py-0.5 text-xs text-white/70";
+      plus.textContent = "+";
       const body = document.createElement("div");
+      body.className = "border-t border-white/10 p-3 pt-3";
       body.innerHTML = renderCoachText(message);
       header.append(label, time);
-      card.append(header, body);
-      thread.append(card);
+      previewRow.append(preview, plus);
+      summary.append(header, previewRow);
+      card.append(summary, body);
+      thread.prepend(card);
       setCoachView("chat", { scroll: false });
-      card.scrollIntoView({ behavior: "smooth", block: "center" });
+      card.scrollIntoView({ behavior: "smooth", block: "nearest" });
     };
 
     document.querySelectorAll("[data-coach-plan]").forEach((plan) => {
