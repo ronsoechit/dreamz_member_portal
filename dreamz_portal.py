@@ -1841,9 +1841,20 @@ def coach_data_counts(member_id):
     return counts
 
 
-def delete_local_coach_progress_photo(photo_path):
-    if not photo_path or is_s3_uri(photo_path):
+def delete_coach_progress_photo(photo_path):
+    if not photo_path:
         return
+    if is_s3_uri(photo_path):
+        parsed = parse_s3_uri(photo_path)
+        if not parsed:
+            return
+        bucket, key = parsed
+        try:
+            s3_client().delete_object(Bucket=bucket, Key=key)
+        except Exception:
+            app.logger.exception("Could not delete coach progress photo %s", photo_path)
+        return
+
     root = Path(app.config["COACH_UPLOAD_ROOT"]).resolve()
     path = Path(photo_path).resolve()
     if path.exists() and path.is_file() and is_path_under_root(path, root):
@@ -1854,7 +1865,7 @@ def reset_member_coach_data(member_id):
     counts = coach_data_counts(member_id)
     progress_entries = CoachProgressEntry.query.filter_by(member_id=member_id).all()
     for entry in progress_entries:
-        delete_local_coach_progress_photo(entry.photo_path)
+        delete_coach_progress_photo(entry.photo_path)
 
     session_ids = [
         row[0]
