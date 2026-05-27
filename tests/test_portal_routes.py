@@ -1590,6 +1590,21 @@ class PortalRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
 
+    def test_dashboard_optional_sections_fail_closed_on_database_errors(self):
+        self.add_member(member_id="13659", name="Ron Soechit", balance=67.50)
+        self.login_as("13659")
+
+        with patch("dreamz_portal.member_today_group_class_sections", side_effect=SQLAlchemyError("missing group class table")), \
+                patch("dreamz_portal.coach_profile_for_member", side_effect=SQLAlchemyError("missing coach profile column")), \
+                patch("dreamz_portal.active_cancellation_request_for_member", side_effect=SQLAlchemyError("missing cancellation column")):
+            response = self.client.get("/dashboard?id=13659")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Welcome", body)
+        self.assertIn("home-primary-card", body)
+        self.assertIn("Open My Coach", body)
+
     def test_view_balance_opens_account_balance_section(self):
         self.add_member(
             member_id="13659",

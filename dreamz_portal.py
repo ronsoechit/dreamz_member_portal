@@ -6461,6 +6461,15 @@ def set_language():
     return redirect(next_url)
 
 
+def optional_dashboard_value(label, fallback, factory):
+    try:
+        return factory()
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Dashboard optional section failed: %s", label)
+        return fallback
+
+
 def member_dashboard_context(member, staff_admin_view=False):
     policy = cancellation_policy_for_member(member)
     language = current_language()
@@ -6471,7 +6480,11 @@ def member_dashboard_context(member, staff_admin_view=False):
     account_section = request.args.get("section", "").strip()
     if account_section == "balance":
         account_section = "gym-balance"
-    cancellation_request = active_cancellation_request_for_member(member)
+    cancellation_request = optional_dashboard_value(
+        "cancellation_request",
+        None,
+        lambda: active_cancellation_request_for_member(member),
+    )
     cancellation_request_message = cancellation_request_member_message(cancellation_request, language=language)
     show_cancellation_section = (
         cancellation_portal_available_for_member(member)
@@ -6513,21 +6526,48 @@ def member_dashboard_context(member, staff_admin_view=False):
     member.balance = member.balance or 0.0
     member.billing_amount = member.billing_amount or 0.0
     member_photo_available = bool(is_s3_uri(member.photo_path) or resolved_photo_path(member.photo_path))
-    coach_profile = coach_profile_for_member(member)
+    coach_profile = optional_dashboard_value(
+        "coach_profile",
+        None,
+        lambda: coach_profile_for_member(member),
+    )
     coach_completion = coach_profile_completion(coach_profile)
-    coach_next_session = coach_next_session_context(coach_profile, member.member_id, language=language)
-    coach_latest = coach_latest_workout(member.member_id)
-    coach_counts = coach_data_counts(member.member_id) if staff_admin_view else {"total": 0}
-    today_group_class_sections = (
-        member_today_group_class_sections(member.member_id) if not staff_admin_view else {"current": [], "earlier": []}
+    coach_next_session = optional_dashboard_value(
+        "coach_next_session",
+        None,
+        lambda: coach_next_session_context(coach_profile, member.member_id, language=language),
+    )
+    coach_latest = optional_dashboard_value(
+        "coach_latest_workout",
+        None,
+        lambda: coach_latest_workout(member.member_id),
+    )
+    coach_counts = (
+        optional_dashboard_value("coach_data_counts", {"total": 0}, lambda: coach_data_counts(member.member_id))
+        if staff_admin_view else {"total": 0}
+    )
+    today_group_class_sections = optional_dashboard_value(
+        "today_group_classes",
+        {"current": [], "earlier": []},
+        lambda: member_today_group_class_sections(member.member_id),
+    ) if not staff_admin_view else {"current": [], "earlier": []}
+    documents = optional_dashboard_value(
+        "member_documents",
+        [],
+        lambda: member_documents(member),
+    )
+    document_groups = optional_dashboard_value(
+        "member_document_groups",
+        [],
+        lambda: member_document_groups(member),
     )
 
     return {
         "member": member,
         "display_name": display_member_name(member.name),
         "member_photo_available": member_photo_available,
-        "documents": member_documents(member),
-        "document_groups": member_document_groups(member),
+        "documents": documents,
+        "document_groups": document_groups,
         "payment_status": payment_status,
         "gym_balance": gym_balance,
         "account_section": account_section,
