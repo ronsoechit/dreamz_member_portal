@@ -1913,6 +1913,46 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("member", pricing_item_access_tags(contract))
         self.assertIn("contract_member", pricing_item_access_tags(contract))
 
+    def test_pricing_catalog_final_qa_visibility_and_frontdesk_copy(self):
+        self.add_member(member_id="13659", plan_type="no contract 1 month", contract_type="No-Contract")
+        seed_pricing_catalog()
+        db.session.add(PricingItem(
+            name="Staff-only premium experiment",
+            category_key="fees_other",
+            price_amount=123,
+            currency="USD",
+            billing_interval="one_time",
+            visibility="staff_only",
+            is_active=True,
+            member_eligible=False,
+            sort_order=1000,
+            terms=json.dumps(["Internal test only"]),
+        ))
+        db.session.commit()
+
+        public_response = self.client.get("/pricing")
+        self.login_as("13659")
+        member_response = self.client.get("/membership-options")
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+        admin_response = self.client.get("/staff/pricing-products")
+
+        self.assertEqual(public_response.status_code, 200)
+        self.assertEqual(member_response.status_code, 200)
+        self.assertEqual(admin_response.status_code, 200)
+        public_body = public_response.get_data(as_text=True)
+        member_body = member_response.get_data(as_text=True)
+        admin_body = admin_response.get_data(as_text=True)
+        self.assertIn("External Personal Trainer Package", public_body)
+        self.assertNotIn("External Personal Trainer Package", member_body)
+        self.assertNotIn("Staff-only premium experiment", public_body)
+        self.assertNotIn("Staff-only premium experiment", member_body)
+        self.assertIn("Staff-only premium experiment", admin_body)
+        self.assertIn("Contact front desk", public_body)
+        self.assertIn("Membership changes and payments are currently handled", member_body)
+        self.assertNotIn("Pay now", public_body + member_body + admin_body)
+
     def test_group_class_member_plan_attendance_and_notifications_models(self):
         self.add_member(member_id="13659", name="Ron Soechit")
         seed_group_class_schedule()
