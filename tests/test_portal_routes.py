@@ -156,6 +156,22 @@ class PortalRouteTests(unittest.TestCase):
             self.assertIn(TRANSLATIONS[language]["group_classes_title"], body)
             self.assertIn(TRANSLATIONS[language]["group_class_preferences"], body)
 
+    def test_group_class_member_page_fails_closed_when_schedule_unavailable(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+        original_testing = app.config["TESTING"]
+        app.config["TESTING"] = False
+        try:
+            with patch("dreamz_portal.ensure_runtime_schema", side_effect=RuntimeError("schema unavailable")):
+                response = self.client.get("/group-classes")
+        finally:
+            app.config["TESTING"] = original_testing
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Group Classes", body)
+        self.assertIn("No classes match this filter.", body)
+
     def test_login_page_shows_language_choices(self):
         response = self.client.get("/login")
 

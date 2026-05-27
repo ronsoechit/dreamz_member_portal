@@ -16,10 +16,25 @@
 <body class="app-body bg-gray-900 text-white min-h-screen flex flex-col">
 
   <header class="app-header bg-gray-800 shadow-md">
-    <div class="container mx-auto flex flex-col gap-4 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
-      <a href="/" class="brand-mark shrink-0">
-        <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Logo" class="h-10">
-      </a>
+    <div class="container mx-auto flex flex-col gap-4 px-5 py-4">
+      <div class="header-top-row flex items-center justify-between gap-3">
+        <a href="/" class="brand-mark shrink-0">
+          <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Logo" class="h-10">
+        </a>
+        <div class="language-switcher flex items-center justify-end gap-1 text-xs">
+          {% for code, label in available_languages.items() %}
+            <a
+              href="{{ url_for('set_language', lang=code, next=request.full_path if request.query_string else request.path) }}"
+              class="language-pill inline-flex items-center justify-center gap-1 rounded leading-tight {% if current_language == code %}bg-yellow-500/10 text-yellow-400 font-semibold{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}"
+              title="{{ label }}"
+              aria-label="{{ label }}"
+            >
+              <span class="language-flag">{{ language_flags[code] }}</span>
+              <span class="language-code">{{ code|upper }}</span>
+            </a>
+          {% endfor %}
+        </div>
+      </div>
       <div class="app-header-actions flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-end">
         {% if current_staff_role and request.endpoint != 'staff_home' %}
           <nav class="app-nav staff-nav flex flex-wrap items-center gap-1 rounded border border-gray-700 bg-gray-900/40 p-1 text-sm">
@@ -75,18 +90,6 @@
             </a>
           </nav>
         {% endif %}
-        <div class="language-switcher flex flex-wrap items-center gap-2 border-gray-700 text-xs lg:border-l lg:pl-4">
-          {% for code, label in available_languages.items() %}
-            <a
-              href="{{ url_for('set_language', lang=code, next=request.full_path if request.query_string else request.path) }}"
-              class="flex min-w-[3.25rem] flex-col items-center rounded px-2 py-1 leading-tight {% if current_language == code %}bg-yellow-500/10 text-yellow-400 font-semibold{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}"
-              title="{{ label }}"
-            >
-              <span class="text-base">{{ language_flags[code] }}</span>
-              <span>{{ label }}</span>
-            </a>
-          {% endfor %}
-        </div>
       </div>
     </div>
   </header>

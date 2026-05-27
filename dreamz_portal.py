@@ -38,6 +38,7 @@ from storage_backend import is_s3_uri, open_s3_object, parse_s3_uri, s3_bucket_n
 
 import csv
 import secrets
+from types import SimpleNamespace
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from io import StringIO
@@ -1832,6 +1833,21 @@ def seed_default_staff_users():
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
+
+
+def configured_staff_user_fallbacks():
+    return {
+        app.config["STAFF_ADMIN_USERNAME"].strip().lower(): SimpleNamespace(
+            username=app.config["STAFF_ADMIN_USERNAME"].strip().lower(),
+            password_hash=generate_password_hash(app.config["STAFF_ADMIN_PASSWORD"]),
+            role="admin",
+        ),
+        app.config["STAFF_MANAGER_USERNAME"].strip().lower(): SimpleNamespace(
+            username=app.config["STAFF_MANAGER_USERNAME"].strip().lower(),
+            password_hash=generate_password_hash(app.config["STAFF_MANAGER_PASSWORD"]),
+            role="manager",
+        ),
+    }
 
 
 def parse_group_class_seed_time(value):
@@ -3795,16 +3811,18 @@ def open_cancellation_count():
             CancellationRequest.status == "accepted",
             CancellationRequest.admin_status.in_(["new", "reviewed"]),
         ).count()
-    except SQLAlchemyError:
+    except Exception:
         db.session.rollback()
+        app.logger.exception("Open cancellation count unavailable; hiding staff badge.")
         return 0
 
 
 def open_email_log_count():
     try:
         return EmailLog.query.filter(email_log_review_required_filter()).count()
-    except SQLAlchemyError:
+    except Exception:
         db.session.rollback()
+        app.logger.exception("Open email log count unavailable; hiding staff badge.")
         return 0
 
 
@@ -5427,12 +5445,23 @@ def resolved_photo_path(photo_path):
     return None
 
 def configured_staff_users():
-    ensure_runtime_schema()
-    return {
-        user.username.strip().lower(): user
-        for user in StaffUser.query.filter_by(is_active=True).all()
-        if user.username
-    }
+    try:
+        ensure_runtime_schema()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Runtime schema unavailable while loading staff users; using configured staff fallback.")
+        return configured_staff_user_fallbacks()
+    try:
+        users = {
+            user.username.strip().lower(): user
+            for user in StaffUser.query.filter_by(is_active=True).all()
+            if user.username
+        }
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Staff user table unavailable; using configured staff fallback.")
+        return configured_staff_user_fallbacks()
+    return users or configured_staff_user_fallbacks()
 
 
 def current_staff_role():
@@ -8093,30 +8122,52 @@ def member_group_classes():
     member, redirect_response = current_member_or_redirect()
     if redirect_response:
         return redirect_response
-    ensure_runtime_schema()
+    try:
+        ensure_runtime_schema()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Runtime schema unavailable while rendering member group classes.")
     selected_day = request.args.get("day", "").strip()
     selected_type = request.args.get("class_type", "").strip()
-    class_types = (
-        GroupClassType.query
-        .join(GroupClassOccurrence)
-        .filter(GroupClassOccurrence.status == "scheduled")
-        .filter(GroupClassOccurrence.is_published.is_(True))
-        .filter(GroupClassOccurrence.is_bookable.is_(True))
-        .distinct()
-        .order_by(GroupClassType.name.asc())
-        .all()
+    class_types = optional_dashboard_value(
+        "member_group_class_types",
+        [],
+        lambda: (
+            GroupClassType.query
+            .join(GroupClassOccurrence)
+            .filter(GroupClassOccurrence.status == "scheduled")
+            .filter(GroupClassOccurrence.is_published.is_(True))
+            .filter(GroupClassOccurrence.is_bookable.is_(True))
+            .distinct()
+            .order_by(GroupClassType.name.asc())
+            .all()
+        ),
     )
-    preference = member_group_class_preference(member.member_id)
+    preference = optional_dashboard_value(
+        "member_group_class_preference",
+        None,
+        lambda: member_group_class_preference(member.member_id),
+    )
+    rows = optional_dashboard_value(
+        "member_group_class_rows",
+        [],
+        lambda: member_group_class_schedule_rows(member.member_id, selected_day=selected_day, selected_type=selected_type),
+    )
+    favorite_ids = optional_dashboard_value(
+        "member_group_class_favorites",
+        set(),
+        lambda: member_favorite_class_type_ids(member.member_id),
+    )
     return render_template(
         "group_classes.html",
         member=member,
-        rows=member_group_class_schedule_rows(member.member_id, selected_day=selected_day, selected_type=selected_type),
+        rows=rows,
         class_types=class_types,
         selected_day=selected_day,
         selected_type=selected_type,
         day_options=[(day, group_class_day_label(day)) for day in range(7)],
         preference=preference,
-        favorite_ids=member_favorite_class_type_ids(member.member_id),
+        favorite_ids=favorite_ids,
         time_label=group_class_time_label,
         day_label=group_class_day_label,
     )

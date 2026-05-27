@@ -750,6 +750,29 @@ class StaffRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Dreamz Fitness Staff", response.get_data(as_text=True))
 
+    def test_staff_login_uses_configured_fallback_when_schema_unavailable(self):
+        app.config["STAFF_MANAGER_USERNAME"] = "manager"
+        app.config["STAFF_MANAGER_PASSWORD"] = "manager-pass"
+        original_testing = app.config["TESTING"]
+        app.config["TESTING"] = False
+        with self.client.session_transaction() as sess:
+            sess["_csrf_token"] = "token"
+        try:
+            with patch("dreamz_portal.ensure_runtime_schema", side_effect=RuntimeError("schema unavailable")):
+                response = self.client.post(
+                    "/staff/login",
+                    data={"username": "Manager", "password": "manager-pass", "csrf_token": "token"},
+                    follow_redirects=True,
+                )
+        finally:
+            app.config["TESTING"] = original_testing
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Dreamz Fitness Staff", body)
+        with self.client.session_transaction() as sess:
+            self.assertEqual(sess["staff_role"], "manager")
+
     def test_staff_login_shows_loading_state_script(self):
         response = self.client.get("/staff/login")
 
@@ -758,6 +781,7 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("data-loading-form", body)
         self.assertIn("Logging in...", body)
         self.assertIn("button.disabled = true", body)
+        self.assertIn("language-switcher", body)
 
     def test_staff_data_audit_lists_member_issues(self):
         self.add_member(email="", mobile="", photo_path=None)
