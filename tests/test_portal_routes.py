@@ -19,7 +19,7 @@ os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
 from translations import LANGUAGES, TRANSLATIONS  # noqa: E402
-from dreamz_portal import AppSetting, CancellationRequest, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, EmailLog, FeatureAccessRule, GroupClassOccurrence, GroupClassSchedule, GroupClassType, Member, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, PricingCategory, PricingItem, ScheduleChangeNotification, app, cancellation_message, coach_context_summary, coach_plan_for_member, coach_profile_completion, db, member_access_profile, next_date_for_group_class, pricing_item_access_tags, pricing_visibility_list, seed_feature_access_rules, seed_group_class_schedule, seed_pricing_catalog  # noqa: E402
+from dreamz_portal import AppSetting, AgreementCategory, CancellationConfirmation, CancellationRequest, CancellationWindow, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, DigitalSignatureAuditTrail, DigitalSignatureRecord, EmailLog, FeatureAccessRule, GroupClassOccurrence, GroupClassSchedule, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, Member, MemberAgreementAcceptance, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, MemberSignedDocument, MembershipApplication, MembershipApplicationAuditEvent, MembershipApplicationDocument, MembershipApplicationStatus, MembershipApplicationStep, PricingCategory, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, SignedPdfRecord, app, cancellation_message, coach_context_summary, coach_plan_for_member, coach_profile_completion, db, member_access_profile, next_date_for_group_class, pricing_item_access_tags, pricing_visibility_list, seed_feature_access_rules, seed_group_class_schedule, seed_pricing_catalog  # noqa: E402
 
 
 class FakeS3Body:
@@ -1781,6 +1781,175 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Current MCB Bank Bonaire accounts only", mcb_terms)
         self.assertIn("Direct Debit only", mcb_terms)
         self.assertIn("No exceptions", mcb_terms)
+
+    def test_agreements_applications_and_signing_models_persist_core_records(self):
+        category = AgreementCategory(
+            key="contract_renewal_rules",
+            name="Contract & Renewal Rules",
+            description="Contract, renewal and cancellation legal content.",
+        )
+        document = LegalDocument(
+            document_type="membership_contract_6_months",
+            title="6-Month Membership Contract",
+            category_key="contract_renewal_rules",
+            required_for=json.dumps({"contract_term": "6_months"}),
+            legal_review_needed=True,
+        )
+        db.session.add_all([category, document])
+        db.session.flush()
+
+        version = LegalDocumentVersion(
+            document_id=document.id,
+            version="2026-05-27-draft",
+            effective_from=date(2026, 5, 27),
+            source_language="en",
+            full_legal_text="Six month contract terms.",
+            short_summary="Six month contract.",
+            plain_language_summary="You commit to six months.",
+            pdf_template_key="membership_contract_6_months",
+            legal_review_status="draft",
+        )
+        db.session.add(version)
+        db.session.flush()
+        db.session.add_all([
+            LegalTranslation(
+                version_id=version.id,
+                language=language,
+                title=f"Contract {language}",
+                short_summary="Draft summary",
+                plain_language_summary="Draft plain language summary",
+                full_legal_text="Draft legal translation.",
+                translation_status="draft",
+            )
+            for language in LANGUAGES
+        ])
+
+        application = MembershipApplication(
+            applicant_first_name="Ron",
+            applicant_last_name="Soechit",
+            date_of_birth=date(1990, 1, 1),
+            email="ron@example.com",
+            phone="+5997000000",
+            emergency_contact_first_name="Emergency",
+            emergency_contact_last_name="Contact",
+            emergency_contact_relationship="Family",
+            emergency_contact_phone="+5997000001",
+            selected_membership_type="6 months contract",
+            selected_contract_term="6_months",
+            selected_payment_method="mcb_direct_debit_monthly",
+            mcb_account_holder_name="Ron Soechit",
+            mcb_account_number="123456789",
+            mcb_account_type="current",
+            direct_debit_confirmed_current_account=True,
+            status="submitted",
+            language="en",
+            submitted_at=datetime(2026, 5, 27, 10, 0),
+        )
+        db.session.add(application)
+        db.session.flush()
+
+        signature = DigitalSignatureRecord(
+            application_id=application.id,
+            full_legal_name="Ron Soechit",
+            email="ron@example.com",
+            phone="+5997000000",
+            date_of_birth=date(1990, 1, 1),
+            signature_text_name="Ron Soechit",
+            verification_method="email_link",
+            verification_reference="email-token",
+            audit_reference_number="DS-20260527-0001",
+        )
+        db.session.add(signature)
+        db.session.flush()
+
+        db.session.add_all([
+            RequiredAgreementRule(
+                applies_to_contract_term="6_months",
+                applies_to_payment_method="mcb_direct_debit_monthly",
+                required_legal_document_types=json.dumps(["membership_contract_6_months", "direct_debit_mandate"]),
+            ),
+            MembershipApplicationStep(application_id=application.id, step_key="required_agreements", status="completed"),
+            MembershipApplicationDocument(
+                application_id=application.id,
+                legal_document_version_id=version.id,
+                document_type="membership_contract_6_months",
+                status="signed",
+                language="en",
+            ),
+            MembershipApplicationStatus(application_id=application.id, status="submitted", note="Application submitted."),
+            MembershipApplicationAuditEvent(application_id=application.id, event_type="application_submitted", actor_type="applicant"),
+            DigitalSignatureAuditTrail(signature_record_id=signature.id, event_type="signature_created", message="Signed electronically."),
+            MemberAgreementAcceptance(
+                member_id="13659",
+                legal_document_version_id=version.id,
+                language_accepted="en",
+                acceptance_method="digital_signature",
+                application_id=application.id,
+                signature_record_id=signature.id,
+                accepted_text_snapshot="Six month contract terms.",
+                accepted_text_hash="hash-001",
+                pdf_hash="pdf-hash-001",
+            ),
+            MemberSignedDocument(
+                member_id="13659",
+                application_id=application.id,
+                document_type="membership_contract_6_months",
+                file_url="/documents/signed/contract.pdf",
+                pdf_hash="pdf-hash-001",
+                signed_at=datetime(2026, 5, 27, 10, 5),
+                language="en",
+                version=version.version,
+                status="signed",
+            ),
+            SignedPdfRecord(
+                application_id=application.id,
+                member_id="13659",
+                document_type="membership_contract_6_months",
+                legal_document_version_id=version.id,
+                language="en",
+                pdf_url="/documents/signed/contract.pdf",
+                pdf_hash="pdf-hash-001",
+                audit_reference_number="DS-20260527-0001",
+                status="generated",
+            ),
+            CancellationWindow(
+                member_id="13659",
+                current_term_start_date=date(2026, 1, 1),
+                current_term_end_date=date(2026, 7, 1),
+                window_open_date=date(2026, 6, 1),
+                window_close_date=date(2026, 6, 11),
+            ),
+        ])
+        cancellation = CancellationRequest(
+            member_id="13659",
+            contract_id="contract-001",
+            membership_id="membership-001",
+            status="submitted",
+            reason="Moving away",
+            current_term_start=date(2026, 1, 1),
+            current_term_end=date(2026, 7, 1),
+            cancellation_window_open_date=date(2026, 6, 1),
+            cancellation_window_close_date=date(2026, 6, 11),
+            confirmation_number="CAN-20260527-0001",
+            pdf_receipt_url="/documents/cancellations/receipt.pdf",
+        )
+        db.session.add(cancellation)
+        db.session.flush()
+        db.session.add(CancellationConfirmation(
+            cancellation_request_id=cancellation.id,
+            confirmation_number="CAN-20260527-0001",
+            pdf_receipt_url="/documents/cancellations/receipt.pdf",
+            pdf_hash="cancel-pdf-hash",
+            language="en",
+        ))
+        db.session.commit()
+
+        self.assertEqual(LegalTranslation.query.filter_by(version_id=version.id).count(), 4)
+        self.assertEqual(MembershipApplication.query.filter_by(status="submitted").count(), 1)
+        self.assertEqual(MemberAgreementAcceptance.query.filter_by(member_id="13659").count(), 1)
+        self.assertEqual(MemberSignedDocument.query.filter_by(status="signed").count(), 1)
+        self.assertEqual(SignedPdfRecord.query.filter_by(audit_reference_number="DS-20260527-0001").count(), 1)
+        self.assertEqual(CancellationConfirmation.query.filter_by(confirmation_number="CAN-20260527-0001").count(), 1)
 
     def test_public_pricing_page_shows_public_catalog_without_staff_only_items(self):
         seed_pricing_catalog()

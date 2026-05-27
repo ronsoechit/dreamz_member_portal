@@ -200,6 +200,8 @@ class MemberDocument(db.Model):
 class CancellationRequest(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     member_id = db.Column(db.String, nullable=False, index=True)
+    contract_id = db.Column(db.String, index=True)
+    membership_id = db.Column(db.String, index=True)
     requested_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
     status = db.Column(db.String, nullable=False)
     reason = db.Column(db.Text)
@@ -235,6 +237,304 @@ class CancellationRequest(db.Model):
     confirmation_body = db.Column(db.Text)
     last_paid_date = db.Column(db.Date)
     access_until = db.Column(db.Date)
+    cancellation_window_open_date = db.Column(db.Date)
+    cancellation_window_close_date = db.Column(db.Date)
+    confirmation_number = db.Column(db.String, index=True)
+    pdf_receipt_url = db.Column(db.String)
+    member_confirmation_sent_at = db.Column(db.DateTime)
+    staff_notification_sent_at = db.Column(db.DateTime)
+
+
+class AgreementCategory(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String, unique=True, nullable=False, index=True)
+    name = db.Column(db.String, nullable=False)
+    description = db.Column(db.Text)
+    sort_order = db.Column(db.Integer, default=0, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+
+class LegalDocument(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    document_type = db.Column(db.String, unique=True, nullable=False, index=True)
+    title = db.Column(db.String, nullable=False)
+    category_key = db.Column(db.String, db.ForeignKey("agreement_category.key"), index=True)
+    active = db.Column(db.Boolean, default=True, nullable=False, index=True)
+    required_for = db.Column(db.Text)
+    sort_order = db.Column(db.Integer, default=0, nullable=False)
+    internal_notes = db.Column(db.Text)
+    legal_review_needed = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    category = db.relationship("AgreementCategory", primaryjoin="LegalDocument.category_key == AgreementCategory.key")
+
+
+class LegalDocumentVersion(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(db.Integer, db.ForeignKey("legal_document.id"), nullable=False, index=True)
+    version = db.Column(db.String, nullable=False, index=True)
+    effective_from = db.Column(db.Date)
+    effective_to = db.Column(db.Date)
+    source_language = db.Column(db.String, default=DEFAULT_LANGUAGE, nullable=False)
+    full_legal_text = db.Column(db.Text, nullable=False)
+    short_summary = db.Column(db.Text)
+    plain_language_summary = db.Column(db.Text)
+    pdf_template_key = db.Column(db.String)
+    is_current = db.Column(db.Boolean, default=True, nullable=False, index=True)
+    legal_review_status = db.Column(db.String, default="draft", nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    document = db.relationship("LegalDocument", backref=db.backref("versions", lazy=True))
+
+
+class LegalTranslation(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    version_id = db.Column(db.Integer, db.ForeignKey("legal_document_version.id"), nullable=False, index=True)
+    language = db.Column(db.String, nullable=False, index=True)
+    title = db.Column(db.String, nullable=False)
+    short_summary = db.Column(db.Text)
+    plain_language_summary = db.Column(db.Text)
+    full_legal_text = db.Column(db.Text, nullable=False)
+    translation_status = db.Column(db.String, default="draft", nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    version = db.relationship("LegalDocumentVersion", backref=db.backref("translations", lazy=True))
+
+
+class RequiredAgreementRule(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    applies_to_membership_type = db.Column(db.String, index=True)
+    applies_to_contract_term = db.Column(db.String, index=True)
+    applies_to_payment_method = db.Column(db.String, index=True)
+    applies_to_add_on = db.Column(db.String, index=True)
+    applies_to_under18 = db.Column(db.Boolean)
+    required_legal_document_types = db.Column(db.Text, nullable=False)
+    active = db.Column(db.Boolean, default=True, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+
+class MembershipApplication(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    applicant_first_name = db.Column(db.String)
+    applicant_last_name = db.Column(db.String)
+    date_of_birth = db.Column(db.Date)
+    place_of_birth = db.Column(db.String)
+    address = db.Column(db.Text)
+    phone = db.Column(db.String)
+    email = db.Column(db.String, index=True)
+    emergency_contact_first_name = db.Column(db.String)
+    emergency_contact_last_name = db.Column(db.String)
+    emergency_contact_relationship = db.Column(db.String)
+    emergency_contact_phone = db.Column(db.String)
+    selected_membership_type = db.Column(db.String, index=True)
+    selected_contract_term = db.Column(db.String, default="none", nullable=False, index=True)
+    selected_add_ons = db.Column(db.Text)
+    selected_payment_method = db.Column(db.String, index=True)
+    mcb_account_holder_name = db.Column(db.String)
+    mcb_account_number = db.Column(db.String)
+    mcb_account_type = db.Column(db.String)
+    direct_debit_confirmed_current_account = db.Column(db.Boolean, default=False, nullable=False)
+    status = db.Column(db.String, default="draft", nullable=False, index=True)
+    language = db.Column(db.String, default=DEFAULT_LANGUAGE, nullable=False)
+    submitted_at = db.Column(db.DateTime)
+    signed_at = db.Column(db.DateTime)
+    activated_at = db.Column(db.DateTime)
+    activated_by_staff_user_id = db.Column(db.Integer, db.ForeignKey("staff_user.id"), index=True)
+    rejection_reason = db.Column(db.Text)
+    internal_notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    activated_by_staff = db.relationship("StaffUser")
+
+
+class MembershipApplicationStep(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    application_id = db.Column(db.Integer, db.ForeignKey("membership_application.id"), nullable=False, index=True)
+    step_key = db.Column(db.String, nullable=False, index=True)
+    status = db.Column(db.String, default="pending", nullable=False, index=True)
+    completed_at = db.Column(db.DateTime)
+    data_snapshot = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    application = db.relationship("MembershipApplication", backref=db.backref("steps", lazy=True))
+
+
+class MembershipApplicationDocument(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    application_id = db.Column(db.Integer, db.ForeignKey("membership_application.id"), nullable=False, index=True)
+    legal_document_version_id = db.Column(db.Integer, db.ForeignKey("legal_document_version.id"), index=True)
+    document_type = db.Column(db.String, nullable=False, index=True)
+    status = db.Column(db.String, default="required", nullable=False, index=True)
+    file_url = db.Column(db.String)
+    pdf_hash = db.Column(db.String)
+    language = db.Column(db.String, default=DEFAULT_LANGUAGE, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    application = db.relationship("MembershipApplication", backref=db.backref("documents", lazy=True))
+    legal_document_version = db.relationship("LegalDocumentVersion")
+
+
+class MembershipApplicationStatus(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    application_id = db.Column(db.Integer, db.ForeignKey("membership_application.id"), nullable=False, index=True)
+    status = db.Column(db.String, nullable=False, index=True)
+    note = db.Column(db.Text)
+    changed_by_staff_user_id = db.Column(db.Integer, db.ForeignKey("staff_user.id"), index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+
+    application = db.relationship("MembershipApplication", backref=db.backref("status_history", lazy=True))
+    changed_by_staff = db.relationship("StaffUser")
+
+
+class MembershipApplicationAuditEvent(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    application_id = db.Column(db.Integer, db.ForeignKey("membership_application.id"), nullable=False, index=True)
+    event_type = db.Column(db.String, nullable=False, index=True)
+    actor_type = db.Column(db.String)
+    actor_id = db.Column(db.String)
+    message = db.Column(db.Text)
+    metadata_json = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+
+    application = db.relationship("MembershipApplication", backref=db.backref("audit_events", lazy=True))
+
+
+class DigitalSignatureRecord(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    application_id = db.Column(db.Integer, db.ForeignKey("membership_application.id"), index=True)
+    member_id = db.Column(db.String, index=True)
+    full_legal_name = db.Column(db.String, nullable=False)
+    email = db.Column(db.String, index=True)
+    phone = db.Column(db.String)
+    date_of_birth = db.Column(db.Date)
+    signature_image_url = db.Column(db.String)
+    signature_vector_data = db.Column(db.Text)
+    signature_text_name = db.Column(db.String)
+    signed_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+    ip_address = db.Column(db.String)
+    user_agent = db.Column(db.Text)
+    verification_method = db.Column(db.String, nullable=False)
+    verification_reference = db.Column(db.String)
+    audit_reference_number = db.Column(db.String, unique=True, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    application = db.relationship("MembershipApplication", backref=db.backref("signature_records", lazy=True))
+
+
+class DigitalSignatureAuditTrail(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    signature_record_id = db.Column(db.Integer, db.ForeignKey("digital_signature_record.id"), nullable=False, index=True)
+    event_type = db.Column(db.String, nullable=False, index=True)
+    message = db.Column(db.Text)
+    ip_address = db.Column(db.String)
+    user_agent = db.Column(db.Text)
+    metadata_json = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+
+    signature_record = db.relationship("DigitalSignatureRecord", backref=db.backref("audit_trail", lazy=True))
+
+
+class MemberAgreementAcceptance(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.String, nullable=False, index=True)
+    legal_document_version_id = db.Column(db.Integer, db.ForeignKey("legal_document_version.id"), nullable=False, index=True)
+    language_accepted = db.Column(db.String, default=DEFAULT_LANGUAGE, nullable=False)
+    accepted_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+    acceptance_method = db.Column(db.String, nullable=False, index=True)
+    ip_address = db.Column(db.String)
+    user_agent = db.Column(db.Text)
+    contract_id = db.Column(db.String, index=True)
+    membership_id = db.Column(db.String, index=True)
+    application_id = db.Column(db.Integer, db.ForeignKey("membership_application.id"), index=True)
+    signature_record_id = db.Column(db.Integer, db.ForeignKey("digital_signature_record.id"), index=True)
+    accepted_text_snapshot = db.Column(db.Text)
+    accepted_text_hash = db.Column(db.String, index=True)
+    pdf_hash = db.Column(db.String)
+    staff_user_id = db.Column(db.Integer, db.ForeignKey("staff_user.id"), index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    legal_document_version = db.relationship("LegalDocumentVersion")
+    application = db.relationship("MembershipApplication")
+    signature_record = db.relationship("DigitalSignatureRecord")
+    staff_user = db.relationship("StaffUser")
+
+
+class MemberSignedDocument(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.String, nullable=False, index=True)
+    application_id = db.Column(db.Integer, db.ForeignKey("membership_application.id"), index=True)
+    document_type = db.Column(db.String, nullable=False, index=True)
+    file_url = db.Column(db.String)
+    storage_reference = db.Column(db.String)
+    pdf_hash = db.Column(db.String, index=True)
+    uploaded_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    signed_at = db.Column(db.DateTime)
+    related_contract_id = db.Column(db.String, index=True)
+    staff_user_id = db.Column(db.Integer, db.ForeignKey("staff_user.id"), index=True)
+    language = db.Column(db.String, default=DEFAULT_LANGUAGE, nullable=False)
+    version = db.Column(db.String)
+    status = db.Column(db.String, default="generated", nullable=False, index=True)
+
+    application = db.relationship("MembershipApplication")
+    staff_user = db.relationship("StaffUser")
+
+
+class SignedPdfRecord(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    application_id = db.Column(db.Integer, db.ForeignKey("membership_application.id"), index=True)
+    member_id = db.Column(db.String, index=True)
+    document_type = db.Column(db.String, nullable=False, index=True)
+    legal_document_version_id = db.Column(db.Integer, db.ForeignKey("legal_document_version.id"), index=True)
+    language = db.Column(db.String, default=DEFAULT_LANGUAGE, nullable=False)
+    pdf_url = db.Column(db.String)
+    storage_reference = db.Column(db.String)
+    pdf_hash = db.Column(db.String, index=True)
+    generated_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+    emailed_to_member_at = db.Column(db.DateTime)
+    emailed_to_admin_at = db.Column(db.DateTime)
+    audit_reference_number = db.Column(db.String, index=True)
+    status = db.Column(db.String, default="generated", nullable=False, index=True)
+
+    application = db.relationship("MembershipApplication", backref=db.backref("signed_pdfs", lazy=True))
+    legal_document_version = db.relationship("LegalDocumentVersion")
+
+
+class CancellationWindow(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.String, index=True)
+    contract_id = db.Column(db.String, index=True)
+    membership_id = db.Column(db.String, index=True)
+    current_term_start_date = db.Column(db.Date)
+    current_term_end_date = db.Column(db.Date, nullable=False, index=True)
+    window_open_date = db.Column(db.Date, nullable=False, index=True)
+    window_close_date = db.Column(db.Date, nullable=False, index=True)
+    status = db.Column(db.String, default="scheduled", nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+
+class CancellationConfirmation(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    cancellation_request_id = db.Column(db.Integer, db.ForeignKey("cancellation_request.id"), nullable=False, index=True)
+    confirmation_number = db.Column(db.String, unique=True, nullable=False, index=True)
+    pdf_receipt_url = db.Column(db.String)
+    pdf_hash = db.Column(db.String)
+    generated_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+    sent_to_member_at = db.Column(db.DateTime)
+    sent_to_staff_at = db.Column(db.DateTime)
+    language = db.Column(db.String, default=DEFAULT_LANGUAGE, nullable=False)
+    status = db.Column(db.String, default="generated", nullable=False, index=True)
+
+    cancellation_request = db.relationship("CancellationRequest", backref=db.backref("confirmations", lazy=True))
 
 
 class StaffUser(db.Model):
@@ -619,6 +919,40 @@ FEATURE_ACCESS_LEVELS = [
     "admin",
     "internal_test",
     "premium_future",
+]
+LEGAL_DOCUMENT_TYPES = [
+    "membership_application_form",
+    "general_terms",
+    "gym_rules",
+    "liability_waiver",
+    "media_security_consent",
+    "membership_contract_6_months",
+    "membership_contract_12_months",
+    "direct_debit_mandate",
+    "group_pt_addon_waiver",
+    "cancellation_renewal_rules",
+    "payment_rules",
+    "personal_training_business_rules",
+    "external_personal_trainer_package_terms",
+]
+LEGAL_REVIEW_STATUSES = ["draft", "reviewed", "legal_reviewed"]
+LEGAL_TRANSLATION_STATUSES = ["draft", "reviewed", "legal_reviewed"]
+MEMBERSHIP_APPLICATION_STATUSES = [
+    "draft",
+    "submitted",
+    "signed",
+    "pending_frontdesk_payment",
+    "pending_staff_activation",
+    "active",
+    "rejected",
+    "cancelled",
+]
+DIGITAL_SIGNATURE_VERIFICATION_METHODS = [
+    "email_link",
+    "logged_in_user",
+    "otp_email",
+    "otp_sms",
+    "frontdesk_identity_verified",
 ]
 FEATURE_ACCESS_RULE_SEED = [
     {
@@ -1176,6 +1510,14 @@ def ensure_runtime_schema():
     ensure_sqlite_model_column("cancellation_request", "last_paid_date", "DATE")
     ensure_sqlite_model_column("cancellation_request", "access_until", "DATE")
     ensure_model_column("cancellation_request", "language", "VARCHAR")
+    ensure_model_column("cancellation_request", "contract_id", "VARCHAR")
+    ensure_model_column("cancellation_request", "membership_id", "VARCHAR")
+    ensure_model_column("cancellation_request", "cancellation_window_open_date", "DATE")
+    ensure_model_column("cancellation_request", "cancellation_window_close_date", "DATE")
+    ensure_model_column("cancellation_request", "confirmation_number", "VARCHAR")
+    ensure_model_column("cancellation_request", "pdf_receipt_url", "VARCHAR")
+    ensure_model_column("cancellation_request", "member_confirmation_sent_at", "DATETIME")
+    ensure_model_column("cancellation_request", "staff_notification_sent_at", "DATETIME")
     ensure_sqlite_model_column("email_log", "html_body", "TEXT")
     ensure_model_column("email_log", "bcc_addresses", "TEXT")
     ensure_sqlite_model_column("email_log", "reviewed_at", "DATETIME")
