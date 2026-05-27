@@ -60,13 +60,17 @@
             <a class="rounded px-3 py-2 {% if request.endpoint == 'member_coach' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('member_coach') }}">{{ t('my_coach') }}</a>
             <a class="rounded px-3 py-2 {% if request.endpoint == 'member_progress' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('member_progress') }}">{{ t('progress') }}</a>
             <a
-              class="relative rounded px-3 py-2 {% if account_notification_count %}pr-5{% endif %} {% if request.endpoint in ['member_account', 'member_agreements', 'set_member_password'] %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}"
+              class="account-nav-link relative rounded px-3 py-2 {% if account_notification_count %}pr-6{% endif %} {% if request.endpoint in ['member_account', 'member_agreements', 'set_member_password'] %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}"
               href="{{ url_for('member_account', section='gym-balance') if account_notification_count else url_for('member_account') }}"
               aria-label="{{ t('account') }}{% if account_notification_count %}, {{ t('account_notifications')|replace('{count}', account_notification_count|string) }}{% endif %}"
             >
-              {{ t('account') }}
+              <span class="account-nav-label">{{ t('account') }}</span>
               {% if account_notification_count %}
-                <span class="account-notification-badge" aria-hidden="true">{{ account_notification_count }}</span>
+                <span
+                  class="account-notification-badge absolute -right-1 -top-1 inline-flex items-center justify-center rounded-full bg-red-500 text-white"
+                  style="position:absolute;right:-0.28rem;top:-0.28rem;min-width:1.05rem;height:1.05rem;border-radius:999px;background:#ef4444;color:#fff;font-size:0.62rem;font-weight:900;line-height:1;z-index:5;box-shadow:0 0 0 2px rgba(5,8,22,0.96),0 8px 18px rgba(239,68,68,0.35);"
+                  aria-hidden="true"
+                >{{ account_notification_count }}</span>
               {% endif %}
             </a>
           </nav>

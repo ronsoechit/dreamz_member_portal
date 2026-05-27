@@ -1562,9 +1562,11 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
         self.assertIn("account-notification-badge", body)
+        self.assertIn("account-nav-label", body)
+        self.assertIn("position:absolute;right:-0.28rem;top:-0.28rem", body)
         self.assertIn('aria-label="Account, 1 account notification"', body)
         self.assertIn('href="/account?section=gym-balance"', body)
-        self.assertIn('aria-hidden="true">1</span>', body)
+        self.assertRegex(body, r'aria-hidden="true"[^>]*>\s*1</span>')
         self.assertNotIn("Account1", re.sub(r"\s+", "", body))
 
         self.add_member(member_id="1206", balance=0.0)
