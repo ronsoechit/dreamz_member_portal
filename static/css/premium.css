@@ -376,6 +376,141 @@ tbody tr:hover {
   font-size: clamp(1.7rem, 5vw, 2.35rem) !important;
 }
 
+.dashboard-hero {
+  min-height: auto;
+}
+
+.dashboard-hero,
+.dashboard-summary-grid,
+.account-stack {
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.home-primary-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.home-primary-card::after {
+  content: "";
+  position: absolute;
+  right: -3rem;
+  top: -4rem;
+  width: 13rem;
+  height: 13rem;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(245, 158, 11, 0.18), transparent 68%);
+  pointer-events: none;
+}
+
+.dashboard-summary-grid {
+  align-items: stretch;
+}
+
+.summary-card {
+  display: flex;
+  min-height: 5.1rem;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.35rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 20px;
+  padding: 1rem;
+  text-decoration: none !important;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.015)),
+    rgba(9, 16, 31, 0.72);
+  box-shadow: 0 18px 55px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.summary-card:hover {
+  border-color: rgba(250, 204, 21, 0.46);
+  transform: translateY(-1px);
+}
+
+.summary-label {
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0;
+  color: var(--dreamz-muted);
+}
+
+.summary-card strong {
+  color: #f8fafc;
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.payment-alert-card {
+  border-radius: 20px !important;
+  box-shadow: 0 20px 55px rgba(0, 0, 0, 0.22);
+}
+
+.account-stack {
+  scroll-margin-top: 6rem;
+}
+
+.account-details-card {
+  padding: 0 !important;
+  overflow: hidden;
+}
+
+.account-details-card > summary {
+  display: flex;
+  min-height: 4.25rem;
+  cursor: pointer;
+  list-style: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.15rem;
+  color: var(--dreamz-gold);
+  font-weight: 800;
+}
+
+.account-details-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+.account-details-card > summary::after {
+  content: "+";
+  display: inline-flex;
+  height: 1.8rem;
+  width: 1.8rem;
+  shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(250, 204, 21, 0.30);
+  color: var(--dreamz-gold);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.account-details-card[open] > summary::after {
+  content: "-";
+}
+
+.account-details-card > summary small {
+  margin-left: auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dreamz-muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.account-details-card > div {
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  padding: 1rem 1.15rem 1.15rem;
+}
+
 dl {
   row-gap: 0.72rem !important;
 }
@@ -442,7 +577,7 @@ main a.text-green-400:hover {
 }
 
 .coach-action-card {
-  min-height: 9rem;
+  min-height: 7.3rem;
   position: relative;
   overflow: hidden;
 }
@@ -463,6 +598,7 @@ main a.text-green-400:hover {
   padding: 0.35rem;
   background: rgba(5, 10, 20, 0.58);
   border: 1px solid rgba(148, 163, 184, 0.14);
+  scroll-snap-type: x proximity;
 }
 
 [data-coach-view],
@@ -470,6 +606,13 @@ main a.text-green-400:hover {
   border-radius: 15px !important;
   min-height: 2.85rem;
   font-weight: 800 !important;
+  white-space: nowrap;
+  scroll-snap-align: start;
+}
+
+[data-coach-view] {
+  flex: 0 0 auto;
+  min-width: 8.25rem;
 }
 
 [data-coach-view][aria-selected="true"],
@@ -510,6 +653,24 @@ main a.text-green-400:hover {
   border-color: rgba(148, 163, 184, 0.16) !important;
   background: rgba(4, 9, 18, 0.55) !important;
   border-radius: 16px !important;
+}
+
+.coach-week-strip {
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+}
+
+.coach-day-tile {
+  width: 7.2rem;
+  min-height: 7rem;
+  scroll-snap-align: start;
+}
+
+.coach-day-tile button,
+.coach-day-tile span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 [data-coach-message-card],
@@ -557,32 +718,56 @@ span.rounded,
 }
 
 @media (max-width: 767px) {
-  .app-header {
-    position: relative;
+  body.app-body {
+    padding-bottom: calc(4.75rem + env(safe-area-inset-bottom));
   }
 
   .app-header > .container {
-    padding: 1rem !important;
+    gap: 0.65rem !important;
+    padding: 0.72rem 0.95rem !important;
   }
 
   .brand-mark {
-    padding: 0.45rem 0.6rem;
+    padding: 0.34rem 0.48rem;
+    border-radius: 14px;
   }
 
   .brand-mark img {
-    height: 2.45rem;
+    height: 2rem;
   }
 
-  .app-nav {
+  .app-header-actions {
+    gap: 0.45rem !important;
+  }
+
+  .staff-nav {
     width: 100%;
-    display: grid !important;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
     gap: 0.35rem !important;
   }
 
+  .member-nav {
+    position: fixed;
+    right: 0.75rem;
+    bottom: calc(0.75rem + env(safe-area-inset-bottom));
+    left: 0.75rem;
+    z-index: 60;
+    display: grid !important;
+    width: auto;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.3rem !important;
+    padding: 0.35rem !important;
+    border-radius: 22px !important;
+    background: rgba(5, 10, 20, 0.88) !important;
+    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.46), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(18px);
+  }
+
   .app-nav a {
-    min-height: 2.75rem;
-    padding-inline: 0.6rem !important;
+    min-height: 2.45rem;
+    padding-inline: 0.45rem !important;
     font-size: 0.82rem;
   }
 
@@ -595,11 +780,19 @@ span.rounded,
 
   .language-switcher a {
     min-width: 0 !important;
+    min-height: 2.2rem;
+    padding: 0.25rem !important;
+    font-size: 0.7rem;
+  }
+
+  .language-switcher a span:first-child {
+    font-size: 0.86rem;
   }
 
   .portal-main {
     padding-left: 1rem !important;
     padding-right: 1rem !important;
+    padding-top: 1.15rem !important;
   }
 
   .portal-main > div.grid,
@@ -625,5 +818,112 @@ span.rounded,
   main > div.rounded,
   main article.rounded {
     border-radius: 20px !important;
+  }
+
+  .dashboard-hero {
+    display: grid !important;
+    grid-template-columns: 1fr auto;
+    align-items: center !important;
+    gap: 0.9rem !important;
+  }
+
+  .dashboard-hero h2 {
+    font-size: 1.4rem !important;
+    line-height: 1.15;
+  }
+
+  .member-photo-frame {
+    height: 4.9rem !important;
+    width: 4.9rem !important;
+    border-radius: 18px !important;
+  }
+
+  .member-photo-frame .h-24 {
+    height: 3.3rem !important;
+    width: 3.3rem !important;
+  }
+
+  .home-primary-card,
+  .dashboard-card,
+  .payment-alert-card {
+    padding: 1rem !important;
+  }
+
+  .coach-teaser-card .md\:items-center {
+    align-items: stretch !important;
+  }
+
+  .summary-card {
+    min-height: 4.45rem;
+    padding: 0.85rem;
+    border-radius: 18px;
+  }
+
+  .account-details-card > summary {
+    min-height: 3.6rem;
+    padding: 0.85rem 0.95rem;
+  }
+
+  .account-details-card > div {
+    padding: 0.85rem 0.95rem 1rem;
+  }
+
+  .coach-hero {
+    padding: 1rem !important;
+    border-radius: 22px !important;
+  }
+
+  .coach-hero h2 {
+    font-size: 1.45rem !important;
+  }
+
+  .coach-profile-strip {
+    padding: 0.75rem !important;
+  }
+
+  .coach-action-card {
+    min-height: 5.75rem;
+    padding: 0.9rem !important;
+  }
+
+  .coach-tabs {
+    margin-left: -0.15rem;
+    margin-right: -0.15rem;
+    padding: 0.28rem;
+  }
+
+  [data-coach-view] {
+    min-width: auto;
+    min-height: 2.35rem;
+    padding: 0.55rem 0.8rem !important;
+    font-size: 0.78rem;
+  }
+
+  .coach-week-strip {
+    margin-right: -1rem;
+    padding-right: 1rem;
+  }
+
+  .coach-day-tile {
+    width: 5.65rem;
+    min-height: 5.7rem;
+    padding: 0.7rem !important;
+  }
+
+  [data-session-panel] {
+    padding: 0.95rem !important;
+  }
+
+  [data-session-panel] .grid.sm\:grid-cols-3 {
+    grid-template-columns: 1fr !important;
+  }
+
+  [data-exercise-card] {
+    padding: 0.85rem !important;
+  }
+
+  .pwa-install-card:not(.hidden) {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

@@ -22,7 +22,7 @@
       </a>
       <div class="app-header-actions flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-end">
         {% if current_staff_role and request.endpoint != 'staff_home' %}
-          <nav class="app-nav flex flex-wrap items-center gap-1 rounded border border-gray-700 bg-gray-900/40 p-1 text-sm">
+          <nav class="app-nav staff-nav flex flex-wrap items-center gap-1 rounded border border-gray-700 bg-gray-900/40 p-1 text-sm">
             <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_home' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_home') }}">Home</a>
             <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_data_audit' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_data_audit') }}">Audit</a>
             <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_daily_changes' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_daily_changes') }}">Changes</a>
@@ -50,9 +50,10 @@
             <a class="rounded border border-gray-700 bg-gray-900/40 px-3 py-2 text-sm text-yellow-400 hover:bg-gray-700 hover:text-yellow-300" href="{{ url_for('staff_logout') }}">Logout</a>
           </div>
         {% elif current_member_id %}
-          <nav class="app-nav flex flex-wrap items-center gap-1 rounded border border-gray-700 bg-gray-900/40 p-1 text-sm">
+          <nav class="app-nav member-nav flex flex-wrap items-center gap-1 rounded border border-gray-700 bg-gray-900/40 p-1 text-sm">
             <a class="rounded px-3 py-2 {% if request.endpoint == 'dashboard' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('dashboard', id=current_member_id) }}">{{ t('dashboard') }}</a>
             <a class="rounded px-3 py-2 {% if request.endpoint == 'member_coach' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('member_coach') }}">{{ t('my_coach') }}</a>
+            <a class="rounded px-3 py-2 text-gray-300 hover:bg-gray-700 hover:text-white" href="{{ url_for('dashboard', id=current_member_id) }}#account-membership">{{ t('account') }}</a>
             <a class="rounded px-3 py-2 text-yellow-400 hover:bg-gray-700 hover:text-yellow-300" href="{{ url_for('logout') }}">{{ t('logout') }}</a>
           </nav>
         {% endif %}

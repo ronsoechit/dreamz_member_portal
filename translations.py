@@ -677,6 +677,7 @@ for language, values in EMAIL_TRANSLATIONS.items():
 COACH_TRANSLATIONS = {
     "en": {
         "dashboard": "Dashboard",
+        "account": "Account",
         "my_coach": "My Coach",
         "coach_dashboard_title": "Your personal Dreamz trainer",
         "coach_dashboard_intro": "Set your goals, training rhythm and nutrition preferences so Dreamz can build more personal guidance for you.",
@@ -922,6 +923,7 @@ COACH_TRANSLATIONS = {
     },
     "nl": {
         "dashboard": "Dashboard",
+        "account": "Account",
         "my_coach": "Mijn Coach",
         "coach_dashboard_title": "Jouw persoonlijke Dreamz trainer",
         "coach_dashboard_intro": "Vul je doelen, trainingsritme en voedingsvoorkeuren in zodat Dreamz persoonlijker advies kan maken.",
@@ -1167,6 +1169,7 @@ COACH_TRANSLATIONS = {
     },
     "pap": {
         "dashboard": "Dashboard",
+        "account": "Kuenta",
         "my_coach": "Mi Coach",
         "coach_dashboard_title": "Bo trainer personal di Dreamz",
         "coach_dashboard_intro": "Yena bo metanan, ritmo di entrenamentu i preferensianan di kuminda pa Dreamz por duna guia mas personal.",
@@ -1412,6 +1415,7 @@ COACH_TRANSLATIONS = {
     },
     "es": {
         "dashboard": "Panel",
+        "account": "Cuenta",
         "my_coach": "Mi Coach",
         "coach_dashboard_title": "Tu entrenador personal de Dreamz",
         "coach_dashboard_intro": "Completa tus objetivos, ritmo de entrenamiento y preferencias de comida para que Dreamz pueda crear una guia mas personal.",
