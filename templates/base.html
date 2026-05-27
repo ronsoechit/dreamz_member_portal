@@ -3,7 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#f7b500" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Dreamz Fitness" />
   <title>{% block title %}{{ t('app_title') }}{% endblock %}</title>
+  <link rel="manifest" href="{{ url_for('web_manifest') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-180.png') }}">
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
   <link href="{{ url_for('static', filename='css/premium.css') }}" rel="stylesheet">
 </head>
@@ -75,6 +81,22 @@
 		{% endif %}
 	  {% endwith %}
 
+    {% if current_member_id and not current_staff_role %}
+      <section class="pwa-install-card hidden mb-5" data-pwa-install hidden>
+        <div>
+          <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('pwa_install_label') }}</div>
+          <h2 class="mt-1 text-lg font-semibold text-white">{{ t('pwa_install_title') }}</h2>
+          <p class="mt-1 text-sm leading-6 text-gray-300">{{ t('pwa_install_body') }}</p>
+          <p class="mt-2 text-xs leading-5 text-yellow-100" data-pwa-ios-hint hidden>{{ t('pwa_install_ios_hint') }}</p>
+          <p class="mt-2 text-xs leading-5 text-green-100" data-pwa-status hidden>{{ t('pwa_install_processing') }}</p>
+        </div>
+        <div class="flex shrink-0 flex-col gap-2 sm:flex-row">
+          <button type="button" class="rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black" data-pwa-install-button hidden>{{ t('pwa_install_button') }}</button>
+          <button type="button" class="rounded border border-gray-700 bg-gray-800 px-4 py-2 text-sm font-semibold text-white" data-pwa-install-close>{{ t('pwa_install_later') }}</button>
+        </div>
+      </section>
+    {% endif %}
+
 	  {% block content %}{% endblock %}
   </main>
 
@@ -125,5 +147,13 @@
       }, true);
     })();
   </script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("{{ url_for('service_worker') }}").catch(() => {});
+      });
+    }
+  </script>
+  <script src="{{ url_for('static', filename='js/pwa-install.js') }}" defer></script>
 </body>
 </html>

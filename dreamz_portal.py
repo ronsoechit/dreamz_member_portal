@@ -3212,6 +3212,21 @@ def send_cancellation_confirmation_email(member, request_record):
 def home():
     return redirect(url_for("login"))
 
+
+@app.get("/manifest.webmanifest")
+def web_manifest():
+    response = send_from_directory(app.static_folder, "manifest.webmanifest", mimetype="application/manifest+json")
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
+
+
+@app.get("/service-worker.js")
+def service_worker():
+    response = send_from_directory(app.static_folder, "service-worker.js", mimetype="application/javascript")
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.get("/language")
 def set_language():
     session["language"] = normalize_language(request.args.get("lang"))

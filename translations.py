@@ -1661,6 +1661,49 @@ for language, values in COACH_TRANSLATIONS.items():
     TRANSLATIONS.setdefault(language, {}).update(values)
 
 
+PWA_TRANSLATIONS = {
+    "en": {
+        "pwa_install_label": "Dreamz app",
+        "pwa_install_title": "Install the member portal on your phone",
+        "pwa_install_body": "Open Dreamz like an app from your home screen, without typing the website address each time.",
+        "pwa_install_button": "Install app",
+        "pwa_install_later": "Later",
+        "pwa_install_ios_hint": "On iPhone: tap Share in Safari, then choose Add to Home Screen.",
+        "pwa_install_processing": "Opening the install option...",
+    },
+    "nl": {
+        "pwa_install_label": "Dreamz app",
+        "pwa_install_title": "Installeer de ledenportal op je telefoon",
+        "pwa_install_body": "Open Dreamz voortaan als app vanaf je beginscherm, zonder telkens de website in te typen.",
+        "pwa_install_button": "App installeren",
+        "pwa_install_later": "Later",
+        "pwa_install_ios_hint": "Op iPhone: tik in Safari op Delen en kies daarna Zet op beginscherm.",
+        "pwa_install_processing": "Installatie-optie openen...",
+    },
+    "pap": {
+        "pwa_install_label": "App di Dreamz",
+        "pwa_install_title": "Instala e portal di miembro riba bo telefon",
+        "pwa_install_body": "Habri Dreamz manera un app for di bo pantaya prinsipal, sin skibi e website tur biaha.",
+        "pwa_install_button": "Instala app",
+        "pwa_install_later": "Despues",
+        "pwa_install_ios_hint": "Riba iPhone: primi Share den Safari i skohe Add to Home Screen.",
+        "pwa_install_processing": "Abriendo e opshon di instalashon...",
+    },
+    "es": {
+        "pwa_install_label": "App de Dreamz",
+        "pwa_install_title": "Instala el portal de miembros en tu telefono",
+        "pwa_install_body": "Abre Dreamz como una app desde tu pantalla principal, sin escribir la pagina cada vez.",
+        "pwa_install_button": "Instalar app",
+        "pwa_install_later": "Despues",
+        "pwa_install_ios_hint": "En iPhone: toca Compartir en Safari y elige Agregar a pantalla de inicio.",
+        "pwa_install_processing": "Abriendo la opcion de instalacion...",
+    },
+}
+
+for language, values in PWA_TRANSLATIONS.items():
+    TRANSLATIONS.setdefault(language, {}).update(values)
+
+
 def normalize_language(language):
     if language in LANGUAGES:
         return language

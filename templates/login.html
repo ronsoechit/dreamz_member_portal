@@ -3,7 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f7b500">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Dreamz Fitness">
   <title>{{ t('member_login') }} | Dreamz Fitness</title>
+  <link rel="manifest" href="{{ url_for('web_manifest') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-180.png') }}">
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="{{ url_for('static', filename='css/premium.css') }}" rel="stylesheet">
 </head>
@@ -86,6 +92,19 @@
         {{ t('please_wait_processing') }}
       </p>
     </form>
+    <section class="pwa-install-card hidden mt-5" data-pwa-install hidden>
+      <div>
+        <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('pwa_install_label') }}</div>
+        <h2 class="mt-1 text-lg font-semibold text-white">{{ t('pwa_install_title') }}</h2>
+        <p class="mt-1 text-sm leading-6 text-gray-300">{{ t('pwa_install_body') }}</p>
+        <p class="mt-2 text-xs leading-5 text-yellow-100" data-pwa-ios-hint hidden>{{ t('pwa_install_ios_hint') }}</p>
+        <p class="mt-2 text-xs leading-5 text-green-100" data-pwa-status hidden>{{ t('pwa_install_processing') }}</p>
+      </div>
+      <div class="mt-3 flex flex-col gap-2">
+        <button type="button" class="rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black" data-pwa-install-button hidden>{{ t('pwa_install_button') }}</button>
+        <button type="button" class="rounded border border-gray-700 bg-gray-800 px-4 py-2 text-sm font-semibold text-white" data-pwa-install-close>{{ t('pwa_install_later') }}</button>
+      </div>
+    </section>
   </div>
   <script>
     document.querySelectorAll("[data-loading-form]").forEach((form) => {
@@ -104,5 +123,13 @@
       });
     });
   </script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("{{ url_for('service_worker') }}").catch(() => {});
+      });
+    }
+  </script>
+  <script src="{{ url_for('static', filename='js/pwa-install.js') }}" defer></script>
 </body>
 </html>
