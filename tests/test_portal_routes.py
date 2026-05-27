@@ -2201,6 +2201,10 @@ class PortalRouteTests(unittest.TestCase):
         self.assertGreaterEqual(SignedPdfRecord.query.filter_by(application_id=application.id, status="generated").count(), 1)
         self.assertEqual(MembershipApplicationStatus.query.filter_by(application_id=application.id).count(), 1)
         self.assertEqual(MembershipApplicationAuditEvent.query.filter_by(application_id=application.id, event_type="application_signed").count(), 1)
+        self.assertEqual(MembershipApplicationAuditEvent.query.filter_by(application_id=application.id, event_type="application_notifications_sent").count(), 1)
+        self.assertGreaterEqual(EmailLog.query.filter(EmailLog.subject.like("%application%")).count(), 2)
+        self.assertTrue(all(record.emailed_to_member_at for record in SignedPdfRecord.query.filter_by(application_id=application.id).all()))
+        self.assertTrue(all(record.emailed_to_admin_at for record in SignedPdfRecord.query.filter_by(application_id=application.id).all()))
 
         confirmation = self.client.get(created.headers["Location"])
         self.assertEqual(confirmation.status_code, 200)

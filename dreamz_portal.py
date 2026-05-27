@@ -886,6 +886,7 @@ class FeatureAccessRule(db.Model):
 
 DEFAULT_SETTINGS = {
     "admin_email": "ron@dreamzfitness.com",
+    "frontdesk_email": "frontdesk@dreamzfitness.com",
     "notification_to": "ron@dreamzfitness.com",
     "notification_cc": "",
     "always_cc_admin": "1",
@@ -5864,6 +5865,76 @@ def deliver_email(to_addresses, subject, body, cc_addresses=None, bcc_addresses=
     return "sent"
 
 
+def agreement_admin_recipients():
+    recipients = []
+    for key in ("notification_to", "frontdesk_email", "admin_email"):
+        for email in parse_email_list(setting_value(key, "")):
+            append_unique_email(recipients, email)
+    return recipients
+
+
+def build_application_notification_email(application, recipient_type="member"):
+    language = normalize_language(application.language or DEFAULT_LANGUAGE)
+    applicant_name = f"{application.applicant_first_name or ''} {application.applicant_last_name or ''}".strip()
+    if recipient_type == "member":
+        subject = translated_text("email_application_member_subject", language)
+        intro = translated_text("email_application_member_intro", language, name=applicant_name or application.email)
+        note = translated_text("email_application_member_note", language)
+    else:
+        subject = translated_text("email_application_admin_subject", language, name=applicant_name or application.email)
+        intro = translated_text("email_application_admin_intro", language, name=applicant_name or application.email)
+        note = translated_text("email_application_admin_note", language)
+    body = f"""{intro}
+
+{translated_text('application_title', language)}: #{application.id}
+{translated_text('email', language)}: {application.email or ''}
+{translated_text('current_membership', language)}: {application.selected_membership_type or ''}
+{translated_text('payment_direct_debit', language)}: {application.selected_payment_method or ''}
+
+{note}
+
+{translated_text('email_signoff', language)}
+Dreamz Fitness Bonaire
+"""
+    html_body = email_html_layout(
+        subject,
+        intro,
+        [
+            (translated_text("application_title", language), f"#{application.id}"),
+            (translated_text("email", language), application.email or ""),
+            (translated_text("current_membership", language), application.selected_membership_type or ""),
+            (translated_text("payment_direct_debit", language), application.selected_payment_method or ""),
+        ],
+        note=note,
+        signoff=translated_text("email_signoff", language),
+        tone="success",
+    )
+    return subject, body, html_body
+
+
+def send_application_notifications(application):
+    now = datetime.now()
+    statuses = []
+    if application.email:
+        subject, body, html_body = build_application_notification_email(application, recipient_type="member")
+        statuses.append(("member", deliver_email([application.email], subject, body, html_body=html_body)))
+        SignedPdfRecord.query.filter_by(application_id=application.id).update({"emailed_to_member_at": now})
+    admin_recipients = agreement_admin_recipients()
+    if admin_recipients:
+        subject, body, html_body = build_application_notification_email(application, recipient_type="admin")
+        statuses.append(("admin", deliver_email(admin_recipients, subject, body, html_body=html_body)))
+        SignedPdfRecord.query.filter_by(application_id=application.id).update({"emailed_to_admin_at": now})
+    db.session.add(MembershipApplicationAuditEvent(
+        application_id=application.id,
+        event_type="application_notifications_sent",
+        actor_type="system",
+        message="Application notifications generated for member/admin.",
+        metadata_json=json.dumps({"statuses": statuses}),
+    ))
+    db.session.commit()
+    return statuses
+
+
 def build_member_login_code_email(member, code, language=DEFAULT_LANGUAGE):
     language = normalize_language(language)
     subject = translated_text("email_login_subject", language)
@@ -6270,6 +6341,16 @@ def membership_application():
                 status="generated",
             ))
         db.session.commit()
+        try:
+            send_application_notifications(application)
+        except Exception as exc:
+            db.session.add(MembershipApplicationAuditEvent(
+                application_id=application.id,
+                event_type="application_notification_failed",
+                actor_type="system",
+                message=str(exc),
+            ))
+            db.session.commit()
         return redirect(url_for("membership_application_confirmation", application_id=application.id))
 
     return render_template(
