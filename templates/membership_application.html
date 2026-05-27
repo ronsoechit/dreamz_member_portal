@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}{{ t('application_title') }} | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<section class="mb-6 rounded-lg border border-yellow-500/30 bg-gray-900/70 p-6">
+  <div class="text-xs font-semibold uppercase tracking-wide text-yellow-400">{{ t('application_label') }}</div>
+  <h2 class="mt-1 text-2xl font-semibold text-white">{{ t('application_title') }}</h2>
+  <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-300">{{ t('application_intro') }}</p>
+</section>
+
+<form method="post" action="{{ url_for('membership_application') }}" class="space-y-6">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <section class="rounded-lg border border-gray-700 bg-gray-800/50 p-5">
+    <h3 class="text-xl font-semibold text-white">{{ t('application_step_personal') }}</h3>
+    <div class="mt-4 grid gap-3 lg:grid-cols-2">
+      <input name="applicant_first_name" required value="{{ form_data.get('applicant_first_name', '') }}" placeholder="{{ t('first_name') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <input name="applicant_last_name" required value="{{ form_data.get('applicant_last_name', '') }}" placeholder="{{ t('last_name') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <input name="date_of_birth" type="date" value="{{ form_data.get('date_of_birth', '') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <input name="place_of_birth" value="{{ form_data.get('place_of_birth', '') }}" placeholder="{{ t('place_of_birth') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <input name="email" type="email" required value="{{ form_data.get('email', '') }}" placeholder="{{ t('email') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <input name="phone" value="{{ form_data.get('phone', '') }}" placeholder="{{ t('phone') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <textarea name="address" rows="2" placeholder="{{ t('address') }}" class="lg:col-span-2 rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">{{ form_data.get('address', '') }}</textarea>
+      <input name="emergency_contact_first_name" value="{{ form_data.get('emergency_contact_first_name', '') }}" placeholder="{{ t('emergency_contact_first_name') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <input name="emergency_contact_last_name" value="{{ form_data.get('emergency_contact_last_name', '') }}" placeholder="{{ t('emergency_contact_last_name') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <input name="emergency_contact_relationship" value="{{ form_data.get('emergency_contact_relationship', '') }}" placeholder="{{ t('emergency_contact_relationship') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <input name="emergency_contact_phone" value="{{ form_data.get('emergency_contact_phone', '') }}" placeholder="{{ t('emergency_contact_phone') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+    </div>
+  </section>
+
+  <section class="rounded-lg border border-gray-700 bg-gray-800/50 p-5">
+    <h3 class="text-xl font-semibold text-white">{{ t('application_step_membership') }}</h3>
+    <div class="mt-4 grid gap-3 lg:grid-cols-3">
+      <select name="selected_membership_type" required class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+        <option value="">{{ t('choose_membership') }}</option>
+        {% for item in membership_options %}
+          <option value="{{ item.name }}" {% if form_data.get('selected_membership_type') == item.name %}selected{% endif %}>{{ item.name }} / ${{ '%.2f'|format(item.price_amount or 0) }}</option>
+        {% endfor %}
+      </select>
+      <select name="selected_contract_term" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+        <option value="none">{{ t('contract_none') }}</option>
+        <option value="6_months" {% if form_data.get('selected_contract_term') == '6_months' %}selected{% endif %}>{{ t('contract_6_months') }}</option>
+        <option value="12_months" {% if form_data.get('selected_contract_term') == '12_months' %}selected{% endif %}>{{ t('contract_12_months') }}</option>
+      </select>
+      <div class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-gray-200">
+        {% for item in addon_options %}
+          <label class="flex items-center gap-2"><input name="selected_add_ons" value="group_pt" type="checkbox" class="h-4 w-4 accent-yellow-500">{{ item.name }}</label>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+
+  <section class="rounded-lg border border-gray-700 bg-gray-800/50 p-5">
+    <h3 class="text-xl font-semibold text-white">{{ t('application_step_payment') }}</h3>
+    <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('application_frontdesk_notice') }}</p>
+    <div class="mt-4 grid gap-3 lg:grid-cols-2">
+      <select name="selected_payment_method" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+        <option value="frontdesk_payment">{{ t('frontdesk_payment') }}</option>
+        <option value="cash_pin_all_at_once">{{ t('cash_pin_all_at_once') }}</option>
+        <option value="mcb_direct_debit_monthly" {% if form_data.get('selected_payment_method') == 'mcb_direct_debit_monthly' %}selected{% endif %}>{{ t('mcb_direct_debit_monthly') }}</option>
+      </select>
+      <select name="mcb_account_type" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+        <option value="">{{ t('mcb_account_type') }}</option>
+        <option value="current" {% if form_data.get('mcb_account_type') == 'current' %}selected{% endif %}>{{ t('mcb_current_account') }}</option>
+        <option value="savings" {% if form_data.get('mcb_account_type') == 'savings' %}selected{% endif %}>{{ t('mcb_savings_account') }}</option>
+      </select>
+      <input name="mcb_account_holder_name" value="{{ form_data.get('mcb_account_holder_name', '') }}" placeholder="{{ t('mcb_account_holder_name') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <input name="mcb_account_number" value="{{ form_data.get('mcb_account_number', '') }}" placeholder="{{ t('mcb_account_number') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <label class="lg:col-span-2 flex items-start gap-3 rounded border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-50">
+        <input name="direct_debit_confirmed_current_account" value="1" type="checkbox" class="mt-1 h-4 w-4 accent-yellow-500">
+        <span>{{ t('direct_debit_current_account_confirm') }}</span>
+      </label>
+    </div>
+  </section>
+
+  <section class="rounded-lg border border-gray-700 bg-gray-800/50 p-5">
+    <h3 class="text-xl font-semibold text-white">{{ t('application_step_agreements') }}</h3>
+    <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('application_agreements_intro') }}</p>
+    <div class="mt-4 grid gap-3">
+      {% for document, version in required_agreements %}
+        <label class="rounded border border-gray-700 bg-gray-900/60 p-4 text-sm">
+          <div class="flex items-start gap-3">
+            <input name="accepted_version_id" value="{{ version.id }}" type="checkbox" class="mt-1 h-4 w-4 accent-yellow-500">
+            <div>
+              <div class="font-semibold text-white">{{ document.title }}</div>
+              <p class="mt-1 text-gray-300">{{ version.plain_language_summary }}</p>
+              <details class="mt-3">
+                <summary class="cursor-pointer text-yellow-300">{{ t('view_full_terms') }}</summary>
+                <div class="mt-3 whitespace-pre-line text-gray-300">{{ version.full_legal_text }}</div>
+              </details>
+            </div>
+          </div>
+        </label>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="rounded-lg border border-gray-700 bg-gray-800/50 p-5">
+    <h3 class="text-xl font-semibold text-white">{{ t('application_step_signature') }}</h3>
+    <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('electronic_signature_statement') }}</p>
+    <div class="mt-4 grid gap-3">
+      <input name="signature_text_name" required value="{{ form_data.get('signature_text_name', '') }}" placeholder="{{ t('signature_full_name') }}" class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+      <label class="flex items-start gap-3 rounded border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-50">
+        <input name="information_true" value="1" type="checkbox" class="mt-1 h-4 w-4 accent-yellow-500">
+        <span>{{ t('application_information_true') }}</span>
+      </label>
+      <button class="rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black">{{ t('submit_application') }}</button>
+    </div>
+  </section>
+</form>
+{% endblock %}

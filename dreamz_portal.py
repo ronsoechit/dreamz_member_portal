@@ -1,4 +1,5 @@
 import calendar
+import hashlib
 import html
 import json
 import os
@@ -2187,6 +2188,50 @@ def member_relevant_legal_document_types(member):
     if "group pt" in text or "group personal" in text:
         document_types.append("group_pt_addon_waiver")
     return document_types
+
+
+def application_required_document_types(contract_term, payment_method, selected_add_ons=None):
+    selected_add_ons = selected_add_ons or []
+    document_types = [
+        "membership_application_form",
+        "general_terms",
+        "gym_rules",
+        "liability_waiver",
+        "media_security_consent",
+        "personal_training_business_rules",
+    ]
+    if contract_term == "6_months":
+        document_types.extend(["membership_contract_6_months", "cancellation_renewal_rules", "payment_rules"])
+    elif contract_term == "12_months":
+        document_types.extend(["membership_contract_12_months", "cancellation_renewal_rules", "payment_rules"])
+    else:
+        document_types.append("payment_rules")
+    if payment_method == "mcb_direct_debit_monthly":
+        document_types.extend(["direct_debit_mandate", "payment_rules"])
+    if "group_pt" in selected_add_ons:
+        document_types.append("group_pt_addon_waiver")
+    return list(dict.fromkeys(document_types))
+
+
+def current_versions_for_document_types(document_types):
+    documents = (
+        LegalDocument.query
+        .filter(LegalDocument.active.is_(True))
+        .filter(LegalDocument.document_type.in_(document_types))
+        .order_by(LegalDocument.sort_order.asc(), LegalDocument.title.asc())
+        .all()
+    )
+    rows = []
+    for document in documents:
+        version = current_legal_version(document)
+        if version:
+            rows.append((document, version))
+    return rows
+
+
+def create_application_pdf_hash(application, document_type, audit_reference):
+    payload = f"{application.id}|{document_type}|{audit_reference}|{application.email}|{datetime.now().isoformat()}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def member_agreements_context(member):
@@ -5947,6 +5992,185 @@ def home():
 @app.get("/pricing")
 def public_pricing():
     return render_template("pricing.html", **public_pricing_context())
+
+
+@app.route("/apply", methods=["GET", "POST"])
+def membership_application():
+    ensure_runtime_schema()
+    language = current_language()
+    seed_pricing_catalog()
+    seed_legal_documents()
+    membership_options = [
+        item for item in active_pricing_items_for_visibility(["public", "members"])
+        if item.category_key in {"memberships", "mcb_direct_debit_contracts", "day_week_passes", "under_18"}
+        and item.member_eligible
+    ]
+    addon_options = [
+        item for item in active_pricing_items_for_visibility(["public", "members"])
+        if item.category_key in {"group_class_add_ons", "personal_training"}
+        and item.member_eligible
+    ]
+    preview_contract_term = request.form.get("selected_contract_term", "none") if request.method == "POST" else "none"
+    preview_payment_method = request.form.get("selected_payment_method", "frontdesk_payment") if request.method == "POST" else "frontdesk_payment"
+    preview_addons = request.form.getlist("selected_add_ons") if request.method == "POST" else []
+    required_rows = current_versions_for_document_types(
+        application_required_document_types(preview_contract_term, preview_payment_method, preview_addons)
+    )
+
+    if request.method == "POST":
+        validate_csrf_token()
+        account_type = request.form.get("mcb_account_type", "").strip()
+        payment_method = request.form.get("selected_payment_method", "").strip()
+        if payment_method == "mcb_direct_debit_monthly":
+            if account_type != "current" or request.form.get("direct_debit_confirmed_current_account") != "1":
+                flash(translated_text("application_direct_debit_blocked", language))
+                return render_template(
+                    "membership_application.html",
+                    membership_options=membership_options,
+                    addon_options=addon_options,
+                    required_agreements=required_rows,
+                    form_data=request.form,
+                ), 400
+
+        selected_add_ons = request.form.getlist("selected_add_ons")
+        required_rows = current_versions_for_document_types(
+            application_required_document_types(
+                request.form.get("selected_contract_term", "none").strip(),
+                payment_method,
+                selected_add_ons,
+            )
+        )
+        required_version_ids = [str(version.id) for _, version in required_rows]
+        accepted_version_ids = set(request.form.getlist("accepted_version_id"))
+        if not required_version_ids or set(required_version_ids) - accepted_version_ids:
+            flash(translated_text("application_accept_required_agreements", language))
+            return render_template(
+                "membership_application.html",
+                membership_options=membership_options,
+                addon_options=addon_options,
+                required_agreements=required_rows,
+                form_data=request.form,
+            ), 400
+
+        signature_name = request.form.get("signature_text_name", "").strip()
+        first_name = request.form.get("applicant_first_name", "").strip()
+        last_name = request.form.get("applicant_last_name", "").strip()
+        email = request.form.get("email", "").strip()
+        if not first_name or not last_name or not email or not signature_name or request.form.get("information_true") != "1":
+            flash(translated_text("application_signature_required", language))
+            return render_template(
+                "membership_application.html",
+                membership_options=membership_options,
+                addon_options=addon_options,
+                required_agreements=required_rows,
+                form_data=request.form,
+            ), 400
+
+        now = datetime.now()
+        application = MembershipApplication(
+            applicant_first_name=first_name,
+            applicant_last_name=last_name,
+            date_of_birth=parse_optional_date(request.form.get("date_of_birth")),
+            place_of_birth=request.form.get("place_of_birth", "").strip() or None,
+            address=request.form.get("address", "").strip() or None,
+            phone=request.form.get("phone", "").strip() or None,
+            email=email,
+            emergency_contact_first_name=request.form.get("emergency_contact_first_name", "").strip() or None,
+            emergency_contact_last_name=request.form.get("emergency_contact_last_name", "").strip() or None,
+            emergency_contact_relationship=request.form.get("emergency_contact_relationship", "").strip() or None,
+            emergency_contact_phone=request.form.get("emergency_contact_phone", "").strip() or None,
+            selected_membership_type=request.form.get("selected_membership_type", "").strip(),
+            selected_contract_term=request.form.get("selected_contract_term", "none").strip() or "none",
+            selected_add_ons=json.dumps(selected_add_ons),
+            selected_payment_method=payment_method,
+            mcb_account_holder_name=request.form.get("mcb_account_holder_name", "").strip() or None,
+            mcb_account_number=request.form.get("mcb_account_number", "").strip() or None,
+            mcb_account_type=account_type or None,
+            direct_debit_confirmed_current_account=request.form.get("direct_debit_confirmed_current_account") == "1",
+            status="pending_frontdesk_payment",
+            language=language,
+            submitted_at=now,
+            signed_at=now,
+        )
+        db.session.add(application)
+        db.session.flush()
+
+        audit_reference = f"APP-{now.strftime('%Y%m%d')}-{application.id:05d}-{secrets.token_hex(3).upper()}"
+        signature = DigitalSignatureRecord(
+            application_id=application.id,
+            full_legal_name=signature_name,
+            email=email,
+            phone=application.phone,
+            date_of_birth=application.date_of_birth,
+            signature_text_name=signature_name,
+            signed_at=now,
+            ip_address=request.headers.get("X-Forwarded-For", request.remote_addr),
+            user_agent=request.headers.get("User-Agent"),
+            verification_method="email_link",
+            verification_reference=email,
+            audit_reference_number=audit_reference,
+        )
+        db.session.add(signature)
+        db.session.flush()
+
+        db.session.add(MembershipApplicationStatus(application_id=application.id, status=application.status, note="Application submitted and signed."))
+        db.session.add(MembershipApplicationAuditEvent(
+            application_id=application.id,
+            event_type="application_signed",
+            actor_type="applicant",
+            actor_id=email,
+            message="This document was signed electronically through the Dreamz Fitness member portal.",
+            metadata_json=json.dumps({"audit_reference_number": audit_reference}),
+        ))
+        db.session.add(DigitalSignatureAuditTrail(
+            signature_record_id=signature.id,
+            event_type="signature_created",
+            message="This document was signed electronically through the Dreamz Fitness member portal.",
+            ip_address=signature.ip_address,
+            user_agent=signature.user_agent,
+        ))
+
+        for document, version in required_rows:
+            pdf_hash = create_application_pdf_hash(application, document.document_type, audit_reference)
+            db.session.add(MembershipApplicationDocument(
+                application_id=application.id,
+                legal_document_version_id=version.id,
+                document_type=document.document_type,
+                status="signed",
+                file_url=f"/applications/{application.id}/documents/{document.document_type}.pdf",
+                pdf_hash=pdf_hash,
+                language=language,
+            ))
+            db.session.add(SignedPdfRecord(
+                application_id=application.id,
+                document_type=document.document_type,
+                legal_document_version_id=version.id,
+                language=language,
+                pdf_url=f"/applications/{application.id}/documents/{document.document_type}.pdf",
+                pdf_hash=pdf_hash,
+                audit_reference_number=audit_reference,
+                status="generated",
+            ))
+        db.session.commit()
+        return redirect(url_for("membership_application_confirmation", application_id=application.id))
+
+    return render_template(
+        "membership_application.html",
+        membership_options=membership_options,
+        addon_options=addon_options,
+        required_agreements=required_rows,
+        form_data={},
+    )
+
+
+@app.get("/apply/confirmation/<int:application_id>")
+def membership_application_confirmation(application_id):
+    ensure_runtime_schema()
+    application = db.session.get(MembershipApplication, application_id)
+    if not application:
+        abort(404)
+    documents = MembershipApplicationDocument.query.filter_by(application_id=application.id).all()
+    return render_template("membership_application_confirmation.html", application=application, documents=documents)
 
 
 @app.get("/manifest.webmanifest")

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}{{ t('application_submitted') }} | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<section class="rounded-lg border border-yellow-500/30 bg-gray-900/70 p-6">
+  <div class="text-xs font-semibold uppercase tracking-wide text-yellow-400">{{ t('application_confirmation_label') }}</div>
+  <h2 class="mt-1 text-2xl font-semibold text-white">{{ t('application_submitted') }}</h2>
+  <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-300">{{ t('application_confirmation_intro') }}</p>
+  <div class="mt-5 rounded border border-yellow-500/30 bg-yellow-500/10 p-4 text-sm leading-6 text-yellow-50">
+    {{ t('application_frontdesk_next_step') }}
+  </div>
+</section>
+
+<section class="mt-6 rounded-lg border border-gray-700 bg-gray-800/50 p-5">
+  <h3 class="text-xl font-semibold text-white">{{ t('generated_signed_documents') }}</h3>
+  <div class="mt-4 grid gap-3 lg:grid-cols-2">
+    {% for document in documents %}
+      <article class="rounded border border-gray-700 bg-gray-900/60 p-4 text-sm">
+        <div class="font-semibold text-yellow-200">{{ document.document_type }}</div>
+        <div class="mt-1 text-gray-300">{{ document.status }} / {{ document.language }}</div>
+        <div class="mt-1 break-words text-xs text-gray-500">{{ document.pdf_hash }}</div>
+      </article>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

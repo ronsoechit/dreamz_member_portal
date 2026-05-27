@@ -2140,6 +2140,69 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("/documents/signed/13659-contract.pdf", body)
         self.assertNotIn("External Personal Trainer Package Terms", body)
 
+    def test_digital_membership_application_blocks_savings_account_and_creates_signed_records(self):
+        seed_pricing_catalog()
+        seed_legal_documents()
+
+        response = self.client.get("/apply")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Dreamz Fitness membership application", body)
+        self.assertIn("Online payment is not available here", body)
+        self.assertNotIn("Pay now", body)
+
+        with self.client.session_transaction() as sess:
+            sess["_csrf_token"] = "token"
+        base_form = {
+            "csrf_token": "token",
+            "applicant_first_name": "Ron",
+            "applicant_last_name": "Soechit",
+            "date_of_birth": "1990-01-01",
+            "email": "ron@example.com",
+            "phone": "+5997000000",
+            "emergency_contact_first_name": "Emergency",
+            "emergency_contact_last_name": "Contact",
+            "emergency_contact_relationship": "Family",
+            "emergency_contact_phone": "+5997000001",
+            "selected_membership_type": "6 months contract",
+            "selected_contract_term": "6_months",
+            "selected_payment_method": "mcb_direct_debit_monthly",
+            "mcb_account_holder_name": "Ron Soechit",
+            "mcb_account_number": "123456789",
+            "mcb_account_type": "savings",
+            "direct_debit_confirmed_current_account": "1",
+            "signature_text_name": "Ron Soechit",
+            "information_true": "1",
+        }
+        for version in LegalDocumentVersion.query.filter_by(is_current=True).all():
+            base_form.setdefault("accepted_version_id", [])
+            base_form["accepted_version_id"].append(str(version.id))
+
+        blocked = self.client.post("/apply", data=base_form)
+        self.assertEqual(blocked.status_code, 400)
+        self.assertIn("Savings accounts and non-MCB accounts are not accepted", blocked.get_data(as_text=True))
+        self.assertEqual(MembershipApplication.query.count(), 0)
+
+        base_form["mcb_account_type"] = "current"
+        created = self.client.post("/apply", data=base_form)
+
+        self.assertEqual(created.status_code, 302)
+        application = MembershipApplication.query.one()
+        self.assertEqual(application.status, "pending_frontdesk_payment")
+        self.assertTrue(application.direct_debit_confirmed_current_account)
+        self.assertEqual(DigitalSignatureRecord.query.filter_by(application_id=application.id).count(), 1)
+        self.assertGreaterEqual(MembershipApplicationDocument.query.filter_by(application_id=application.id, status="signed").count(), 1)
+        self.assertGreaterEqual(SignedPdfRecord.query.filter_by(application_id=application.id, status="generated").count(), 1)
+        self.assertEqual(MembershipApplicationStatus.query.filter_by(application_id=application.id).count(), 1)
+        self.assertEqual(MembershipApplicationAuditEvent.query.filter_by(application_id=application.id, event_type="application_signed").count(), 1)
+
+        confirmation = self.client.get(created.headers["Location"])
+        self.assertEqual(confirmation.status_code, 200)
+        confirmation_body = confirmation.get_data(as_text=True)
+        self.assertIn("Application submitted", confirmation_body)
+        self.assertIn("front desk", confirmation_body.lower())
+        self.assertNotIn("Pay now", confirmation_body)
+
     def test_feature_access_rule_seed_creates_premium_readiness_foundation(self):
         seed_feature_access_rules()
 
