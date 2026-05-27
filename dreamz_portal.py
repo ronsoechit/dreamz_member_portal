@@ -567,6 +567,22 @@ class PricingChangeLog(db.Model):
     pricing_item = db.relationship("PricingItem")
 
 
+class FeatureAccessRule(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String, unique=True, nullable=False, index=True)
+    label = db.Column(db.String, nullable=False)
+    access_level = db.Column(db.String, nullable=False, index=True)
+    description = db.Column(db.Text)
+    pricing_item_id = db.Column(db.Integer, db.ForeignKey("pricing_item.id"), index=True)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    is_future_ready = db.Column(db.Boolean, default=False, nullable=False)
+    metadata_json = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    pricing_item = db.relationship("PricingItem")
+
+
 DEFAULT_SETTINGS = {
     "admin_email": "ron@dreamzfitness.com",
     "notification_to": "ron@dreamzfitness.com",
@@ -594,6 +610,70 @@ GROUP_CLASS_DAY_KEYS = {
 GROUP_CLASS_OCCURRENCE_STATUSES = {"scheduled", "cancelled", "reserved"}
 PRICING_BILLING_INTERVALS = ["one_time", "per_month", "per_session", "per_pass", "included_free"]
 PRICING_VISIBILITY_OPTIONS = ["public", "members", "staff_only", "public_business"]
+FEATURE_ACCESS_LEVELS = [
+    "public_basic",
+    "member",
+    "contract_member",
+    "no_contract_member",
+    "staff",
+    "admin",
+    "internal_test",
+    "premium_future",
+]
+FEATURE_ACCESS_RULE_SEED = [
+    {
+        "key": "pricing_public_catalog",
+        "label": "Public pricing catalog",
+        "access_level": "public_basic",
+        "description": "Public/basic users can view active public pricing catalog items.",
+    },
+    {
+        "key": "member_pricing_options",
+        "label": "Member pricing options",
+        "access_level": "member",
+        "description": "Logged-in members can view relevant member-eligible pricing options.",
+    },
+    {
+        "key": "contract_member_included_features",
+        "label": "Contract member included features",
+        "access_level": "contract_member",
+        "description": "Foundation for features included with contract memberships.",
+        "is_future_ready": True,
+    },
+    {
+        "key": "no_contract_member_access",
+        "label": "No-contract member access",
+        "access_level": "no_contract_member",
+        "description": "Foundation for no-contract member access decisions.",
+        "is_future_ready": True,
+    },
+    {
+        "key": "staff_pricing_management",
+        "label": "Staff pricing management",
+        "access_level": "staff",
+        "description": "Staff can manage pricing catalog data.",
+    },
+    {
+        "key": "admin_pricing_controls",
+        "label": "Admin pricing controls",
+        "access_level": "admin",
+        "description": "Admins can manage sensitive pricing and staff settings.",
+    },
+    {
+        "key": "internal_test_access",
+        "label": "Internal test access",
+        "access_level": "internal_test",
+        "description": "Reserved for staff/internal test access to future catalog features.",
+        "is_future_ready": True,
+    },
+    {
+        "key": "premium_future_features",
+        "label": "Future premium features",
+        "access_level": "premium_future",
+        "description": "Placeholder for future paid features. No online payment flow is active.",
+        "is_future_ready": True,
+    },
+]
 PRICING_CATALOG_SOURCE = "current Dreamz Fitness printed price list"
 PRICING_CATALOG_INITIAL_SEED_DATE = date(2026, 5, 27)
 PRICING_CATALOG_CURRENCY = "USD"
@@ -1117,6 +1197,7 @@ def ensure_runtime_schema():
     seed_default_staff_users()
     seed_group_class_schedule()
     seed_pricing_catalog()
+    seed_feature_access_rules()
     app.config["_RUNTIME_SCHEMA_READY"] = True
 
 
@@ -1492,6 +1573,63 @@ def seed_pricing_catalog():
 
     db.session.commit()
     return PricingItem.query.order_by(PricingItem.sort_order.asc(), PricingItem.name.asc()).all()
+
+
+def seed_feature_access_rules():
+    for defaults in FEATURE_ACCESS_RULE_SEED:
+        rule = FeatureAccessRule.query.filter_by(key=defaults["key"]).first()
+        if not rule:
+            rule = FeatureAccessRule(
+                key=defaults["key"],
+                label=defaults["label"],
+                access_level=defaults["access_level"],
+                description=defaults.get("description"),
+                is_active=True,
+                is_future_ready=defaults.get("is_future_ready", False),
+                metadata_json=pricing_terms_json(defaults.get("metadata", [])),
+            )
+            db.session.add(rule)
+        else:
+            if not rule.label:
+                rule.label = defaults["label"]
+            if not rule.access_level:
+                rule.access_level = defaults["access_level"]
+            if not rule.description:
+                rule.description = defaults.get("description")
+            rule.updated_at = datetime.now()
+    db.session.commit()
+    return FeatureAccessRule.query.order_by(FeatureAccessRule.access_level.asc(), FeatureAccessRule.key.asc()).all()
+
+
+def is_contract_member_record(member):
+    contract_text = " ".join([member.contract_type or "", member.plan_type or ""]).lower()
+    return "6-month" in contract_text or "12-month" in contract_text or "contract" in contract_text and "no-contract" not in contract_text
+
+
+def member_access_profile(member):
+    levels = {"member"}
+    if is_contract_member_record(member):
+        levels.add("contract_member")
+    else:
+        levels.add("no_contract_member")
+    return sorted(levels)
+
+
+def pricing_item_access_tags(item):
+    tags = set()
+    visibility = set(pricing_visibility_list(item))
+    if "public" in visibility or "public_business" in visibility:
+        tags.add("public_basic")
+    if "members" in visibility and item.member_eligible:
+        tags.add("member")
+    if item.contract_only:
+        tags.add("contract_member")
+    if "staff_only" in visibility:
+        tags.add("staff")
+    if item.category_key == "external_trainer_b2b":
+        tags.discard("member")
+        tags.discard("contract_member")
+    return sorted(tags)
 
 
 def group_class_day_label(day_of_week, language=None):

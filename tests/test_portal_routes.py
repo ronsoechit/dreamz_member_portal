@@ -19,7 +19,7 @@ os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
 from translations import LANGUAGES, TRANSLATIONS  # noqa: E402
-from dreamz_portal import AppSetting, CancellationRequest, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, EmailLog, GroupClassOccurrence, GroupClassSchedule, GroupClassType, Member, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, PricingCategory, PricingItem, ScheduleChangeNotification, app, cancellation_message, coach_context_summary, coach_plan_for_member, coach_profile_completion, db, next_date_for_group_class, pricing_visibility_list, seed_group_class_schedule, seed_pricing_catalog  # noqa: E402
+from dreamz_portal import AppSetting, CancellationRequest, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, EmailLog, FeatureAccessRule, GroupClassOccurrence, GroupClassSchedule, GroupClassType, Member, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, PricingCategory, PricingItem, ScheduleChangeNotification, app, cancellation_message, coach_context_summary, coach_plan_for_member, coach_profile_completion, db, member_access_profile, next_date_for_group_class, pricing_item_access_tags, pricing_visibility_list, seed_feature_access_rules, seed_group_class_schedule, seed_pricing_catalog  # noqa: E402
 
 
 class FakeS3Body:
@@ -1859,6 +1859,59 @@ class PortalRouteTests(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("Membership options", body)
         self.assertIn("/membership-options", body)
+
+    def test_feature_access_rule_seed_creates_premium_readiness_foundation(self):
+        seed_feature_access_rules()
+
+        levels = {rule.access_level for rule in FeatureAccessRule.query.all()}
+        self.assertEqual(
+            levels,
+            {
+                "public_basic",
+                "member",
+                "contract_member",
+                "no_contract_member",
+                "staff",
+                "admin",
+                "internal_test",
+                "premium_future",
+            },
+        )
+        self.assertTrue(
+            FeatureAccessRule.query.filter_by(
+                key="premium_future_features",
+                access_level="premium_future",
+                is_future_ready=True,
+            ).one()
+        )
+
+        seed_feature_access_rules()
+
+        self.assertEqual(FeatureAccessRule.query.count(), 8)
+
+    def test_member_access_profile_distinguishes_contract_and_no_contract(self):
+        contract_member = self.add_member(
+            member_id="13659",
+            plan_type="contract Dreamz 12 m",
+            contract_type="12-months",
+        )
+        no_contract_member = self.add_member(
+            member_id="1206",
+            plan_type="no contract 1 month",
+            contract_type="No-Contract",
+        )
+
+        self.assertEqual(member_access_profile(contract_member), ["contract_member", "member"])
+        self.assertEqual(member_access_profile(no_contract_member), ["member", "no_contract_member"])
+
+    def test_pricing_item_access_tags_do_not_treat_b2b_package_as_member_upgrade(self):
+        seed_pricing_catalog()
+        external = PricingItem.query.filter_by(seed_key="b2b-external-personal-trainer-package").one()
+        contract = PricingItem.query.filter_by(seed_key="membership-6-month-contract").one()
+
+        self.assertEqual(pricing_item_access_tags(external), ["public_basic", "staff"])
+        self.assertIn("member", pricing_item_access_tags(contract))
+        self.assertIn("contract_member", pricing_item_access_tags(contract))
 
     def test_group_class_member_plan_attendance_and_notifications_models(self):
         self.add_member(member_id="13659", name="Ron Soechit")
