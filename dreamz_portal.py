@@ -5049,6 +5049,9 @@ def member_dashboard_context(member, staff_admin_view=False):
     policy_summary, policy_detail = cancellation_message_parts(policy, language=language)
     payment_status = localized_payment_status(payment_status_for_member(member), language)
     gym_balance = member.balance or 0.0
+    account_section = request.args.get("section", "").strip()
+    if account_section == "balance":
+        account_section = "gym-balance"
     cancellation_request = active_cancellation_request_for_member(member)
     cancellation_request_message = cancellation_request_member_message(cancellation_request, language=language)
     show_cancellation_section = (
@@ -5108,7 +5111,7 @@ def member_dashboard_context(member, staff_admin_view=False):
         "document_groups": member_document_groups(member),
         "payment_status": payment_status,
         "gym_balance": gym_balance,
-        "account_section": request.args.get("section", ""),
+        "account_section": account_section,
         "info": info,
         "sub": sub,
         "pay": pay,

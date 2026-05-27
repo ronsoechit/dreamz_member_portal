@@ -1545,7 +1545,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Open gym balance", body)
         self.assertIn("$63.50", body)
         self.assertIn("Pay at front desk", body)
-        self.assertIn("/account?section=balance", body)
+        self.assertIn("/account?section=gym-balance", body)
         self.assertIn("View balance", body)
 
     def test_member_nav_shows_account_badge_only_for_open_balance(self):
@@ -1558,6 +1558,7 @@ class PortalRouteTests(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("account-notification-badge", body)
         self.assertIn('aria-label="Account, 1 account notification"', body)
+        self.assertIn('href="/account?section=gym-balance"', body)
         self.assertIn('aria-hidden="true">1</span>', body)
         self.assertNotIn("Account1", re.sub(r"\s+", "", body))
 
@@ -1577,17 +1578,25 @@ class PortalRouteTests(unittest.TestCase):
         )
         self.login_as("13659")
 
-        response = self.client.get("/account?section=balance")
+        response = self.client.get("/account?section=gym-balance")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn('id="balance"', body)
+        self.assertIn('id="gym-balance"', body)
         self.assertIn("account-target-highlight", body)
         self.assertIn("Open gym balance", body)
+        self.assertIn("Gym purchases balance", body)
         self.assertIn("$67.50", body)
         self.assertIn("31 May 2026", body)
         self.assertIn("Pay at front desk", body)
-        self.assertIn("Online payment is not available", body)
+        self.assertIn("Please settle this at the front desk", body)
+        self.assertNotIn("Pay now", body)
+
+        legacy_response = self.client.get("/account?section=balance")
+        legacy_body = legacy_response.get_data(as_text=True)
+        self.assertEqual(legacy_response.status_code, 200)
+        self.assertIn('id="gym-balance"', legacy_body)
+        self.assertIn("account-target-highlight", legacy_body)
 
     def test_cancel_before_fixed_term_window_notifies_admin(self):
         today = date.today()
@@ -1846,7 +1855,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Add-on Group PT 5x a week", body)
         self.assertIn("First-time registration fee", body)
         self.assertIn("Membership changes and payments are currently handled", body)
-        self.assertIn("/account?section=balance", body)
+        self.assertIn("/account?section=gym-balance", body)
         self.assertIn("/pricing", body)
         self.assertNotIn("External Personal Trainer Package", body)
         self.assertNotIn("Pay now", body)
@@ -1861,6 +1870,10 @@ class PortalRouteTests(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("Membership options", body)
         self.assertIn("/membership-options", body)
+        self.assertLess(body.index("Membership options"), body.index("Documents"))
+        self.assertLess(body.index("Membership options"), body.index("Password and security"))
+        self.assertIn("No documents available yet.", body)
+        self.assertNotIn("Documents 0", body)
 
     def test_feature_access_rule_seed_creates_premium_readiness_foundation(self):
         seed_feature_access_rules()

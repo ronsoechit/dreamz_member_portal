@@ -8,26 +8,17 @@
 {% endmacro %}
 
 <section class="account-stack mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-  <details class="dashboard-card account-details-card bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6" {% if staff_admin_view %}open{% endif %}>
-    <summary>
-      <span>{{ t('member_information') }}</span>
-      <small>{{ display_name }}</small>
-    </summary>
-    <div class="mt-4">
-      {{ field_rows([
-        (t('member_id'), member.member_id),
-        (t('name'), display_name),
-        (t('email'), member.email or t('not_available')),
-        (t('phone'), member.phone or t('not_available')),
-        (t('mobile'), member.mobile or t('not_available')),
-        (t('visits'), member.visits or t('not_available'))
-      ]) }}
-    </div>
-  </details>
+  {% if not staff_admin_view and gym_balance > 0 %}
+    <a href="{{ url_for('member_account', section='gym-balance') }}" class="lg:col-span-2 rounded-lg border border-red-400/40 bg-red-500/10 p-4 text-sm leading-6 text-red-50 transition hover:border-red-300">
+      <div class="font-semibold text-red-100">{{ t('open_gym_balance') }} &middot; {{ '$%.2f'|format(gym_balance) }}</div>
+      <p class="mt-1">{{ t('gym_balance_open_notice')|replace('{amount}', '$%.2f'|format(gym_balance)) }}</p>
+      <span class="mt-3 inline-flex rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black">{{ t('view_balance') }}</span>
+    </a>
+  {% endif %}
 
   <details id="membership" class="dashboard-card account-details-card bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6" open>
     <summary>
-      <span>{{ t('subscription_details') }}</span>
+      <span>{{ t('current_membership') }}</span>
       <small>{{ member.contract_type }}</small>
     </summary>
     <div class="mt-4">
@@ -45,6 +36,43 @@
         (t('contract_begin'), member.start_date|format_date or t('not_available')),
         (t('contract_end'), contract_end|trim)
       ]) }}
+    </div>
+  </details>
+
+  {% if not staff_admin_view %}
+    <section class="rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('member_pricing_label') }}</div>
+          <h3 class="mt-1 text-xl font-semibold text-white">{{ t('member_pricing_title') }}</h3>
+          <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('member_pricing_account_intro') }}</p>
+        </div>
+        <a class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400" href="{{ url_for('member_membership_options') }}">
+          {{ t('view_membership_options') }}
+        </a>
+      </div>
+    </section>
+  {% endif %}
+
+  <details id="gym-balance" class="dashboard-card account-details-card bg-gray-800 bg-opacity-40 border {% if account_section == 'gym-balance' %}account-target-highlight border-yellow-500/70{% else %}border-gray-700{% endif %} rounded-lg p-6" {% if gym_balance > 0 or account_section == 'gym-balance' or staff_admin_view %}open{% endif %}>
+    <summary>
+      <span>{{ t('gym_balance') }}</span>
+      <small>{{ '$%.2f'|format(gym_balance) if gym_balance > 0 else t('no_open_gym_balance') }}</small>
+    </summary>
+    <div class="mt-4">
+      {{ field_rows([
+        (t('amount'), '$%.2f'|format(gym_balance)),
+        (t('open_balance_label'), t('open_gym_balance') if gym_balance > 0 else t('no_open_gym_balance')),
+        (t('due_date'), payment_status.get('due_date')|format_date or t('not_available')),
+        (t('payment_method'), t('pay_at_front_desk'))
+      ]) }}
+      <div class="mt-4 rounded-lg border border-yellow-500/25 bg-yellow-500/10 p-4 text-sm leading-6 text-yellow-50">
+        <div class="font-semibold text-yellow-300">{{ t('gym_purchases_balance') }}</div>
+        <p class="mt-1">{{ t('gym_balance_open_notice')|replace('{amount}', '$%.2f'|format(gym_balance)) if gym_balance > 0 else t('gym_balance_frontdesk_note') }}</p>
+        {% if gym_balance > 0 %}
+          <a href="{{ url_for('member_account', section='gym-balance') }}" class="mt-3 inline-flex rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black">{{ t('pay_at_front_desk') }}</a>
+        {% endif %}
+      </div>
     </div>
   </details>
 
@@ -68,32 +96,10 @@
     </div>
   </details>
 
-  <details id="balance" class="dashboard-card account-details-card bg-gray-800 bg-opacity-40 border {% if account_section == 'balance' %}account-target-highlight border-yellow-500/70{% else %}border-gray-700{% endif %} rounded-lg p-6" {% if gym_balance > 0 or account_section == 'balance' or staff_admin_view %}open{% endif %}>
-    <summary>
-      <span>{{ t('gym_balance') }}</span>
-      <small>{{ '$%.2f'|format(gym_balance) if gym_balance > 0 else t('no_open_gym_balance') }}</small>
-    </summary>
-    <div class="mt-4">
-      {{ field_rows([
-        (t('amount'), '$%.2f'|format(gym_balance)),
-        (t('open_balance_label'), t('open_gym_balance') if gym_balance > 0 else t('no_open_gym_balance')),
-        (t('due_date'), payment_status.get('due_date')|format_date or t('not_available')),
-        (t('payment_method'), t('pay_at_front_desk'))
-      ]) }}
-      <div class="mt-4 rounded-lg border border-yellow-500/25 bg-yellow-500/10 p-4 text-sm leading-6 text-yellow-50">
-        <div class="font-semibold text-yellow-300">{{ t('gym_balance_frontdesk_title') }}</div>
-        <p class="mt-1">{{ t('gym_balance_frontdesk_note') }}</p>
-        {% if gym_balance > 0 %}
-          <span class="mt-3 inline-flex rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black">{{ t('pay_at_front_desk') }}</span>
-        {% endif %}
-      </div>
-    </div>
-  </details>
-
   <details class="dashboard-card account-details-card bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6" {% if staff_admin_view %}open{% endif %}>
     <summary>
       <span>{{ t('documents') }}</span>
-      <small>{{ document_groups|length if document_groups else 0 }}</small>
+      <small>{{ document_groups|length if document_groups else t('documents_empty') }}</small>
     </summary>
     <div class="mt-4">
       {% if document_groups %}
@@ -128,42 +134,29 @@
       {% endif %}
     </div>
   </details>
+
+  <details class="dashboard-card account-details-card bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6" {% if staff_admin_view %}open{% endif %}>
+    <summary>
+      <span>{{ t('member_information') }}</span>
+      <small>{{ display_name }}</small>
+    </summary>
+    <div class="mt-4">
+      {{ field_rows([
+        (t('member_id'), member.member_id),
+        (t('name'), display_name),
+        (t('email'), member.email or t('not_available')),
+        (t('phone'), member.phone or t('not_available')),
+        (t('mobile'), member.mobile or t('not_available')),
+        (t('visits'), member.visits or t('not_available'))
+      ]) }}
+    </div>
+  </details>
 </section>
 
-{% if not staff_admin_view %}
-  <section class="mb-5 rounded-lg border border-gray-700 bg-gray-800/40 p-5">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div>
-        <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('member_pricing_label') }}</div>
-        <h3 class="mt-1 text-xl font-semibold text-white">{{ t('member_pricing_title') }}</h3>
-        <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('member_pricing_account_intro') }}</p>
-      </div>
-      <a class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400" href="{{ url_for('member_membership_options') }}">
-        {{ t('view_membership_options') }}
-      </a>
-    </div>
-  </section>
-
-  <section class="account-security-grid mb-5 grid gap-4 lg:grid-cols-2">
-    <article class="dashboard-card rounded-lg border border-gray-700 bg-gray-800/40 p-5">
-      <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('security') }}</div>
-      <h3 class="mt-1 text-xl font-semibold text-white">{{ t('password_security') }}</h3>
-      <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('password_security_intro') }}</p>
-      <a class="mt-4 inline-flex rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black" href="{{ url_for('set_member_password') }}">{{ t('change_password') }}</a>
-    </article>
-    <article class="dashboard-card rounded-lg border border-gray-700 bg-gray-800/40 p-5">
-      <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('account') }}</div>
-      <h3 class="mt-1 text-xl font-semibold text-white">{{ t('sign_out') }}</h3>
-      <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('logout_intro') }}</p>
-      <a class="mt-4 inline-flex rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200" href="{{ url_for('logout') }}">{{ t('logout') }}</a>
-    </article>
-  </section>
-{% endif %}
-
 {% if show_cancellation_section %}
-  <section class="dashboard-card policy-card bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">
+  <section class="dashboard-card policy-card bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6 mb-5">
     <div class="mb-4">
-      <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('manage_contract') }}</div>
+      <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('agreements_rules') }}</div>
       <h3 class="mt-1 text-xl font-semibold text-yellow-400">{{ t('cancellation_policy') }}</h3>
     </div>
 
@@ -250,5 +243,22 @@
         </p>
       </div>
     {% endif %}
+  </section>
+{% endif %}
+
+{% if not staff_admin_view %}
+  <section class="account-security-grid mb-5 grid gap-4 lg:grid-cols-2">
+    <article class="dashboard-card rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+      <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('security') }}</div>
+      <h3 class="mt-1 text-xl font-semibold text-white">{{ t('password_security') }}</h3>
+      <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('password_security_intro') }}</p>
+      <a class="mt-4 inline-flex rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black" href="{{ url_for('set_member_password') }}">{{ t('change_password') }}</a>
+    </article>
+    <article class="dashboard-card rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+      <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('account') }}</div>
+      <h3 class="mt-1 text-xl font-semibold text-white">{{ t('sign_out') }}</h3>
+      <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('logout_intro') }}</p>
+      <a class="mt-4 inline-flex rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200" href="{{ url_for('logout') }}">{{ t('logout') }}</a>
+    </article>
   </section>
 {% endif %}

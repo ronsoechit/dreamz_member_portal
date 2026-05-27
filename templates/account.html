@@ -12,10 +12,10 @@
 </section>
 
 {% include "_account_sections.html" %}
-{% if account_section == 'balance' %}
+{% if account_section == 'gym-balance' %}
   <script>
     window.addEventListener("DOMContentLoaded", () => {
-      const balanceSection = document.getElementById("balance");
+      const balanceSection = document.getElementById("gym-balance");
       if (balanceSection) {
         balanceSection.open = true;
         balanceSection.scrollIntoView({ behavior: "smooth", block: "center" });
