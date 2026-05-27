@@ -131,6 +131,19 @@
 </section>
 
 {% if not staff_admin_view %}
+  <section class="mb-5 rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('member_pricing_label') }}</div>
+        <h3 class="mt-1 text-xl font-semibold text-white">{{ t('member_pricing_title') }}</h3>
+        <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('member_pricing_account_intro') }}</p>
+      </div>
+      <a class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400" href="{{ url_for('member_membership_options') }}">
+        {{ t('view_membership_options') }}
+      </a>
+    </div>
+  </section>
+
   <section class="account-security-grid mb-5 grid gap-4 lg:grid-cols-2">
     <article class="dashboard-card rounded-lg border border-gray-700 bg-gray-800/40 p-5">
       <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('security') }}</div>

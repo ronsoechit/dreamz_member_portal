@@ -1815,6 +1815,51 @@ class PortalRouteTests(unittest.TestCase):
                 self.assertIn(TRANSLATIONS[language]["public_pricing_title"], body)
                 self.assertIn(TRANSLATIONS[language]["contact_front_desk"], body)
 
+    def test_member_pricing_options_require_login(self):
+        response = self.client.get("/membership-options")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response.headers["Location"])
+
+    def test_member_pricing_options_show_relevant_member_catalog(self):
+        self.add_member(
+            member_id="13659",
+            name="Ron Soechit",
+            plan_type="contract Dreamz 6 months",
+            contract_type="6-months",
+            billing_amount=70,
+            balance=67.50,
+        )
+        self.login_as("13659")
+        seed_pricing_catalog()
+
+        response = self.client.get("/membership-options")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Membership options", body)
+        self.assertIn("contract Dreamz 6 months", body)
+        self.assertIn("No contract / 1 month", body)
+        self.assertIn("6 months contract - MCB Direct Debit", body)
+        self.assertIn("Add-on Group PT 5x a week", body)
+        self.assertIn("First-time registration fee", body)
+        self.assertIn("Membership changes and payments are currently handled", body)
+        self.assertIn("/account?section=balance", body)
+        self.assertIn("/pricing", body)
+        self.assertNotIn("External Personal Trainer Package", body)
+        self.assertNotIn("Pay now", body)
+
+    def test_account_links_to_member_pricing_options(self):
+        self.add_member(member_id="13659")
+        self.login_as("13659")
+
+        response = self.client.get("/account")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Membership options", body)
+        self.assertIn("/membership-options", body)
+
     def test_group_class_member_plan_attendance_and_notifications_models(self):
         self.add_member(member_id="13659", name="Ron Soechit")
         seed_group_class_schedule()

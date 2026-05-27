@@ -1403,6 +1403,29 @@ def public_pricing_context():
     }
 
 
+def member_pricing_context(member):
+    ensure_runtime_schema()
+    items = [
+        item for item in active_pricing_items_for_visibility(["members"])
+        if item.member_eligible and item.category_key != "external_trainer_b2b"
+    ]
+    return {
+        "member": member,
+        "display_name": display_member_name(member.name),
+        "current_membership": {
+            "plan_type": member.plan_type or translated_text("not_available", current_language()),
+            "contract_type": member.contract_type or translated_text("not_available", current_language()),
+            "billing_amount": member.billing_amount or 0,
+            "next_payment": member.next_payment or compute_next_payment(member),
+        },
+        "membership_options": [item for item in items if item.category_key in {"memberships", "mcb_direct_debit_contracts", "under_18"}],
+        "addon_options": [item for item in items if item.category_key in {"group_class_add_ons", "personal_training"}],
+        "fee_options": [item for item in items if item.category_key == "fees_other"],
+        "pricing_terms_list": pricing_terms_list,
+        "gym_balance": member.balance or 0,
+    }
+
+
 def seed_pricing_catalog():
     metadata = {
         "pricing_catalog_source": PRICING_CATALOG_SOURCE,
@@ -5982,6 +6005,14 @@ def member_account():
         return redirect_response
 
     return render_template("account.html", **member_dashboard_context(member))
+
+
+@app.get("/membership-options")
+def member_membership_options():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    return render_template("membership_options.html", **member_pricing_context(member))
 
 
 @app.get("/group-classes")

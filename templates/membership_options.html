@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}{{ t('member_pricing_title') }} | Dreamz Fitness{% endblock %}
+
+{% macro member_option_card(item) %}
+  {% set terms = pricing_terms_list(item) %}
+  <article class="rounded-lg border border-gray-700 bg-gray-900/60 p-5">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div>
+        <h3 class="text-lg font-semibold text-white">{{ item.name }}</h3>
+        {% if item.description %}
+          <p class="mt-2 text-sm leading-6 text-gray-300">{{ item.description }}</p>
+        {% endif %}
+      </div>
+      <div class="shrink-0 rounded border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-right">
+        <div class="text-2xl font-bold text-yellow-300">${{ '%.2f'|format(item.price_amount or 0) }}</div>
+        <div class="text-xs font-semibold uppercase tracking-wide text-yellow-100">{{ t('pricing_interval_' ~ item.billing_interval) }}</div>
+      </div>
+    </div>
+    {% if terms %}
+      <details class="mt-4 rounded border border-gray-800 bg-black/20 p-3">
+        <summary class="cursor-pointer text-sm font-semibold text-yellow-300">{{ t('pricing_view_terms') }}</summary>
+        <ul class="mt-3 space-y-2 text-sm leading-6 text-gray-300">
+          {% for term in terms %}
+            <li>{{ term }}</li>
+          {% endfor %}
+        </ul>
+      </details>
+    {% endif %}
+    <div class="mt-4">
+      <span class="inline-flex rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black">{{ t('request_change') }}</span>
+    </div>
+  </article>
+{% endmacro %}
+
+{% block content %}
+<section class="mb-6 flex flex-col gap-4 rounded-lg border border-yellow-500/30 bg-gray-900/70 p-6 sm:flex-row sm:items-center sm:justify-between">
+  <div>
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-400">{{ t('member_pricing_label') }}</div>
+    <h2 class="mt-1 text-2xl font-semibold text-white">{{ t('member_pricing_title') }}</h2>
+    <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-300">{{ t('member_pricing_intro') }}</p>
+  </div>
+  <a class="rounded border border-gray-700 bg-gray-950 px-4 py-3 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('public_pricing') }}">{{ t('view_full_pricing') }}</a>
+</section>
+
+<section class="mb-6 grid gap-4 lg:grid-cols-3">
+  <article class="rounded-lg border border-gray-700 bg-gray-800/50 p-5">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('current_membership') }}</div>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ current_membership.plan_type }}</h3>
+    <dl class="mt-4 grid gap-y-2 text-sm" style="grid-template-columns: 9rem minmax(0, 1fr);">
+      <dt class="font-semibold text-gray-300">{{ t('contract_type') }}:</dt>
+      <dd>{{ current_membership.contract_type }}</dd>
+      <dt class="font-semibold text-gray-300">{{ t('billing_amount') }}:</dt>
+      <dd>${{ '%.2f'|format(current_membership.billing_amount) }}</dd>
+      <dt class="font-semibold text-gray-300">{{ t('next_membership_payment') }}:</dt>
+      <dd>{{ current_membership.next_payment|format_date or t('not_available') }}</dd>
+    </dl>
+  </article>
+  <article class="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-5 lg:col-span-2">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('contact_front_desk') }}</div>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ t('frontdesk_membership_notice_title') }}</h3>
+    <p class="mt-2 text-sm leading-6 text-yellow-50">{{ t('frontdesk_membership_notice') }}</p>
+    {% if gym_balance > 0 %}
+      <a class="mt-4 inline-flex rounded border border-yellow-500/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200" href="{{ url_for('member_account', section='balance') }}">{{ t('view_balance') }}</a>
+    {% endif %}
+  </article>
+</section>
+
+{% set sections = [
+  ('available_membership_options', membership_options),
+  ('available_addons', addon_options),
+  ('fees_and_rules', fee_options)
+] %}
+{% for title_key, items in sections %}
+  {% if items %}
+    <section class="mb-8">
+      <div class="mb-4">
+        <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t(title_key) }}</div>
+      </div>
+      <div class="grid gap-4 lg:grid-cols-3">
+        {% for item in items %}
+          {{ member_option_card(item) }}
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+{% endfor %}
+{% endblock %}
