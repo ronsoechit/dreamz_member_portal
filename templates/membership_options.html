@@ -70,6 +70,15 @@
   ('available_addons', addon_options),
   ('fees_and_rules', fee_options)
 ] %}
+{% set has_member_options = membership_options or addon_options or fee_options %}
+{% if not has_member_options %}
+  <section class="mb-8 rounded-lg border border-gray-700 bg-gray-900/60 p-5">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('membership_options') }}</div>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ t('membership_options_empty_title') }}</h3>
+    <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('membership_options_empty_body') }}</p>
+    <a class="mt-4 inline-flex rounded border border-gray-700 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('member_account') }}">{{ t('view_account') }}</a>
+  </section>
+{% endif %}
 {% for title_key, items in sections %}
   {% if items %}
     <section class="mb-8">

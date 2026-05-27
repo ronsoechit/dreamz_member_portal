@@ -895,7 +895,7 @@ DEFAULT_SETTINGS = {
 DEFAULT_PORTAL_TIMEZONE_OFFSET_HOURS = -4
 STALE_SYNC_RUN_MINUTES = 15
 LOGIN_CODE_RESEND_COOLDOWN_SECONDS = 60
-COACH_PLAN_SCHEMA_VERSION = "2026-05-27a"
+COACH_PLAN_SCHEMA_VERSION = "2026-05-27b"
 GROUP_CLASS_SCHEDULE_NAME = "Dreamz Fitness Group Class Schedule"
 GROUP_CLASS_SCHEDULE_SOURCE = "uploaded PDF schedule converted to database seed"
 GROUP_CLASS_SCHEDULE_TIMEZONE = "America/Kralendijk"
@@ -2150,11 +2150,20 @@ def public_pricing_context():
 
 
 def member_pricing_context(member):
-    ensure_runtime_schema()
-    items = [
-        item for item in active_pricing_items_for_visibility(["members"])
-        if item.member_eligible and item.category_key != "external_trainer_b2b"
-    ]
+    try:
+        ensure_runtime_schema()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Runtime schema unavailable while rendering member pricing.")
+    try:
+        items = [
+            item for item in active_pricing_items_for_visibility(["members"])
+            if item.member_eligible and item.category_key != "external_trainer_b2b"
+        ]
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Member pricing catalog unavailable; rendering empty member pricing page.")
+        items = []
     return {
         "member": member,
         "display_name": display_member_name(member.name),
@@ -2326,37 +2335,56 @@ def printable_agreement_pdf(document_type, language, application=None):
 
 
 def member_agreements_context(member):
-    ensure_runtime_schema()
+    try:
+        ensure_runtime_schema()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Runtime schema unavailable while rendering member agreements.")
     language = current_language()
     document_types = member_relevant_legal_document_types(member)
-    documents = (
-        LegalDocument.query
-        .filter(LegalDocument.active.is_(True))
-        .filter(LegalDocument.document_type.in_(document_types))
-        .order_by(LegalDocument.sort_order.asc(), LegalDocument.title.asc())
-        .all()
-    )
+    try:
+        documents = (
+            LegalDocument.query
+            .filter(LegalDocument.active.is_(True))
+            .filter(LegalDocument.document_type.in_(document_types))
+            .order_by(LegalDocument.sort_order.asc(), LegalDocument.title.asc())
+            .all()
+        )
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Legal documents unavailable; rendering empty agreements center.")
+        documents = []
     agreement_cards = []
     for document in documents:
-        version = current_legal_version(document)
-        translation = legal_translation_for_version(version, language)
+        version = optional_dashboard_value("agreement_version", None, lambda document=document: current_legal_version(document))
+        translation = optional_dashboard_value("agreement_translation", None, lambda version=version: legal_translation_for_version(version, language))
         agreement_cards.append({
             "document": document,
             "version": version,
             "translation": translation,
             "accepted": (
-                MemberAgreementAcceptance.query
-                .filter_by(member_id=member.member_id, legal_document_version_id=version.id)
-                .order_by(MemberAgreementAcceptance.accepted_at.desc())
-                .first()
+                optional_dashboard_value(
+                    "agreement_acceptance",
+                    None,
+                    lambda version=version: (
+                        MemberAgreementAcceptance.query
+                        .filter_by(member_id=member.member_id, legal_document_version_id=version.id)
+                        .order_by(MemberAgreementAcceptance.accepted_at.desc())
+                        .first()
+                    ),
+                )
                 if version else None
             ),
         })
-    signed_documents = (
-        MemberSignedDocument.query
-        .filter_by(member_id=member.member_id)
-        .order_by(MemberSignedDocument.signed_at.desc(), MemberSignedDocument.uploaded_at.desc())
-        .all()
+    signed_documents = optional_dashboard_value(
+        "signed_documents",
+        [],
+        lambda: (
+            MemberSignedDocument.query
+            .filter_by(member_id=member.member_id)
+            .order_by(MemberSignedDocument.signed_at.desc(), MemberSignedDocument.uploaded_at.desc())
+            .all()
+        ),
     )
     policy = cancellation_policy_for_member(member)
     policy_summary, policy_detail = cancellation_message_parts(policy, language=language)
@@ -2371,7 +2399,11 @@ def member_agreements_context(member):
         "cancel_window_open": fmt_policy_date(policy.window_open, language),
         "cancel_window_close": fmt_policy_date(policy.last_request_date, language),
         "current_term_end": fmt_policy_date(policy.current_term_end, language),
-        "cancellation_request": active_cancellation_request_for_member(member),
+        "cancellation_request": optional_dashboard_value(
+            "agreement_cancellation_request",
+            None,
+            lambda: active_cancellation_request_for_member(member),
+        ),
         "gym_balance": member.balance or 0,
         "is_contract_member": is_contract_member_record(member),
     }
@@ -4096,6 +4128,144 @@ def pregnancy_safety_status(profile):
     return "active"
 
 
+def member_age_years(member, today=None):
+    birthdate = getattr(member, "birthdate", None)
+    if not birthdate:
+        return None
+    today = today or date.today()
+    return today.year - birthdate.year - ((today.month, today.day) < (birthdate.month, birthdate.day))
+
+
+def nutrition_target_numbers(member, profile):
+    age = member_age_years(member)
+    weight = profile.weight_kg if profile else None
+    height = profile.height_cm if profile else None
+    sex = profile.sex if profile else None
+    training_days = profile.training_days if profile else None
+    goal = profile.nutrition_goal if profile else None
+    missing = []
+    for key, value in [
+        ("coach_sex_label", sex),
+        ("coach_current_weight_kg", weight),
+        ("coach_height_cm", height),
+        ("date_of_birth", age),
+    ]:
+        if value in (None, ""):
+            missing.append(key)
+
+    calories = None
+    if age and weight and height and sex in {"male", "female"}:
+        base = (10 * weight) + (6.25 * height) - (5 * age) + (5 if sex == "male" else -161)
+        activity = 1.35 + min(max(training_days or 0, 0), 6) * 0.04
+        calories = round((base * activity) / 50) * 50
+        if goal == "muscle_gain":
+            calories += 200
+        elif goal == "fat_loss" and not is_pregnant_profile(profile):
+            calories -= 300
+        elif is_pregnant_profile(profile):
+            calories += 250 if (profile.gestational_weeks or 0) >= 14 else 0
+
+    protein = round((weight or 75) * (1.8 if goal == "muscle_gain" else 1.6))
+    fat = round((weight or 75) * 0.8)
+    carbs = round((calories - (protein * 4) - (fat * 9)) / 4) if calories else None
+    if carbs is not None and carbs < 120:
+        carbs = 120
+    return {
+        "calories": calories,
+        "protein": protein,
+        "carbs": carbs,
+        "fat": fat,
+        "hydration_liters": 3.0 if (training_days or 0) >= 4 else 2.5,
+        "missing": missing,
+    }
+
+
+def macro_split(total, shares):
+    if not total:
+        return [None for _ in shares]
+    return [round(total * share) for share in shares]
+
+
+def personalized_nutrition_meal_plan(member, profile, language=None):
+    language = language or current_language()
+    targets = nutrition_target_numbers(member, profile)
+    calorie_parts = macro_split(targets["calories"], [0.24, 0.31, 0.33, 0.12])
+    protein_parts = macro_split(targets["protein"], [0.25, 0.30, 0.30, 0.15])
+    carb_parts = macro_split(targets["carbs"], [0.25, 0.35, 0.30, 0.10])
+    fat_parts = macro_split(targets["fat"], [0.25, 0.25, 0.35, 0.15])
+    goal = profile.nutrition_goal or "healthier"
+    is_pregnant = is_pregnant_profile(profile)
+    meals = [
+        {
+            "title": translated_text("meal_breakfast", language),
+            "name": translated_text("meal_breakfast_name", language),
+            "foods": translated_text("meal_breakfast_foods", language),
+            "portions": translated_text("meal_breakfast_portions", language),
+        },
+        {
+            "title": translated_text("meal_lunch", language),
+            "name": translated_text("meal_lunch_name", language),
+            "foods": translated_text("meal_lunch_foods", language),
+            "portions": translated_text("meal_lunch_portions", language),
+        },
+        {
+            "title": translated_text("meal_dinner", language),
+            "name": translated_text("meal_dinner_name", language),
+            "foods": translated_text("meal_dinner_foods", language),
+            "portions": translated_text("meal_dinner_portions", language),
+        },
+        {
+            "title": translated_text("meal_snacks", language),
+            "name": translated_text("meal_snacks_name", language),
+            "foods": translated_text("meal_snacks_foods", language),
+            "portions": translated_text("meal_snacks_portions", language),
+        },
+    ]
+    for index, meal in enumerate(meals):
+        meal.update({
+            "calories": calorie_parts[index],
+            "protein": protein_parts[index],
+            "carbs": carb_parts[index],
+            "fat": fat_parts[index],
+        })
+    missing_labels = [translated_text(key, language) for key in targets["missing"]]
+    return {
+        "summary": translated_text(
+            "meal_plan_personalized_summary",
+            language,
+            goal=coach_label("nutrition", goal, language).lower(),
+            days=profile.training_days or translated_text("not_available", language),
+        ),
+        "missing_data": missing_labels,
+        "targets": targets,
+        "meals": meals,
+        "alternatives": [
+            {
+                "title": translated_text("meal_plan_budget_alternative", language),
+                "body": translated_text("meal_plan_budget_body", language),
+            },
+            {
+                "title": translated_text("meal_plan_vegetarian_alternative", language),
+                "body": translated_text("meal_plan_vegetarian_body", language),
+            },
+            {
+                "title": translated_text("meal_plan_quick_alternative", language),
+                "body": translated_text("meal_plan_quick_body", language),
+            },
+        ],
+        "pregnancy_note": (
+            translated_text("meal_plan_pregnancy_note", language)
+            if is_pregnant else ""
+        ),
+        "profile_note": translated_text(
+            "meal_plan_profile_note",
+            language,
+            preference=profile.dietary_preferences or translated_text("not_available", language),
+            allergies=profile.allergies or translated_text("not_available", language),
+        ),
+    }
+
+
 def pregnancy_context_summary(profile):
     if not is_pregnant_profile(profile):
         if not profile:
@@ -4304,7 +4474,7 @@ def coach_pregnancy_safety_plan(profile, language=None):
     ]
 
 
-def coach_personal_plan(profile, language=None):
+def coach_personal_plan(profile, member=None, language=None):
     language = language or current_language()
     if not profile:
         return None
@@ -4386,6 +4556,7 @@ def coach_personal_plan(profile, language=None):
         {
             "title": translated_text("coach_plan_nutrition_title", language),
             "items": nutrition_items,
+            "meal_plan": personalized_nutrition_meal_plan(member, profile, language) if member else None,
         },
         {
             "title": translated_text("coach_plan_notes_title", language),
@@ -4412,6 +4583,50 @@ def clean_coach_plan_items(items, fallback_items, limit=6):
     if cleaned:
         return cleaned
     return list(fallback_items or [])[:limit]
+
+
+def normalize_ai_meal_plan(value, fallback):
+    if not isinstance(value, dict):
+        return fallback
+    plan = dict(fallback or {})
+    if isinstance(value.get("summary"), str) and value["summary"].strip():
+        plan["summary"] = clean_coach_plan_text(value["summary"], plan.get("summary"), 420)
+    if isinstance(value.get("targets"), dict) and isinstance(plan.get("targets"), dict):
+        targets = dict(plan["targets"])
+        for key in ["calories", "protein", "carbs", "fat", "hydration_liters"]:
+            if value["targets"].get(key) not in (None, ""):
+                targets[key] = value["targets"].get(key)
+        plan["targets"] = targets
+    if isinstance(value.get("meals"), list) and value["meals"]:
+        meals = []
+        fallback_meals = plan.get("meals") or []
+        for index, source in enumerate(value["meals"][:5]):
+            if not isinstance(source, dict):
+                continue
+            fallback_meal = fallback_meals[index] if index < len(fallback_meals) else {}
+            meal = dict(fallback_meal)
+            for key in ["title", "name", "foods", "portions"]:
+                meal[key] = clean_coach_plan_text(source.get(key), meal.get(key), 260)
+            for key in ["calories", "protein", "carbs", "fat"]:
+                if source.get(key) not in (None, ""):
+                    meal[key] = source.get(key)
+            meals.append(meal)
+        if meals:
+            plan["meals"] = meals
+    if isinstance(value.get("alternatives"), list) and value["alternatives"]:
+        alternatives = []
+        fallback_alternatives = plan.get("alternatives") or []
+        for index, source in enumerate(value["alternatives"][:4]):
+            if not isinstance(source, dict):
+                continue
+            fallback_alt = fallback_alternatives[index] if index < len(fallback_alternatives) else {}
+            alternatives.append({
+                "title": clean_coach_plan_text(source.get("title"), fallback_alt.get("title"), 120),
+                "body": clean_coach_plan_text(source.get("body"), fallback_alt.get("body"), 360),
+            })
+        if alternatives:
+            plan["alternatives"] = alternatives
+    return plan
 
 
 def extract_json_object(text):
@@ -4503,6 +4718,7 @@ def normalize_ai_coach_plan(data, fallback_plan, language=None):
         {
             "title": clean_coach_plan_text(ai_nutrition.get("title"), fallback_nutrition.get("title"), 140),
             "items": clean_coach_plan_items(ai_nutrition.get("items"), fallback_nutrition.get("items"), limit=7),
+            "meal_plan": normalize_ai_meal_plan(ai_nutrition.get("meal_plan"), fallback_nutrition.get("meal_plan")),
         },
         {
             "title": clean_coach_plan_text(ai_notes.get("title"), fallback_notes.get("title"), 140),
@@ -4557,7 +4773,10 @@ def generate_openai_coach_plan(member, profile, fallback_plan, language=None):
         "JSON schema: {"
         "\"training\":{\"title\":\"...\",\"sessions\":[{\"focus\":\"...\",\"minutes\":45,\"warmup\":\"...\",\"main\":\"...\",\"cooldown\":\"...\","
         "\"exercises\":[{\"name\":\"...\",\"equipment\":\"...\",\"sets\":\"...\",\"reps\":\"...\",\"rest\":\"...\",\"load\":\"...\",\"cue\":\"...\"}]}]},"
-        "\"nutrition\":{\"title\":\"...\",\"items\":[\"...\"]},"
+        "\"nutrition\":{\"title\":\"...\",\"items\":[\"...\"],\"meal_plan\":{\"summary\":\"...\","
+        "\"targets\":{\"calories\":2500,\"protein\":150,\"carbs\":300,\"fat\":75,\"hydration_liters\":3},"
+        "\"meals\":[{\"title\":\"Breakfast\",\"name\":\"...\",\"foods\":\"...\",\"portions\":\"...\",\"calories\":600,\"protein\":35,\"carbs\":70,\"fat\":18}],"
+        "\"alternatives\":[{\"title\":\"Budget alternative\",\"body\":\"...\"}]}},"
         "\"notes\":{\"title\":\"...\",\"items\":[\"...\"]}"
         "}.\n\n"
         f"Language: {language}\n"
@@ -4595,7 +4814,7 @@ def coach_plan_for_member(member, profile, language=None, force=False):
     if not member or not profile:
         return None
 
-    fallback_plan = coach_personal_plan(profile, language=language)
+    fallback_plan = coach_personal_plan(profile, member=member, language=language)
     record = CoachPlan.query.filter_by(member_id=member.member_id).first()
     if record and not force and record.language == language and record.plan_version == COACH_PLAN_SCHEMA_VERSION:
         stored = stored_coach_plan(record)
@@ -6578,6 +6797,8 @@ def member_dashboard_context(member, staff_admin_view=False):
         "cancellation_summary": policy_summary,
         "cancellation_detail": policy_detail,
         "cancellation_policy": policy,
+        "current_term_end": fmt_policy_date(policy.current_term_end, language),
+        "membership_renewal_status": translated_text("automatic_renewal", language) if is_contract_member_record(member) else translated_text("not_available", language),
         "cancellation_request": cancellation_request,
         "cancellation_request_message": cancellation_request_message,
         "show_cancellation_section": show_cancellation_section,

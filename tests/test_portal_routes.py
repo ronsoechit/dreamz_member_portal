@@ -300,7 +300,15 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Your personal Dreamz trainer", body)
 
     def test_member_dashboard_shows_ready_coach_copy_when_profile_complete(self):
-        self.add_member(member_id="13659", name="Ron Soechit")
+        self.add_member(
+            member_id="13659",
+            name="Ron Soechit",
+            plan_type="contract Dreamz 6 months",
+            contract_type="6-months",
+            balance=67.50,
+            birthdate=date(1990, 1, 1),
+            end_date=date(2026, 6, 24),
+        )
         db.session.add(
             CoachProfile(
                 member_id="13659",
@@ -326,7 +334,51 @@ class PortalRouteTests(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("Continue your Dreamz training", body)
         self.assertIn("Start next workout", body)
+        self.assertIn("/coach?tab=nutrition#nutrition-plan", body)
+        self.assertIn("Membership status", body)
+        self.assertIn("Current membership", body)
+        self.assertIn("contract Dreamz 6 months", body)
+        self.assertIn("Current term ends", body)
+        self.assertIn("Open gym balance", body)
         self.assertNotIn("Set your goals, training rhythm", body)
+
+    def test_nutrition_deep_link_opens_personalized_meal_plan(self):
+        self.add_member(
+            member_id="13659",
+            name="Ron Soechit",
+            birthdate=date(1990, 1, 1),
+        )
+        db.session.add(
+            CoachProfile(
+                member_id="13659",
+                sex="male",
+                primary_goal="build_muscle",
+                experience_level="intermediate",
+                training_days=4,
+                session_minutes=60,
+                training_place="dreamz_gym",
+                height_cm=180,
+                weight_kg=85,
+                injuries="none",
+                nutrition_goal="muscle_gain",
+                dietary_preferences="local food",
+                allergies="none",
+            )
+        )
+        db.session.commit()
+        self.login_as("13659")
+
+        response = self.client.get("/coach?tab=nutrition")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('id="nutrition-plan"', body)
+        self.assertIn("Daily targets", body)
+        self.assertIn("Meal plan structure", body)
+        self.assertIn("Personalized for you", body)
+        self.assertIn("I followed this meal", body)
+        self.assertIn("Regenerate plan", body)
+        self.assertIn("This meal plan is built for muscle gain", body)
 
     def test_coach_page_requires_member_login(self):
         response = self.client.get("/coach")
@@ -2117,6 +2169,18 @@ class PortalRouteTests(unittest.TestCase):
         self.assertNotIn("External Personal Trainer Package", body)
         self.assertNotIn("Pay now", body)
 
+    def test_member_pricing_options_fail_closed_when_catalog_unavailable(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+
+        with patch("dreamz_portal.active_pricing_items_for_visibility", side_effect=SQLAlchemyError("catalog unavailable")):
+            response = self.client.get("/membership-options")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Membership options are being prepared", body)
+        self.assertIn("View account", body)
+
     def test_account_links_to_member_pricing_options(self):
         self.add_member(member_id="13659")
         self.login_as("13659")
@@ -2180,6 +2244,19 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Accepted", body)
         self.assertIn("/documents/signed/13659-contract.pdf", body)
         self.assertNotIn("External Personal Trainer Package Terms", body)
+
+    def test_member_agreements_center_fail_closed_when_version_lookup_fails(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        seed_legal_documents()
+        self.login_as("13659")
+
+        with patch("dreamz_portal.current_legal_version", side_effect=SQLAlchemyError("version unavailable")):
+            response = self.client.get("/account/agreements")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Agreements &amp; Rules", body)
+        self.assertIn("Missing", body)
 
     def test_digital_membership_application_blocks_savings_account_and_creates_signed_records(self):
         seed_pricing_catalog()
