@@ -53,6 +53,10 @@
       <dd>${{ '%.2f'|format(current_membership.billing_amount) }}</dd>
       <dt class="font-semibold text-gray-300">{{ t('next_membership_payment') }}:</dt>
       <dd>{{ current_membership.next_payment|format_date or t('not_available') }}</dd>
+      <dt class="font-semibold text-gray-300">{{ t('current_term_ends') }}:</dt>
+      <dd>{{ current_membership.current_term_end or t('not_available') }}</dd>
+      <dt class="font-semibold text-gray-300">{{ t('renewal') }}:</dt>
+      <dd>{{ current_membership.renewal_status }}</dd>
     </dl>
   </article>
   <article class="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-5 lg:col-span-2">
@@ -60,7 +64,7 @@
     <h3 class="mt-1 text-xl font-semibold text-white">{{ t('frontdesk_membership_notice_title') }}</h3>
     <p class="mt-2 text-sm leading-6 text-yellow-50">{{ t('frontdesk_membership_notice') }}</p>
     {% if gym_balance > 0 %}
-      <a class="mt-4 inline-flex rounded border border-yellow-500/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200" href="{{ url_for('member_account', section='gym-balance') }}">{{ t('view_balance') }}</a>
+      <a class="mt-4 inline-flex rounded border border-yellow-500/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200" href="{{ url_for('member_account', section='billing') }}">{{ t('view_balance') }}</a>
     {% endif %}
   </article>
 </section>

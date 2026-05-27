@@ -39,9 +39,62 @@
     <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('payment_direct_debit') }}</div>
     <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('payment_direct_debit_member_summary') }}</p>
     {% if gym_balance > 0 %}
-      <a class="mt-4 inline-flex rounded border border-yellow-500/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200" href="{{ url_for('member_account', section='gym-balance') }}">{{ t('view_balance') }}</a>
+      <a class="mt-4 inline-flex rounded border border-yellow-500/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200" href="{{ url_for('member_account', section='billing') }}">{{ t('view_balance') }}</a>
     {% endif %}
   </article>
+</section>
+
+<section id="cancellation" class="mb-6 rounded-lg border border-gray-700 bg-gray-800/50 p-5">
+  <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('member_cancellation_renewal') }}</div>
+  <h3 class="mt-1 text-xl font-semibold text-white">{{ t('manage_cancellation_request') }}</h3>
+  <p class="mt-2 text-sm leading-6 text-gray-300">{{ cancellation_detail }}</p>
+  {% if cancellation_request_message %}
+    <div class="mt-4 rounded border {% if cancellation_request_message.tone == 'confirmed' %}border-green-500/50 bg-green-500/10 text-green-100{% else %}border-yellow-500/50 bg-yellow-500/10 text-yellow-100{% endif %} p-4">
+      <div class="font-semibold">{{ cancellation_request_message.title }}</div>
+      <p class="mt-1 text-sm">{{ cancellation_request_message.body }}</p>
+    </div>
+  {% endif %}
+  {% if show_cancel %}
+    <form action="{{ url_for('cancel') }}" method="post" class="mt-4 space-y-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="member_id" value="{{ member.member_id }}">
+      <label class="block">
+        <span class="text-sm">{{ t('reason_for_cancellation') }}</span>
+        <select id="cancel-reason" name="reason" class="text-black mt-1 block w-full rounded p-2" required>
+          <option value="">{{ t('choose_reason') }}</option>
+          <option value="Moving away">{{ t('moving_away') }}</option>
+          <option value="Financial reasons">{{ t('financial_reasons') }}</option>
+          <option value="Not satisfied">{{ t('not_satisfied') }}</option>
+          <option value="Other">{{ t('other') }}</option>
+        </select>
+      </label>
+      <label id="other-reason-field" class="hidden block">
+        <span class="text-sm">{{ t('please_tell_reason') }}</span>
+        <textarea
+          name="other_reason"
+          rows="3"
+          class="mt-1 block w-full rounded bg-gray-900 border border-gray-700 p-2 text-white"
+          placeholder="{{ t('type_reason_here') }}"
+        ></textarea>
+      </label>
+      <button type="submit" onclick="return confirm('{{ t('confirm_cancel') }}');" class="rounded bg-red-600 px-4 py-2 font-semibold text-white hover:bg-red-700">
+        {{ t('submit_cancellation_request') }}
+      </button>
+    </form>
+    <script>
+      const cancelReason = document.getElementById("cancel-reason");
+      const otherReasonField = document.getElementById("other-reason-field");
+      const otherReasonInput = otherReasonField.querySelector("textarea");
+      const updateOtherReason = () => {
+        const isOther = cancelReason.value === "Other";
+        otherReasonField.classList.toggle("hidden", !isOther);
+        otherReasonInput.required = isOther;
+        otherReasonInput.disabled = !isOther;
+      };
+      cancelReason.addEventListener("change", updateOtherReason);
+      updateOtherReason();
+    </script>
+  {% endif %}
 </section>
 
 <section class="mb-6 rounded-lg border border-gray-700 bg-gray-800/50 p-5">

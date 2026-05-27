@@ -62,13 +62,18 @@
   ('mcb_direct_debit_contracts', 'pricing_section_mcb', 'pricing_section_mcb_intro'),
   ('day_week_passes', 'pricing_section_passes', 'pricing_section_passes_intro'),
   ('group_class_add_ons', 'pricing_section_group_addons', 'pricing_section_group_addons_intro'),
+  ('personal_training', 'pricing_section_personal_training', 'pricing_section_personal_training_intro'),
+  ('under_18', 'pricing_section_under_18', 'pricing_section_under_18_intro'),
   ('delfins_resort_guests', 'pricing_section_delfins', 'pricing_section_delfins_intro'),
   ('fees_other', 'pricing_section_fees', 'pricing_section_fees_intro')
 ] %}
 
+{% set shown_pricing_sections = namespace(count=0) %}
+
 {% for category_key, title_key, intro_key in section_order %}
   {% set items = pricing_items_by_category.get(category_key, []) %}
   {% if items %}
+    {% set shown_pricing_sections.count = shown_pricing_sections.count + 1 %}
     <section class="mb-8">
       <div class="mb-4">
         <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t(title_key) }}</div>
@@ -85,6 +90,7 @@
 
 {% set business_items = pricing_items_by_category.get('external_trainer_b2b', []) %}
 {% if business_items %}
+  {% set shown_pricing_sections.count = shown_pricing_sections.count + 1 %}
   <section class="mb-8 rounded-lg border border-yellow-500/20 bg-gray-800/40 p-5">
     <div class="mb-4">
       <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('pricing_section_trainers') }}</div>
@@ -96,6 +102,14 @@
         {{ pricing_card(item, business=True) }}
       {% endfor %}
     </div>
+  </section>
+{% endif %}
+
+{% if shown_pricing_sections.count == 0 %}
+  <section class="mb-8 rounded-lg border border-gray-700 bg-gray-900/60 p-6 text-center">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('full_pricing') }}</div>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ t('full_pricing_empty_title') }}</h3>
+    <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('full_pricing_empty_body') }}</p>
   </section>
 {% endif %}
 

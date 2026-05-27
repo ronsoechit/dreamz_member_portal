@@ -297,7 +297,7 @@ class PortalRouteTests(unittest.TestCase):
         self.client.get("/language?lang=pap&next=/login")
         self.login_as("13659")
 
-        response = self.client.get("/account")
+        response = self.client.get("/account?section=documents")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
@@ -1135,7 +1135,7 @@ class PortalRouteTests(unittest.TestCase):
         )
         self.login_as("1206")
 
-        response = self.client.get("/account")
+        response = self.client.get("/account?section=documents")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
@@ -1170,7 +1170,7 @@ class PortalRouteTests(unittest.TestCase):
         document = self.add_document(member_id="1206")
         self.login_as("1206")
 
-        response = self.client.get("/account")
+        response = self.client.get("/account?section=documents")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
@@ -1203,7 +1203,7 @@ class PortalRouteTests(unittest.TestCase):
         )
         self.login_as("80")
 
-        response = self.client.get("/account")
+        response = self.client.get("/account?section=documents")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
@@ -1524,7 +1524,7 @@ class PortalRouteTests(unittest.TestCase):
         db.session.commit()
         self.login_as("1206")
 
-        response = self.client.get("/account")
+        response = self.client.get("/account/agreements")
 
         body = response.get_data(as_text=True)
         self.assertIn("Cancellation request received", body)
@@ -1618,7 +1618,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Open gym balance", body)
         self.assertIn("$63.50", body)
         self.assertIn("Pay at front desk", body)
-        self.assertIn("/account?section=gym-balance", body)
+        self.assertIn("/account?section=billing", body)
         self.assertIn("View balance", body)
 
     def test_member_nav_shows_account_badge_only_for_open_balance(self):
@@ -1633,7 +1633,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("account-nav-label", body)
         self.assertIn("position:absolute;right:-0.28rem;top:-0.28rem", body)
         self.assertIn('aria-label="Account, 1 account notification"', body)
-        self.assertIn('href="/account?section=gym-balance"', body)
+        self.assertIn('href="/account?section=billing"', body)
         self.assertRegex(body, r'aria-hidden="true"[^>]*>\s*1</span>')
         self.assertNotIn("Account1", re.sub(r"\s+", "", body))
 
@@ -1687,7 +1687,8 @@ class PortalRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn('id="gym-balance"', body)
+        self.assertIn('id="billing"', body)
+        self.assertIn("Billing &amp; Gym Balance", body)
         self.assertIn("account-target-highlight", body)
         self.assertIn("Open gym balance", body)
         self.assertIn("Gym purchases balance", body)
@@ -1700,7 +1701,7 @@ class PortalRouteTests(unittest.TestCase):
         legacy_response = self.client.get("/account?section=balance")
         legacy_body = legacy_response.get_data(as_text=True)
         self.assertEqual(legacy_response.status_code, 200)
-        self.assertIn('id="gym-balance"', legacy_body)
+        self.assertIn('id="billing"', legacy_body)
         self.assertIn("account-target-highlight", legacy_body)
 
     def test_cancel_before_fixed_term_window_notifies_admin(self):
@@ -2133,10 +2134,21 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("First-time registration fee", body)
         self.assertIn("External Personal Trainer Package", body)
         self.assertIn("This is a business package for external personal trainers", body)
+        self.assertIn("Under 18 All Inclusive", body)
         self.assertIn("All prices and fees are non-negotiable.", body)
         self.assertIn("Contact front desk", body)
         self.assertNotIn("Internal Staff Test Product", body)
         self.assertNotIn("Pay now", body)
+
+    def test_public_pricing_page_fails_closed_when_catalog_unavailable(self):
+        with patch("dreamz_portal.active_pricing_items_for_visibility", side_effect=SQLAlchemyError("catalog unavailable")):
+            response = self.client.get("/pricing")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Pricing is being prepared", body)
+        self.assertIn("All prices and fees are non-negotiable.", body)
+        self.assertNotIn("Internal Server Error", body)
 
     def test_public_pricing_page_renders_in_all_supported_languages(self):
         seed_pricing_catalog()
@@ -2180,7 +2192,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Add-on Group PT 5x a week", body)
         self.assertIn("First-time registration fee", body)
         self.assertIn("Membership changes and payments are currently handled", body)
-        self.assertIn("/account?section=gym-balance", body)
+        self.assertIn("/account?section=billing", body)
         self.assertIn("/pricing", body)
         self.assertNotIn("External Personal Trainer Package", body)
         self.assertNotIn("Pay now", body)
@@ -2205,12 +2217,30 @@ class PortalRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn("Membership options", body)
+        self.assertIn("Membership &amp; Options", body)
+        self.assertIn("Billing &amp; Gym Balance", body)
+        self.assertIn("Agreements &amp; Rules", body)
         self.assertIn("/membership-options", body)
-        self.assertLess(body.index("Membership options"), body.index("Documents"))
-        self.assertLess(body.index("Membership options"), body.index("Password and security"))
+        self.assertLess(body.index("Membership &amp; Options"), body.index("Documents"))
         self.assertIn("No documents available yet.", body)
         self.assertNotIn("Documents 0", body)
+        self.assertNotIn("Cancellation Policy", body)
+
+    def test_account_billing_deep_link_combines_membership_and_gym_balance(self):
+        self.add_member(member_id="13659", balance=67.50, billing_amount=70)
+        self.login_as("13659")
+
+        response = self.client.get("/account?section=billing")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('id="billing"', body)
+        self.assertIn("Billing &amp; Gym Balance", body)
+        self.assertIn("Membership billing", body)
+        self.assertIn("Gym purchases balance", body)
+        self.assertIn("$67.50", body)
+        self.assertIn("Pay at front desk", body)
+        self.assertNotIn("Pay now", body)
 
     def test_member_agreements_center_shows_relevant_rules_and_signed_documents(self):
         self.add_member(

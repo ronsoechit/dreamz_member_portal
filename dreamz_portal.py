@@ -2151,23 +2151,47 @@ def pricing_items_by_category(items):
 
 
 def public_pricing_context():
-    ensure_runtime_schema()
-    items = [
-        item for item in active_pricing_items_for_visibility(["public", "public_business"])
-        if "staff_only" not in pricing_visibility_list(item) or pricing_item_visible_to(item, "public_business")
-    ]
-    categories = PricingCategory.query.order_by(PricingCategory.sort_order.asc(), PricingCategory.name.asc()).all()
+    try:
+        ensure_runtime_schema()
+        seed_pricing_catalog()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Runtime schema unavailable while rendering public pricing.")
+    try:
+        items = [
+            item for item in active_pricing_items_for_visibility(["public", "public_business"])
+            if "staff_only" not in pricing_visibility_list(item) or pricing_item_visible_to(item, "public_business")
+        ]
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Public pricing catalog unavailable; rendering empty pricing page.")
+        items = []
+    try:
+        categories = PricingCategory.query.order_by(PricingCategory.sort_order.asc(), PricingCategory.name.asc()).all()
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Public pricing categories unavailable; rendering empty category list.")
+        categories = []
+    try:
+        global_rule = setting_value("pricing_catalog_global_rule", PRICING_CATALOG_GLOBAL_RULE)
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Pricing global rule unavailable; using default rule.")
+        global_rule = PRICING_CATALOG_GLOBAL_RULE
     return {
         "pricing_categories": categories,
         "pricing_items_by_category": pricing_items_by_category(items),
         "pricing_terms_list": pricing_terms_list,
-        "pricing_global_rule": setting_value("pricing_catalog_global_rule", PRICING_CATALOG_GLOBAL_RULE),
+        "pricing_global_rule": global_rule,
     }
 
 
 def member_pricing_context(member):
+    policy = cancellation_policy_for_member(member)
+    language = current_language()
     try:
         ensure_runtime_schema()
+        seed_pricing_catalog()
     except Exception:
         db.session.rollback()
         app.logger.exception("Runtime schema unavailable while rendering member pricing.")
@@ -2188,6 +2212,8 @@ def member_pricing_context(member):
             "contract_type": member.contract_type or translated_text("not_available", current_language()),
             "billing_amount": member.billing_amount or 0,
             "next_payment": member.next_payment or compute_next_payment(member),
+            "current_term_end": fmt_policy_date(policy.current_term_end, language),
+            "renewal_status": translated_text("automatic_renewal", language) if is_contract_member_record(member) else translated_text("not_available", language),
         },
         "membership_options": [item for item in items if item.category_key in {"memberships", "mcb_direct_debit_contracts", "under_18"}],
         "addon_options": [item for item in items if item.category_key in {"group_class_add_ons", "personal_training"}],
@@ -2404,6 +2430,11 @@ def member_agreements_context(member):
     )
     policy = cancellation_policy_for_member(member)
     policy_summary, policy_detail = cancellation_message_parts(policy, language=language)
+    cancellation_request = optional_dashboard_value(
+        "agreement_cancellation_request",
+        None,
+        lambda: active_cancellation_request_for_member(member),
+    )
     return {
         "member": member,
         "display_name": display_member_name(member.name),
@@ -2415,10 +2446,12 @@ def member_agreements_context(member):
         "cancel_window_open": fmt_policy_date(policy.window_open, language),
         "cancel_window_close": fmt_policy_date(policy.last_request_date, language),
         "current_term_end": fmt_policy_date(policy.current_term_end, language),
-        "cancellation_request": optional_dashboard_value(
-            "agreement_cancellation_request",
-            None,
-            lambda: active_cancellation_request_for_member(member),
+        "cancellation_request": cancellation_request,
+        "cancellation_request_message": cancellation_request_member_message(cancellation_request, language=language),
+        "show_cancel": (
+            cancellation_portal_available_for_member(member)
+            and policy.can_request
+            and not cancellation_request
         ),
         "gym_balance": member.balance or 0,
         "is_contract_member": is_contract_member_record(member),
@@ -6726,8 +6759,20 @@ def member_dashboard_context(member, staff_admin_view=False):
     payment_status = localized_payment_status(payment_status_for_member(member), language)
     gym_balance = member.balance or 0.0
     account_section = request.args.get("section", "").strip()
-    if account_section == "balance":
-        account_section = "gym-balance"
+    account_section_aliases = {
+        "balance": "billing",
+        "gym-balance": "billing",
+        "membership-billing": "billing",
+        "membership": "membership-options",
+        "membership-options": "membership-options",
+        "agreements-rules": "agreements",
+        "agreements": "agreements",
+        "documents": "documents",
+        "profile": "profile",
+        "preferences": "preferences",
+        "security": "security",
+    }
+    account_section = account_section_aliases.get(account_section, account_section)
     cancellation_request = optional_dashboard_value(
         "cancellation_request",
         None,
