@@ -12,7 +12,7 @@
 
 {% block content %}
 {% if staff_admin_view %}
-  <div class="mb-5 flex flex-col gap-4 rounded border border-yellow-500/40 bg-yellow-500/10 p-4 text-sm text-yellow-100 lg:flex-row lg:items-center lg:justify-between">
+  <div class="admin-banner mb-5 flex flex-col gap-4 rounded border border-yellow-500/40 bg-yellow-500/10 p-4 text-sm text-yellow-100 lg:flex-row lg:items-center lg:justify-between">
     <div class="space-y-1">
       <span class="font-semibold text-yellow-300">Staff member view</span>
       <span class="ml-2 text-yellow-100">You are viewing this profile from the staff environment.</span>
@@ -46,10 +46,12 @@
   </div>
 {% endif %}
 
-<h2 class="text-2xl font-semibold mb-4">{{ t('welcome') }}, {{ display_name }}</h2>
-
-<div class="mb-6">
-  <div class="h-36 w-36 overflow-hidden rounded-md border border-gray-600 bg-gray-900">
+<section class="dashboard-hero mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+  <div>
+    <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">Dreamz Fitness</div>
+    <h2 class="mt-1 text-2xl font-semibold">{{ t('welcome') }}, {{ display_name }}</h2>
+  </div>
+  <div class="member-photo-frame h-36 w-36 overflow-hidden rounded-md border border-gray-600 bg-gray-900">
     {% if member_photo_available %}
       <img
         src="{{ url_for('member_photo', member_id=member.member_id) }}"
@@ -70,10 +72,10 @@
       </div>
     {% endif %}
   </div>
-</div>
+</section>
 
 {% if not staff_admin_view %}
-  <section class="mb-6 rounded-lg border border-yellow-500/30 bg-gray-800/50 p-4">
+  <section class="coach-teaser-card mb-6 rounded-lg border border-yellow-500/30 bg-gray-800/50 p-5">
     <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
       <div>
         <div class="text-sm font-semibold uppercase tracking-wide text-yellow-300">{{ t('my_coach') }}</div>
@@ -102,7 +104,7 @@
 
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
   <!-- Member Information -->
-  <div class="bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">
+  <div class="dashboard-card bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">
     <h3 class="text-xl font-semibold mb-4 text-yellow-400">{{ t('member_information') }}</h3>
     {{ field_rows([
       (t('member_id'), member.member_id),
@@ -115,7 +117,7 @@
   </div>
 
   <!-- Subscription Details -->
-  <div class="bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">
+  <div class="dashboard-card bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">
     <h3 class="text-xl font-semibold mb-4 text-yellow-400">{{ t('subscription_details') }}</h3>
     {% set contract_end %}
       {% if member.contract_type in ['6-months','12-months'] %}
@@ -136,7 +138,7 @@
 
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
   <!-- Payment Information -->
-  <div class="bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">
+  <div class="dashboard-card bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">
     <h3 class="text-xl font-semibold mb-4 text-yellow-400">{{ t('payment_information') }}</h3>
 
     {% set bill = (member.billing_amount if member is defined and
@@ -158,7 +160,7 @@
   </div>
 
   <!-- Documents -->
-  <div class="bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">
+  <div class="dashboard-card bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">
     <h3 class="text-xl font-semibold mb-4 text-yellow-400">{{ t('documents') }}</h3>
     {% if document_groups %}
       <dl class="grid gap-y-4 text-sm" style="grid-template-columns: 10.5rem minmax(0, 1fr);">
@@ -213,7 +215,7 @@
 
 {% if show_cancellation_section %}
   <!-- Cancellation Policy -->
-  <div class="bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">
+  <div class="dashboard-card policy-card bg-gray-800 bg-opacity-40 border border-gray-700 rounded-lg p-6">
     <h3 class="text-xl font-semibold mb-4 text-yellow-400">{{ t('cancellation_policy') }}</h3>
 
     <p class="text-yellow-400 font-semibold leading-relaxed">{{ cancellation_summary }}</p>

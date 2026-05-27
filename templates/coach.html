@@ -23,7 +23,7 @@
 
 {% block content %}
 {% set coach_complete = profile and completion == 100 %}
-<div class="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+<div class="coach-hero mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
   <div>
     <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('my_coach') }}</div>
     <h2 class="mt-1 text-2xl font-semibold">{{ t('coach_title') }}</h2>
@@ -46,7 +46,7 @@
 </div>
 
 {% if coach_complete %}
-  <div class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-green-500/20 bg-green-500/5 px-4 py-3">
+  <div class="coach-profile-strip mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-green-500/20 bg-green-500/5 px-4 py-3">
     <div class="text-sm text-green-50/90">
       <span class="font-semibold uppercase tracking-wide text-green-200">{{ t('coach_profile_status') }}</span>
       <span class="ml-2">{{ t('coach_profile_status_ready_intro') }}</span>
@@ -55,15 +55,15 @@
       {{ completion }}% {{ t('coach_profile_complete') }}
     </div>
   </div>
-  <section class="mb-5 grid gap-3 lg:grid-cols-[1.2fr_1fr_1fr]">
-    <a href="#coach-plan" data-open-coach-view="training" class="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4 transition hover:border-yellow-300 hover:bg-yellow-500/15">
+  <section class="coach-quick-actions mb-5 grid gap-3 lg:grid-cols-[1.2fr_1fr_1fr]">
+    <a href="#coach-plan" data-open-coach-view="training" class="coach-action-card rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4 transition hover:border-yellow-300 hover:bg-yellow-500/15">
       <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('coach_next_session_title') }}</div>
       <div class="mt-2 text-lg font-semibold text-white">{{ coach_next_session.session.focus if coach_next_session else t('coach_plan_training_title') }}</div>
       {% if coach_next_session %}
         <div class="mt-2 text-sm text-yellow-50/80">{{ t('coach_plan_session') }} {{ coach_next_session.session.number }} · {{ coach_next_session.session.minutes }} {{ t('minutes_short') }}</div>
       {% endif %}
     </a>
-    <a href="#coach-plan" data-open-coach-view="history" class="rounded-lg border border-gray-700 bg-gray-800/50 p-4 transition hover:border-green-300">
+    <a href="#coach-plan" data-open-coach-view="history" class="coach-action-card rounded-lg border border-gray-700 bg-gray-800/50 p-4 transition hover:border-green-300">
       <div class="text-xs font-semibold uppercase tracking-wide text-green-200">{{ t('coach_history_title') }}</div>
       {% if workout_history %}
         <div class="mt-2 text-lg font-semibold text-white">{{ workout_history[0].workout.focus }}</div>
@@ -72,7 +72,7 @@
         <div class="mt-2 text-sm text-gray-300">{{ t('coach_history_empty') }}</div>
       {% endif %}
     </a>
-    <a href="#coach-plan" data-open-coach-view="chat" class="rounded-lg border border-gray-700 bg-gray-800/50 p-4 transition hover:border-green-300">
+    <a href="#coach-plan" data-open-coach-view="chat" class="coach-action-card rounded-lg border border-gray-700 bg-gray-800/50 p-4 transition hover:border-green-300">
       <div class="text-xs font-semibold uppercase tracking-wide text-green-200">{{ t('coach_chat_thread_title') }}</div>
       <div class="mt-2 text-lg font-semibold text-white">{{ t('coach_reply_label') }}</div>
       <div class="mt-2 text-sm text-gray-300">{{ t('coach_chat_intro') }}</div>
@@ -205,7 +205,7 @@
 </form>
 
 {% if profile %}
-  <section id="coach-plan" class="mt-6 rounded-lg border border-green-500/30 bg-gray-900/60 p-4 sm:p-5" data-coach-shell>
+  <section id="coach-plan" class="coach-plan-shell mt-6 rounded-lg border border-green-500/30 bg-gray-900/60 p-4 sm:p-5" data-coach-shell>
     <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
       <div>
         <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('coach_plan_ready_title') }}</div>
@@ -213,7 +213,7 @@
         <p class="mt-2 text-sm leading-6 text-green-50/90">{{ t('coach_plan_focus_intro') }}</p>
       </div>
     </div>
-    <div class="mt-5 grid gap-2 sm:grid-cols-5" role="tablist" aria-label="{{ t('coach_plan_focus_title') }}">
+    <div class="coach-tabs mt-5 grid gap-2 sm:grid-cols-5" role="tablist" aria-label="{{ t('coach_plan_focus_title') }}">
       <button type="button" data-coach-view="training" class="rounded border border-yellow-400 bg-yellow-500 px-3 py-3 text-sm font-semibold text-black transition">{{ t('coach_plan_training_title') }}</button>
       <button type="button" data-coach-view="nutrition" class="rounded border border-gray-700 bg-gray-950 px-3 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">{{ t('coach_plan_nutrition_title') }}</button>
       <button type="button" data-coach-view="progress" class="rounded border border-gray-700 bg-gray-950 px-3 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">{{ t('coach_progress_title') }}</button>

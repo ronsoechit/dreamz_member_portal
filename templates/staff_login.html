@@ -5,11 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Staff Login | Dreamz Fitness</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <link href="{{ url_for('static', filename='css/premium.css') }}" rel="stylesheet">
 </head>
-<body class="bg-black text-white min-h-screen flex items-center justify-center">
-  <div class="w-full max-w-md rounded-lg border border-gray-800 bg-gray-900 p-6 shadow-lg">
+<body class="auth-body bg-black text-white min-h-screen flex items-center justify-center">
+  <div class="auth-card w-full max-w-md rounded-lg border border-gray-800 bg-gray-900 p-6 shadow-lg">
     <div class="mb-6 text-center">
-      <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Fitness" class="mx-auto h-16">
+      <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Fitness" class="auth-logo mx-auto h-16">
       <h1 class="mt-4 text-2xl font-bold">Staff Login</h1>
       <p class="mt-1 text-sm text-gray-400">Admin and manager access</p>
     </div>
