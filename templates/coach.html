@@ -86,6 +86,28 @@
       <div class="mt-2 text-sm text-gray-300">{{ t('coach_chat_intro') }}</div>
     </a>
   </section>
+  <section class="mb-4 rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <div class="mb-3 flex items-center justify-between gap-3">
+      <div>
+        <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('group_classes_title') }}</div>
+        <h3 class="mt-1 text-lg font-semibold text-white">{{ t('group_class_my_week') }}</h3>
+      </div>
+      <a class="text-sm font-semibold text-yellow-300" href="{{ url_for('member_group_classes') }}">{{ t('view_group_classes') }}</a>
+    </div>
+    {% if planned_group_classes %}
+      <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {% for plan in planned_group_classes[:6] %}
+          <article class="rounded border border-gray-700 bg-gray-900/60 p-3">
+            <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ plan.class_date|format_date('%d/%m/%Y') }}</div>
+            <div class="mt-1 font-semibold text-white">{{ plan.occurrence.class_type.name }}</div>
+            <div class="mt-1 text-xs text-gray-400">{{ plan.occurrence.start_time.strftime('%H:%M') }} · {{ plan.occurrence.room }}</div>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="rounded border border-gray-700 bg-gray-900/60 p-4 text-sm text-gray-300">{{ t('group_class_no_planned') }}</div>
+    {% endif %}
+  </section>
 {% else %}
   <div class="mb-6 grid gap-4 lg:grid-cols-[1fr_18rem]">
     <div class="rounded-lg border border-gray-700 bg-gray-800/40 p-5">

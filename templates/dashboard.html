@@ -103,6 +103,30 @@
     </div>
   </section>
 
+  <section class="home-classes-card mb-4 rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <div class="mb-3 flex items-center justify-between gap-3">
+      <div>
+        <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('today_at_dreamz') }}</div>
+        <h3 class="mt-1 text-lg font-semibold text-white">{{ t('upcoming_classes_today') }}</h3>
+      </div>
+      <a class="text-sm font-semibold text-yellow-300" href="{{ url_for('member_group_classes') }}">{{ t('add_to_my_plan') }}</a>
+    </div>
+    {% if today_group_classes %}
+      <div class="grid gap-3 md:grid-cols-3">
+        {% for row in today_group_classes %}
+          {% set occurrence = row.occurrence %}
+          <article class="rounded border border-gray-700 bg-gray-900/60 p-3">
+            <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ occurrence.start_time.strftime('%H:%M') }}</div>
+            <div class="mt-1 font-semibold text-white">{{ occurrence.class_type.name }}</div>
+            <div class="mt-1 text-xs text-gray-400">{{ occurrence.room }}</div>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="rounded border border-gray-700 bg-gray-900/60 p-4 text-sm text-gray-300">{{ t('group_class_no_classes_today') }}</div>
+    {% endif %}
+  </section>
+
   <section class="home-action-grid mb-5 grid gap-3 md:grid-cols-3">
     <a class="summary-card" href="{{ url_for('member_coach') }}">
       <span class="summary-label">{{ t('next_workout') }}</span>

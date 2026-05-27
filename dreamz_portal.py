@@ -1074,6 +1074,108 @@ def group_class_admin_context():
     }
 
 
+def next_date_for_group_class(day_of_week, today=None):
+    today = today or local_datetime(datetime.now(timezone.utc)).date()
+    days_ahead = (day_of_week - today.weekday()) % 7
+    return today + timedelta(days=days_ahead)
+
+
+def member_group_class_preference(member_id):
+    return MemberClassPreference.query.filter_by(member_id=member_id, class_type_id=None).first()
+
+
+def member_favorite_class_type_ids(member_id):
+    return {
+        class_type_id for (class_type_id,) in
+        db.session.query(MemberClassPreference.class_type_id)
+        .filter_by(member_id=member_id, is_favorite=True)
+        .filter(MemberClassPreference.class_type_id.isnot(None))
+        .all()
+    }
+
+
+def published_member_group_class_query():
+    return (
+        GroupClassOccurrence.query
+        .join(GroupClassType)
+        .filter(GroupClassOccurrence.status == "scheduled")
+        .filter(GroupClassOccurrence.is_published.is_(True))
+        .filter(GroupClassOccurrence.is_bookable.is_(True))
+        .order_by(GroupClassOccurrence.day_of_week.asc(), GroupClassOccurrence.start_time.asc(), GroupClassType.name.asc())
+    )
+
+
+def member_group_class_plan_map(member_id, start_date, end_date):
+    plans = (
+        MemberClassPlan.query
+        .filter_by(member_id=member_id)
+        .filter(MemberClassPlan.class_date >= start_date)
+        .filter(MemberClassPlan.class_date <= end_date)
+        .all()
+    )
+    return {(plan.occurrence_id, plan.class_date): plan for plan in plans}
+
+
+def member_group_class_schedule_rows(member_id, selected_day="", selected_type=""):
+    today = local_datetime(datetime.now(timezone.utc)).date()
+    query = published_member_group_class_query()
+    if selected_day != "":
+        try:
+            query = query.filter(GroupClassOccurrence.day_of_week == int(selected_day))
+        except ValueError:
+            selected_day = ""
+    if selected_type:
+        try:
+            query = query.filter(GroupClassOccurrence.class_type_id == int(selected_type))
+        except ValueError:
+            selected_type = ""
+    occurrences = query.all()
+    plan_map = member_group_class_plan_map(member_id, today, today + timedelta(days=6))
+    favorite_ids = member_favorite_class_type_ids(member_id)
+    rows = []
+    for occurrence in occurrences:
+        class_date = next_date_for_group_class(occurrence.day_of_week, today=today)
+        plan = plan_map.get((occurrence.id, class_date))
+        rows.append({
+            "occurrence": occurrence,
+            "class_date": class_date,
+            "plan": plan,
+            "is_favorite": occurrence.class_type_id in favorite_ids,
+        })
+    return rows
+
+
+def member_today_group_classes(member_id, limit=3):
+    today = local_datetime(datetime.now(timezone.utc)).date()
+    rows = [
+        row for row in member_group_class_schedule_rows(member_id, selected_day=str(today.weekday()))
+        if row["class_date"] == today
+    ]
+    return rows[:limit]
+
+
+def member_planned_group_classes(member_id, start_date=None, end_date=None):
+    start_date = start_date or local_datetime(datetime.now(timezone.utc)).date()
+    end_date = end_date or (start_date + timedelta(days=6))
+    return (
+        MemberClassPlan.query
+        .filter_by(member_id=member_id)
+        .filter(MemberClassPlan.class_date >= start_date)
+        .filter(MemberClassPlan.class_date <= end_date)
+        .order_by(MemberClassPlan.class_date.asc(), MemberClassPlan.id.asc())
+        .all()
+    )
+
+
+def member_group_class_attendance_count(member_id, start_date=None, end_date=None):
+    query = MemberClassAttendance.query.filter_by(member_id=member_id)
+    if start_date:
+        query = query.filter(MemberClassAttendance.class_date >= start_date)
+    if end_date:
+        query = query.filter(MemberClassAttendance.class_date <= end_date)
+    return query.count()
+
+
 @app.before_request
 def prepare_runtime_schema():
     ensure_runtime_schema()
@@ -4121,6 +4223,7 @@ def member_dashboard_context(member, staff_admin_view=False):
         "coach_latest_workout": coach_latest,
         "coach_data_counts": coach_counts,
         "coach_data_total": coach_counts.get("total", 0),
+        "today_group_classes": member_today_group_classes(member.member_id) if not staff_admin_view else [],
     }
 
 
@@ -5087,11 +5190,187 @@ def member_account():
     return render_template("account.html", **member_dashboard_context(member))
 
 
+@app.get("/group-classes")
+def member_group_classes():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    ensure_runtime_schema()
+    selected_day = request.args.get("day", "").strip()
+    selected_type = request.args.get("class_type", "").strip()
+    class_types = (
+        GroupClassType.query
+        .join(GroupClassOccurrence)
+        .filter(GroupClassOccurrence.status == "scheduled")
+        .filter(GroupClassOccurrence.is_published.is_(True))
+        .filter(GroupClassOccurrence.is_bookable.is_(True))
+        .distinct()
+        .order_by(GroupClassType.name.asc())
+        .all()
+    )
+    preference = member_group_class_preference(member.member_id)
+    return render_template(
+        "group_classes.html",
+        member=member,
+        rows=member_group_class_schedule_rows(member.member_id, selected_day=selected_day, selected_type=selected_type),
+        class_types=class_types,
+        selected_day=selected_day,
+        selected_type=selected_type,
+        day_options=[(day, group_class_day_label(day)) for day in range(7)],
+        preference=preference,
+        favorite_ids=member_favorite_class_type_ids(member.member_id),
+        time_label=group_class_time_label,
+        day_label=group_class_day_label,
+    )
+
+
+@app.post("/group-classes/preferences")
+def member_group_class_preferences_save():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    validate_csrf_token()
+    preferred_count = parse_optional_int(request.form.get("preferred_classes_per_week"))
+    plan_mode = request.form.get("plan_mode", "supplement").strip()
+    if plan_mode not in {"supplement", "replace_or_supplement"}:
+        plan_mode = "supplement"
+    preference = member_group_class_preference(member.member_id)
+    if not preference:
+        preference = MemberClassPreference(member_id=member.member_id, class_type_id=None)
+        db.session.add(preference)
+    preference.preferred_classes_per_week = preferred_count
+    preference.plan_mode = plan_mode
+    preference.updated_at = datetime.now()
+
+    favorite_ids = {
+        parse_optional_int(value)
+        for value in request.form.getlist("favorite_class_type_id")
+    }
+    favorite_ids.discard(None)
+    existing = {
+        pref.class_type_id: pref
+        for pref in MemberClassPreference.query
+        .filter_by(member_id=member.member_id)
+        .filter(MemberClassPreference.class_type_id.isnot(None))
+        .all()
+    }
+    for class_type in GroupClassType.query.all():
+        pref = existing.get(class_type.id)
+        if class_type.id in favorite_ids and not pref:
+            pref = MemberClassPreference(member_id=member.member_id, class_type_id=class_type.id)
+            db.session.add(pref)
+        if pref:
+            pref.is_favorite = class_type.id in favorite_ids
+            pref.updated_at = datetime.now()
+    db.session.commit()
+    flash(translated_text("group_class_preferences_saved", current_language()))
+    return redirect(url_for("member_group_classes"))
+
+
+@app.post("/group-classes/plan")
+def member_group_class_plan_add():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    validate_csrf_token()
+    occurrence = db.session.get(GroupClassOccurrence, parse_optional_int(request.form.get("occurrence_id")))
+    if not occurrence or occurrence.status != "scheduled" or not occurrence.is_published or not occurrence.is_bookable:
+        abort(404, translated_text("group_class_not_available", current_language()))
+    try:
+        class_date = date.fromisoformat(request.form.get("class_date", ""))
+    except ValueError:
+        abort(400, translated_text("group_class_required_fields", current_language()))
+    today = local_datetime(datetime.now(timezone.utc)).date()
+    if class_date < today:
+        abort(400, translated_text("group_class_past_plan_blocked", current_language()))
+
+    plan = MemberClassPlan.query.filter_by(
+        member_id=member.member_id,
+        occurrence_id=occurrence.id,
+        class_date=class_date,
+    ).first()
+    if not plan:
+        preference = member_group_class_preference(member.member_id)
+        plan = MemberClassPlan(
+            member_id=member.member_id,
+            occurrence_id=occurrence.id,
+            class_date=class_date,
+            status="planned",
+            replaces_personal_workout=bool(preference and preference.plan_mode == "replace_or_supplement"),
+            source="member",
+        )
+        db.session.add(plan)
+        db.session.commit()
+    flash(translated_text("group_class_added_to_plan", current_language()))
+    return redirect(request.referrer or url_for("member_group_classes"))
+
+
+@app.post("/group-classes/plan/<int:plan_id>/remove")
+def member_group_class_plan_remove(plan_id):
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    validate_csrf_token()
+    plan = MemberClassPlan.query.filter_by(id=plan_id, member_id=member.member_id).first_or_404()
+    today = local_datetime(datetime.now(timezone.utc)).date()
+    if plan.class_date < today or plan.status == "attended":
+        abort(400, translated_text("group_class_completed_locked", current_language()))
+    db.session.delete(plan)
+    db.session.commit()
+    flash(translated_text("group_class_removed_from_plan", current_language()))
+    return redirect(request.referrer or url_for("member_group_classes"))
+
+
+@app.post("/group-classes/attendance")
+def member_group_class_attendance_save():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    validate_csrf_token()
+    plan = MemberClassPlan.query.filter_by(
+        id=parse_optional_int(request.form.get("plan_id")),
+        member_id=member.member_id,
+    ).first()
+    occurrence = db.session.get(GroupClassOccurrence, parse_optional_int(request.form.get("occurrence_id")))
+    if not occurrence:
+        abort(404, translated_text("group_class_not_available", current_language()))
+    try:
+        class_date = date.fromisoformat(request.form.get("class_date", ""))
+    except ValueError:
+        abort(400, translated_text("group_class_required_fields", current_language()))
+    if not plan:
+        plan = MemberClassPlan(
+            member_id=member.member_id,
+            occurrence_id=occurrence.id,
+            class_date=class_date,
+            status="attended",
+            source="member",
+        )
+        db.session.add(plan)
+        db.session.flush()
+    plan.status = "attended"
+    plan.updated_at = datetime.now()
+    if not MemberClassAttendance.query.filter_by(member_id=member.member_id, occurrence_id=occurrence.id, class_date=class_date).first():
+        db.session.add(MemberClassAttendance(
+            member_id=member.member_id,
+            plan_id=plan.id,
+            occurrence_id=occurrence.id,
+            class_date=class_date,
+            source="member",
+        ))
+    db.session.commit()
+    flash(translated_text("group_class_marked_attended", current_language()))
+    return redirect(request.referrer or url_for("member_group_classes"))
+
+
 @app.get("/progress")
 def member_progress():
     member, redirect_response = current_member_or_redirect()
     if redirect_response:
         return redirect_response
+    today = local_datetime(datetime.now(timezone.utc)).date()
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
 
     return render_template(
         "progress.html",
@@ -5101,6 +5380,8 @@ def member_progress():
         profile=coach_profile_for_member(member),
         workout_history=coach_workout_history(member.member_id),
         progress_entries=coach_progress_history(member.member_id),
+        group_class_attended_this_week=member_group_class_attendance_count(member.member_id, week_start, week_end),
+        group_class_attended_total=member_group_class_attendance_count(member.member_id),
     )
 
 
@@ -5202,6 +5483,7 @@ def member_coach():
         workout_history=coach_workout_history(member.member_id),
         progress_entries=coach_progress_history(member.member_id),
         training_calendar=training_calendar,
+        planned_group_classes=member_planned_group_classes(member.member_id),
         coach_interactions=coach_recent_interactions(member.member_id),
         coach_next_session=coach_next_session_context(profile, member.member_id),
     )

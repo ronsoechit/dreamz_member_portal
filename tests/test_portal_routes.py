@@ -18,7 +18,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
-from dreamz_portal import CancellationRequest, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, EmailLog, GroupClassOccurrence, GroupClassSchedule, GroupClassType, Member, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, ScheduleChangeNotification, app, cancellation_message, coach_profile_completion, db, seed_group_class_schedule  # noqa: E402
+from dreamz_portal import CancellationRequest, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, EmailLog, GroupClassOccurrence, GroupClassSchedule, GroupClassType, Member, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, ScheduleChangeNotification, app, cancellation_message, coach_profile_completion, db, next_date_for_group_class, seed_group_class_schedule  # noqa: E402
 
 
 class FakeS3Body:
@@ -1700,6 +1700,116 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(MemberClassPlan.query.filter_by(member_id="13659").count(), 1)
         self.assertEqual(MemberClassAttendance.query.filter_by(member_id="13659").count(), 1)
         self.assertEqual(ScheduleChangeNotification.query.filter_by(member_id="13659").count(), 1)
+
+    def test_member_can_view_group_classes_and_save_preferences(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+        seed_group_class_schedule()
+        bodypump = GroupClassType.query.filter_by(name="BODYPUMP").one()
+
+        response = self.client.get("/group-classes")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Group Classes", body)
+        self.assertIn("BODYPUMP", body)
+        self.assertNotIn("RESERVED", body)
+
+        response = self.client.post(
+            "/group-classes/preferences",
+            data=self.csrf_form_data(
+                preferred_classes_per_week="2",
+                plan_mode="replace_or_supplement",
+                favorite_class_type_id=[str(bodypump.id)],
+            ),
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        aggregate = MemberClassPreference.query.filter_by(member_id="13659", class_type_id=None).one()
+        self.assertEqual(aggregate.preferred_classes_per_week, 2)
+        self.assertEqual(aggregate.plan_mode, "replace_or_supplement")
+        self.assertTrue(MemberClassPreference.query.filter_by(member_id="13659", class_type_id=bodypump.id).one().is_favorite)
+
+    def test_member_can_plan_attend_and_remove_group_classes(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+        seed_group_class_schedule()
+        bodypump = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "BODYPUMP", GroupClassOccurrence.is_bookable.is_(True))
+            .first()
+        )
+        class_date = next_date_for_group_class(bodypump.day_of_week)
+
+        response = self.client.post(
+            "/group-classes/plan",
+            data=self.csrf_form_data(occurrence_id=str(bodypump.id), class_date=class_date.isoformat()),
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        plan = MemberClassPlan.query.filter_by(member_id="13659", occurrence_id=bodypump.id, class_date=class_date).one()
+        self.assertEqual(plan.status, "planned")
+
+        response = self.client.post(
+            "/group-classes/attendance",
+            data=self.csrf_form_data(plan_id=str(plan.id), occurrence_id=str(bodypump.id), class_date=class_date.isoformat()),
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(db.session.get(MemberClassPlan, plan.id).status, "attended")
+        self.assertEqual(MemberClassAttendance.query.filter_by(member_id="13659", occurrence_id=bodypump.id).count(), 1)
+
+        second_class = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "ZUMBA", GroupClassOccurrence.is_bookable.is_(True))
+            .first()
+        )
+        second_date = next_date_for_group_class(second_class.day_of_week)
+        removable = MemberClassPlan(member_id="13659", occurrence_id=second_class.id, class_date=second_date)
+        db.session.add(removable)
+        db.session.commit()
+
+        response = self.client.post(
+            f"/group-classes/plan/{removable.id}/remove",
+            data=self.csrf_form_data(),
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(db.session.get(MemberClassPlan, removable.id))
+
+    def test_dashboard_and_progress_include_group_class_activity(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+        seed_group_class_schedule()
+        bodypump = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "BODYPUMP", GroupClassOccurrence.is_bookable.is_(True))
+            .first()
+        )
+        today = date.today()
+        db.session.add(MemberClassAttendance(
+            member_id="13659",
+            occurrence_id=bodypump.id,
+            class_date=today,
+        ))
+        db.session.commit()
+
+        dashboard_response = self.client.get("/dashboard?id=13659")
+        progress_response = self.client.get("/progress")
+
+        self.assertEqual(dashboard_response.status_code, 200)
+        self.assertIn("Today at Dreamz", dashboard_response.get_data(as_text=True))
+        self.assertEqual(progress_response.status_code, 200)
+        progress_body = progress_response.get_data(as_text=True)
+        self.assertIn("Classes this week", progress_body)
+        self.assertIn(">1</strong>", progress_body)
 
 
 if __name__ == "__main__":

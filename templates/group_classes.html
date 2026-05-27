@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}{{ t('group_classes_title') }} | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<section class="mb-5 rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+  <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+    <div>
+      <div class="text-xs font-semibold uppercase tracking-wide text-yellow-400">{{ t('today_at_dreamz') }}</div>
+      <h2 class="mt-1 text-2xl font-semibold">{{ t('group_classes_title') }}</h2>
+      <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-300">{{ t('group_classes_intro') }}</p>
+    </div>
+    <a class="inline-flex rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('member_coach') }}">{{ t('my_coach') }}</a>
+  </div>
+</section>
+
+<section class="mb-6 rounded border border-gray-700 bg-gray-800/50 p-5">
+  <h3 class="text-lg font-semibold text-white">{{ t('group_class_preferences') }}</h3>
+  <form method="post" action="{{ url_for('member_group_class_preferences_save') }}" class="mt-4 grid gap-3 lg:grid-cols-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_weekly_target') }}</span>
+      <input name="preferred_classes_per_week" type="number" min="0" max="7" value="{{ preference.preferred_classes_per_week if preference and preference.preferred_classes_per_week is not none else '' }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-white">
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_plan_mode') }}</span>
+      <select name="plan_mode" class="mt-1 w-full rounded border border-gray-700 bg-gray-900 p-3 text-white">
+        <option value="supplement" {% if not preference or preference.plan_mode == 'supplement' %}selected{% endif %}>{{ t('group_class_plan_mode_supplement') }}</option>
+        <option value="replace_or_supplement" {% if preference and preference.plan_mode == 'replace_or_supplement' %}selected{% endif %}>{{ t('group_class_plan_mode_replace') }}</option>
+      </select>
+    </label>
+    <div class="lg:col-span-2">
+      <div class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('group_class_favorites') }}</div>
+      <div class="mt-2 flex flex-wrap gap-2">
+        {% for class_type in class_types %}
+          <label class="inline-flex items-center gap-2 rounded border border-gray-700 bg-gray-900/70 px-3 py-2 text-sm text-gray-200">
+            <input name="favorite_class_type_id" value="{{ class_type.id }}" type="checkbox" {% if class_type.id in favorite_ids %}checked{% endif %} class="h-4 w-4 accent-yellow-500">
+            {{ class_type.name }}
+          </label>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="lg:col-span-4">
+      <button type="submit" class="rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black hover:bg-yellow-400">{{ t('save') }}</button>
+    </div>
+  </form>
+</section>
+
+<section class="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+  <h3 class="text-lg font-semibold text-white">{{ t('group_class_weekly_schedule') }}</h3>
+  <form method="get" action="{{ url_for('member_group_classes') }}" class="grid gap-2 sm:grid-cols-3">
+    <select name="day" class="rounded border border-gray-700 bg-gray-900 p-2 text-sm text-white">
+      <option value="">{{ t('group_class_all_days') }}</option>
+      {% for day, label in day_options %}
+        <option value="{{ day }}" {% if selected_day|string == day|string %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <select name="class_type" class="rounded border border-gray-700 bg-gray-900 p-2 text-sm text-white">
+      <option value="">{{ t('group_class_all_types') }}</option>
+      {% for class_type in class_types %}
+        <option value="{{ class_type.id }}" {% if selected_type|string == class_type.id|string %}selected{% endif %}>{{ class_type.name }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="rounded bg-gray-700 px-3 py-2 text-sm font-semibold text-white hover:bg-gray-600">{{ t('apply') }}</button>
+  </form>
+</section>
+
+<section class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+  {% for row in rows %}
+    {% set occurrence = row.occurrence %}
+    {% set plan = row.plan %}
+    <article class="rounded-lg border border-gray-700 bg-gray-800/50 p-5">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <div class="text-xs font-semibold uppercase tracking-wide text-yellow-400">{{ day_label(occurrence.day_of_week) }} · {{ time_label(occurrence.start_time) }}-{{ time_label(occurrence.end_time) }}</div>
+          <h4 class="mt-1 text-xl font-semibold text-white">{{ occurrence.class_type.name }}</h4>
+          <p class="mt-1 text-sm text-gray-300">{{ occurrence.room }}{% if occurrence.instructor %} · {{ occurrence.instructor }}{% endif %}</p>
+        </div>
+        {% if row.is_favorite %}
+          <span class="rounded-full border border-yellow-500/40 bg-yellow-500/10 px-3 py-1 text-xs font-semibold text-yellow-100">{{ t('group_class_favorite') }}</span>
+        {% endif %}
+      </div>
+      <div class="mt-4 flex flex-wrap gap-2 text-xs">
+        <span class="rounded-full border border-gray-600 px-3 py-1 text-gray-200">{{ occurrence.class_type.intensity }}</span>
+        <span class="rounded-full border border-gray-600 px-3 py-1 text-gray-200">{{ occurrence.class_type.category }}</span>
+        {% if occurrence.note %}
+          <span class="rounded-full border border-green-500/40 bg-green-500/10 px-3 py-1 text-green-100">{{ occurrence.note }}</span>
+        {% endif %}
+      </div>
+      <details class="mt-4 rounded border border-gray-700 bg-gray-900/60 p-3 text-sm text-gray-300">
+        <summary class="cursor-pointer font-semibold text-yellow-200">{{ t('view_class') }}</summary>
+        <div class="mt-3 grid gap-2 text-xs">
+          <div>{{ t('group_class_muscle_focus') }}: {{ occurrence.class_type.muscle_focus or t('not_available') }}</div>
+          <div>{{ t('group_class_cardio_load') }}: {{ occurrence.class_type.cardio_load or t('not_available') }}</div>
+          <div>{{ t('group_class_strength_load') }}: {{ occurrence.class_type.strength_load or t('not_available') }}</div>
+          <div>{{ t('group_class_recovery_impact') }}: {{ occurrence.class_type.recovery_impact or t('not_available') }}</div>
+        </div>
+      </details>
+      <div class="mt-4 flex flex-col gap-2">
+        {% if plan and plan.status == 'attended' %}
+          <div class="rounded border border-green-500/40 bg-green-500/10 p-3 text-sm font-semibold text-green-100">{{ t('group_class_attended') }}</div>
+        {% elif plan %}
+          <div class="rounded border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-100">{{ t('group_class_planned_for') }} {{ row.class_date|format_date('%d/%m/%Y') }}</div>
+          <div class="grid gap-2 sm:grid-cols-2">
+            <form method="post" action="{{ url_for('member_group_class_attendance_save') }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="plan_id" value="{{ plan.id }}">
+              <input type="hidden" name="occurrence_id" value="{{ occurrence.id }}">
+              <input type="hidden" name="class_date" value="{{ row.class_date.isoformat() }}">
+              <button type="submit" class="w-full rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black hover:bg-yellow-400">{{ t('mark_attended') }}</button>
+            </form>
+            <form method="post" action="{{ url_for('member_group_class_plan_remove', plan_id=plan.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="w-full rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm font-semibold text-gray-200 hover:border-yellow-400">{{ t('remove_from_plan') }}</button>
+            </form>
+          </div>
+        {% else %}
+          <form method="post" action="{{ url_for('member_group_class_plan_add') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="occurrence_id" value="{{ occurrence.id }}">
+            <input type="hidden" name="class_date" value="{{ row.class_date.isoformat() }}">
+            <button type="submit" class="w-full rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black hover:bg-yellow-400">{{ t('add_to_my_plan') }}</button>
+          </form>
+        {% endif %}
+      </div>
+    </article>
+  {% else %}
+    <div class="rounded border border-gray-700 bg-gray-800/50 p-6 text-sm text-gray-300">{{ t('group_class_empty_schedule') }}</div>
+  {% endfor %}
+</section>
+{% endblock %}

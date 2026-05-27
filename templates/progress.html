@@ -13,7 +13,7 @@
   </div>
 </section>
 
-<section class="progress-summary-grid mb-5 grid gap-3 md:grid-cols-3">
+<section class="progress-summary-grid mb-5 grid gap-3 md:grid-cols-4">
   {% set weight_entry = progress_entries|selectattr('weight_kg')|list|first %}
   {% set latest_weight_value = weight_entry.weight_kg if weight_entry else (profile.weight_kg if profile else none) %}
   <article class="summary-card">
@@ -23,6 +23,11 @@
   <article class="summary-card">
     <span class="summary-label">{{ t('progress_photos') }}</span>
     <strong>{{ progress_entries|selectattr('photo_path')|list|length }}</strong>
+  </article>
+  <article class="summary-card">
+    <span class="summary-label">{{ t('group_classes_attended_week') }}</span>
+    <strong>{{ group_class_attended_this_week }}</strong>
+    <span class="mt-1 block text-xs text-gray-400">{{ t('group_classes_attended_total') }}: {{ group_class_attended_total }}</span>
   </article>
   <article class="summary-card">
     <span class="summary-label">{{ t('latest_weight') }}</span>
