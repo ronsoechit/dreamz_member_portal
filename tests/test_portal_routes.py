@@ -1834,6 +1834,23 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Classes this week", progress_body)
         self.assertIn(">1</strong>", progress_body)
 
+    def test_dashboard_keeps_member_home_focused_and_navigation_compact(self):
+        self.add_member(member_id="13659", name="Ron Soechit", balance=0)
+        self.login_as("13659")
+        seed_group_class_schedule()
+
+        response = self.client.get("/dashboard?id=13659")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        nav_order = [body.index(label) for label in ["Dashboard", "My Coach", "Progress", "Account"]]
+        self.assertEqual(nav_order, sorted(nav_order))
+        self.assertIn("Today at Dreamz", body)
+        self.assertIn("My Coach", body)
+        self.assertNotIn("Documents 0", body)
+        self.assertNotIn("Password and security", body)
+        self.assertNotIn("Submit cancellation request", body)
+
     def test_coach_context_includes_group_classes_without_male_pregnancy_context(self):
         member = self.add_member(member_id="13659", name="Ron Soechit")
         profile = CoachProfile(
