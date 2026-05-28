@@ -3077,6 +3077,65 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(db.session.get(MemberClassPlan, removable.id))
 
+    def test_group_class_plan_refreshes_coach_plan_and_appears_in_calendar(self):
+        self.add_member(member_id="13659", name="Ron Soechit", birthdate=date(1990, 1, 1))
+        db.session.add(
+            CoachProfile(
+                member_id="13659",
+                sex="male",
+                primary_goal="build_muscle",
+                experience_level="intermediate",
+                training_days=3,
+                session_minutes=45,
+                training_place="dreamz_gym",
+                height_cm=180,
+                weight_kg=82,
+                injuries="none",
+                nutrition_goal="muscle_gain",
+                dietary_preferences="local food",
+                allergies="none",
+            )
+        )
+        db.session.add(
+            CoachPlan(
+                member_id="13659",
+                language="en",
+                plan_version=COACH_PLAN_SCHEMA_VERSION,
+                plan_json=json.dumps([{"title": "Old plan", "sessions": []}]),
+            )
+        )
+        seed_group_class_schedule()
+        occurrence = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassOccurrence.day_of_week == date.today().weekday())
+            .filter(GroupClassOccurrence.is_bookable.is_(True))
+            .first()
+        ) or GroupClassOccurrence.query.filter_by(is_bookable=True).first()
+        class_date = date.today()
+        db.session.commit()
+        self.login_as("13659")
+
+        response = self.client.post(
+            "/group-classes/plan",
+            data=self.csrf_form_data(occurrence_id=str(occurrence.id), class_date=class_date.isoformat()),
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(CoachPlan.query.filter_by(member_id="13659").count(), 0)
+        adjustment = CoachInteraction.query.filter_by(member_id="13659", category="group_class_plan_adjustment").one()
+        self.assertIn(occurrence.class_type.name, adjustment.message)
+        self.assertIn("planned_group_classes_this_week", adjustment.context_summary)
+
+        coach_response = self.client.get("/coach")
+
+        self.assertEqual(coach_response.status_code, 200)
+        body = coach_response.get_data(as_text=True)
+        self.assertIn(occurrence.class_type.name, body)
+        self.assertIn("Group Classes", body)
+        self.assertEqual(CoachPlan.query.filter_by(member_id="13659").count(), 1)
+
     def test_dashboard_and_progress_include_group_class_activity(self):
         self.add_member(member_id="13659", name="Ron Soechit")
         self.login_as("13659")

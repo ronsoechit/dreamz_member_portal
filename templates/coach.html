@@ -466,6 +466,11 @@
                         <button type="button" data-calendar-session="{{ session.number }}" class="block w-full rounded bg-yellow-500/15 px-2 py-1 text-left font-semibold text-yellow-100">{{ t('coach_calendar_planned') }}</button>
                       {% endfor %}
                     {% endif %}
+                    {% for plan in day.group_classes %}
+                      <a href="{{ url_for('member_group_classes') }}" class="block rounded bg-purple-500/15 px-2 py-1 font-semibold text-purple-100">
+                        {{ plan.occurrence.start_time.strftime('%H:%M') }} {{ plan.occurrence.class_type.name }}
+                      </a>
+                    {% endfor %}
                     {% if day.status == 'rest' %}
                       <span class="text-gray-500">{{ t('coach_calendar_rest') }}</span>
                     {% endif %}
@@ -490,15 +495,21 @@
                     {% endfor %}
                     {% for session in day.planned_sessions %}
                       <button type="button" data-calendar-session="{{ session.number }}" class="rounded border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-left text-sm font-semibold text-yellow-100 hover:border-yellow-300">
-                        {{ t('coach_calendar_planned') }} · {{ t('coach_plan_session') }} {{ session.number }} · {{ t_coach_focus(session.focus) }}
+                        {{ t('coach_calendar_planned') }} Â· {{ t('coach_plan_session') }} {{ session.number }} Â· {{ t_coach_focus(session.focus) }}
                       </button>
+                    {% endfor %}
+                    {% for plan in day.group_classes %}
+                      <a href="{{ url_for('member_group_classes') }}" class="rounded border border-purple-400/30 bg-purple-500/10 px-3 py-2 text-left text-sm font-semibold text-purple-100 hover:border-purple-300">
+                        {{ t('group_classes_title') }} Â· {{ plan.occurrence.start_time.strftime('%H:%M') }} Â· {{ plan.occurrence.class_type.name }}
+                        <span class="mt-1 block text-xs font-normal text-purple-100/80">{{ plan.occurrence.room }}</span>
+                      </a>
                     {% endfor %}
                     {% for activity in day.activities %}
                       <div class="rounded border border-blue-400/30 bg-blue-500/10 px-3 py-2 text-sm text-blue-100">
-                        {{ activity.duration_minutes }} {{ t('minutes_short') }} · {{ activity.activity_type }}
+                        {{ activity.duration_minutes }} {{ t('minutes_short') }} Â· {{ activity.activity_type }}
                       </div>
                     {% endfor %}
-                    {% if day.status == 'rest' %}
+                    {% if day.status == 'rest' and not day.group_classes %}
                       <div class="rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-gray-300">{{ t('coach_calendar_rest') }}</div>
                     {% endif %}
                   </div>

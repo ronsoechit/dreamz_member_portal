@@ -5045,6 +5045,17 @@ def coach_personal_plan(profile, member=None, language=None):
     if is_pregnant_profile(profile):
         habits_items.insert(0, translated_text("coach_pregnancy_summary", language, weeks=profile.gestational_weeks or translated_text("not_available", language), trimester=pregnancy_trimester(profile) or translated_text("not_available", language)))
         habits_items.insert(1, translated_text("coach_pregnancy_provider_priority", language))
+    if member:
+        planned_classes = member_planned_group_classes(member.member_id)
+        if planned_classes:
+            class_names = ", ".join(
+                f"{plan.occurrence.class_type.name} {plan.class_date.strftime('%d/%m')}"
+                for plan in planned_classes[:4]
+            )
+            habits_items.insert(
+                0,
+                translated_text("coach_plan_group_class_adjustment_note", language, classes=class_names),
+            )
 
     return [
         {
@@ -5569,7 +5580,7 @@ def coach_week_schedule_offsets(training_days):
 
 def coach_week_calendar(member_id, profile, plan, language=None):
     language = language or current_language()
-    today = local_datetime(datetime.now()).date()
+    today = current_portal_datetime().date()
     week_start = today - timedelta(days=today.weekday())
     week_end = week_start + timedelta(days=6)
     sessions = (plan[0].get("sessions") if plan else []) or []
@@ -5608,17 +5619,25 @@ def coach_week_calendar(member_id, profile, plan, language=None):
     for activity in activities:
         activities_by_date.setdefault(activity.activity_date, []).append(activity)
 
+    group_class_plans = member_planned_group_classes(member_id, week_start, week_end)
+    group_classes_by_date = {}
+    for group_plan in group_class_plans:
+        group_classes_by_date.setdefault(group_plan.class_date, []).append(group_plan)
+
     days = []
     for offset in range(7):
         day = week_start + timedelta(days=offset)
         day_workouts = workouts_by_date.get(day, [])
         day_activities = activities_by_date.get(day, [])
         planned_sessions = planned_by_date.get(day, [])
+        day_group_classes = group_classes_by_date.get(day, [])
         if day_workouts:
+            status = "done"
+        elif any(group_plan.status == "attended" for group_plan in day_group_classes):
             status = "done"
         elif day_activities:
             status = "activity"
-        elif planned_sessions:
+        elif planned_sessions or day_group_classes:
             status = "planned"
         else:
             status = "rest"
@@ -5628,6 +5647,7 @@ def coach_week_calendar(member_id, profile, plan, language=None):
                 "is_today": day == today,
                 "status": status,
                 "planned_sessions": planned_sessions,
+                "group_classes": day_group_classes,
                 "workouts": day_workouts,
                 "activities": day_activities,
             }
@@ -5640,6 +5660,33 @@ def coach_week_calendar(member_id, profile, plan, language=None):
         "days": days,
         "completed_session_numbers": completed_session_numbers,
     }
+
+
+def record_group_class_plan_change(member, action_key, occurrence, class_date):
+    CoachPlan.query.filter_by(member_id=member.member_id).delete(synchronize_session=False)
+    profile = coach_profile_for_member(member)
+    language = current_language()
+    class_name = occurrence.class_type.name if occurrence and occurrence.class_type else translated_text("group_classes_title", language)
+    message = translated_text(
+        action_key,
+        language,
+        class_name=class_name,
+        date=fmt_policy_date(class_date, language) if class_date else translated_text("not_available", language),
+    )
+    context = (
+        f"group_class_plan_change={action_key}; class={class_name}; date={class_date}; "
+        f"{group_class_training_load_context(member, profile)}"
+    )
+    save_coach_interaction(
+        member.member_id,
+        "coach",
+        message,
+        category="group_class_plan_adjustment",
+        source="portal",
+        context_summary=context,
+        language=language,
+    )
+    return message
 
 
 def coach_next_session_context(profile, member_id, language=None):
@@ -9551,6 +9598,8 @@ def member_group_class_plan_add():
         occurrence_id=occurrence.id,
         class_date=class_date,
     ).first()
+    plan_changed = False
+    coach_message = None
     if not plan:
         preference = member_group_class_preference(member.member_id)
         plan = MemberClassPlan(
@@ -9562,8 +9611,16 @@ def member_group_class_plan_add():
             source="member",
         )
         db.session.add(plan)
-        db.session.commit()
-    flash(translated_text("group_class_added_to_plan", current_language()))
+        plan_changed = True
+    elif plan.status != "planned":
+        plan.status = "planned"
+        plan.updated_at = datetime.now()
+        plan_changed = True
+    if plan_changed:
+        db.session.flush()
+        coach_message = record_group_class_plan_change(member, "group_class_plan_refreshed_added", occurrence, class_date)
+    db.session.commit()
+    flash(coach_message or translated_text("group_class_added_to_plan", current_language()), "success")
     return redirect(request.referrer or url_for("member_group_classes"))
 
 
@@ -9577,9 +9634,13 @@ def member_group_class_plan_remove(plan_id):
     today = local_datetime(datetime.now(timezone.utc)).date()
     if plan.class_date < today or plan.status == "attended":
         abort(400, translated_text("group_class_completed_locked", current_language()))
+    occurrence = plan.occurrence
+    class_date = plan.class_date
     db.session.delete(plan)
+    db.session.flush()
+    coach_message = record_group_class_plan_change(member, "group_class_plan_refreshed_removed", occurrence, class_date)
     db.session.commit()
-    flash(translated_text("group_class_removed_from_plan", current_language()))
+    flash(coach_message, "success")
     return redirect(request.referrer or url_for("member_group_classes"))
 
 
@@ -9620,8 +9681,10 @@ def member_group_class_attendance_save():
             class_date=class_date,
             source="member",
         ))
+    db.session.flush()
+    coach_message = record_group_class_plan_change(member, "group_class_plan_refreshed_attended", occurrence, class_date)
     db.session.commit()
-    flash(translated_text("group_class_marked_attended", current_language()))
+    flash(coach_message, "success")
     return redirect(request.referrer or url_for("member_group_classes"))
 
 
