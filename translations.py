@@ -4156,6 +4156,85 @@ for language, values in DASHBOARD_CLASS_STATUS_TRANSLATIONS.items():
     TRANSLATIONS.setdefault(language, {}).update(values)
 
 
+FLOATING_COACH_NUTRITION_TRANSLATIONS = {
+    "en": {
+        "dreamz_coach": "Dreamz Coach",
+        "open_dreamz_coach": "Open Dreamz Coach",
+        "coach_loading": "Dreamz Coach is thinking...",
+        "ask_about_todays_workout": "Ask about today's workout",
+        "adjust_my_training": "Adjust my training",
+        "review_my_meal_plan": "Review my meal plan",
+        "what_should_i_eat_today": "What should I eat today?",
+        "recovery_advice": "Recovery advice",
+        "progress_review": "Progress review",
+        "meal_plan_personalized_for_you": "Meal plan personalized for you",
+        "add_height": "Add height",
+        "add_current_weight": "Add current weight",
+        "add_nutrition_goal": "Add nutrition goal",
+        "add_food_preferences": "Add food preferences",
+        "add_allergies": "Add allergies/intolerances",
+        "add_pregnancy_details": "Add pregnancy details",
+    },
+    "nl": {
+        "dreamz_coach": "Dreamz Coach",
+        "open_dreamz_coach": "Open Dreamz Coach",
+        "coach_loading": "Dreamz Coach denkt na...",
+        "ask_about_todays_workout": "Vraag over training vandaag",
+        "adjust_my_training": "Pas mijn training aan",
+        "review_my_meal_plan": "Bekijk mijn voedingsplan",
+        "what_should_i_eat_today": "Wat moet ik vandaag eten?",
+        "recovery_advice": "Hersteladvies",
+        "progress_review": "Progressie review",
+        "meal_plan_personalized_for_you": "Voedingsplan persoonlijk voor jou",
+        "add_height": "Voeg lengte toe",
+        "add_current_weight": "Voeg huidig gewicht toe",
+        "add_nutrition_goal": "Voeg voedingsdoel toe",
+        "add_food_preferences": "Voeg voedingsvoorkeuren toe",
+        "add_allergies": "Voeg allergieen/intoleranties toe",
+        "add_pregnancy_details": "Voeg zwangerschapsgegevens toe",
+    },
+    "pap": {
+        "dreamz_coach": "Dreamz Coach",
+        "open_dreamz_coach": "Habri Dreamz Coach",
+        "coach_loading": "Dreamz Coach ta pensa...",
+        "ask_about_todays_workout": "Puntra tokante entrenamentu di awe",
+        "adjust_my_training": "Ajusta mi entrenamentu",
+        "review_my_meal_plan": "Revisa mi plan di kuminda",
+        "what_should_i_eat_today": "Kiko mi mester kome awe?",
+        "recovery_advice": "Konseho di rekobro",
+        "progress_review": "Revison di progreso",
+        "meal_plan_personalized_for_you": "Plan di kuminda personalisa pa bo",
+        "add_height": "Agrega haltura",
+        "add_current_weight": "Agrega peso aktual",
+        "add_nutrition_goal": "Agrega meta di nutrishon",
+        "add_food_preferences": "Agrega preferensianan di kuminda",
+        "add_allergies": "Agrega alergia/intoleransia",
+        "add_pregnancy_details": "Agrega detaye di embaraso",
+    },
+    "es": {
+        "dreamz_coach": "Dreamz Coach",
+        "open_dreamz_coach": "Abrir Dreamz Coach",
+        "coach_loading": "Dreamz Coach esta pensando...",
+        "ask_about_todays_workout": "Pregunta sobre el entrenamiento de hoy",
+        "adjust_my_training": "Ajustar mi entrenamiento",
+        "review_my_meal_plan": "Revisar mi plan de comidas",
+        "what_should_i_eat_today": "Que debo comer hoy?",
+        "recovery_advice": "Consejo de recuperacion",
+        "progress_review": "Revision de progreso",
+        "meal_plan_personalized_for_you": "Plan de comidas personalizado para ti",
+        "add_height": "Agregar estatura",
+        "add_current_weight": "Agregar peso actual",
+        "add_nutrition_goal": "Agregar objetivo nutricional",
+        "add_food_preferences": "Agregar preferencias de comida",
+        "add_allergies": "Agregar alergias/intolerancias",
+        "add_pregnancy_details": "Agregar datos de embarazo",
+    },
+}
+
+for language, values in FLOATING_COACH_NUTRITION_TRANSLATIONS.items():
+    TRANSLATIONS.setdefault(language, {}).update(values)
+
+
 def normalize_language(language):
     if language in LANGUAGES:
         return language

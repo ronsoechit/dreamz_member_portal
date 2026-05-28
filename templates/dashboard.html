@@ -88,7 +88,7 @@
         <a class="inline-flex items-center justify-center rounded bg-yellow-500 px-4 py-3 font-semibold text-black transition hover:bg-yellow-400" href="{{ url_for('member_coach', tab='training', session=coach_next_session.session.number) if coach_complete and coach_next_session else url_for('member_coach') }}">
           {{ t('start_next_workout') if coach_complete else t('open_my_coach') }}
         </a>
-        <a class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400" href="{{ url_for('member_coach', view='chat') }}">
+        <a class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400" href="{{ url_for('member_coach', view='chat') }}" data-open-dreamz-coach data-no-loading="true">
           {{ t('ask_coach') }}
         </a>
       </div>

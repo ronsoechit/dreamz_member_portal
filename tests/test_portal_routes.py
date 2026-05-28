@@ -489,6 +489,32 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Adjust this meal", body)
         self.assertIn("Regenerate plan", body)
         self.assertIn("This meal plan is built for muscle gain", body)
+        self.assertIn("Meal plan personalized for you", body)
+        self.assertNotIn(">Complete nutrition profile<", body)
+
+    def test_member_pages_render_unified_floating_dreamz_coach(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        db.session.add(CoachInteraction(
+            member_id="13659",
+            actor="coach",
+            category="answer",
+            source="fallback",
+            message="Coach Summary\n- Keep today simple.",
+            language="en",
+        ))
+        db.session.commit()
+        self.login_as("13659")
+
+        response = self.client.get("/dashboard?id=13659")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('data-floating-coach', body)
+        self.assertIn('data-message-url="/coach/message"', body)
+        self.assertIn("Open Dreamz Coach", body)
+        self.assertIn("Coach Summary", body)
+        self.assertIn("Ask about today&#39;s workout", body)
+        self.assertIn('data-open-dreamz-coach', body)
 
     def test_nutrition_missing_date_of_birth_is_actionable_and_saves(self):
         self.add_member(
@@ -533,6 +559,43 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("/nutrition#nutrition-plan", save_response.headers["Location"])
         member = Member.query.filter_by(member_id="13659").one()
         self.assertEqual(member.birthdate, date(1990, 1, 1))
+
+    def test_nutrition_missing_fields_are_actionable_profile_deep_links(self):
+        self.add_member(
+            member_id="13659",
+            name="Ron Soechit",
+            birthdate=date(1990, 1, 1),
+        )
+        db.session.add(
+            CoachProfile(
+                member_id="13659",
+                sex="male",
+                primary_goal="build_muscle",
+                experience_level="intermediate",
+                training_days=4,
+                session_minutes=60,
+                training_place="dreamz_gym",
+                height_cm=None,
+                weight_kg=85,
+                injuries="none",
+                nutrition_goal=None,
+                dietary_preferences=None,
+                allergies=None,
+            )
+        )
+        db.session.commit()
+        self.login_as("13659")
+
+        response = self.client.get("/nutrition")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Add height", body)
+        self.assertIn("Add nutrition goal", body)
+        self.assertIn("Add food preferences", body)
+        self.assertIn("Add allergies/intolerances", body)
+        self.assertIn("/coach?edit=profile&amp;field=height_cm&amp;return_to=nutrition", body)
+        self.assertIn("/coach?edit=profile&amp;field=nutrition_goal&amp;return_to=nutrition", body)
 
     def test_member_can_save_meal_log_from_nutrition_page(self):
         self.add_member(

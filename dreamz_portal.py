@@ -4457,6 +4457,54 @@ def nutrition_target_numbers(member, profile):
     }
 
 
+def nutrition_missing_profile_items(member, profile, language=None):
+    language = language or current_language()
+    items = []
+
+    def add(field, label_key, action_key=None):
+        items.append({
+            "field": field,
+            "label": translated_text(label_key, language),
+            "action": translated_text(action_key or label_key, language),
+        })
+
+    if not getattr(member, "birthdate", None):
+        add("birthdate", "date_of_birth", "add_date_of_birth")
+    if not profile:
+        add("sex", "coach_sex_label", "add_missing_profile_data")
+        add("height_cm", "coach_height_cm", "add_height")
+        add("weight_kg", "coach_current_weight_kg", "add_current_weight")
+        add("nutrition_goal", "coach_nutrition_goal", "add_nutrition_goal")
+        add("dietary_preferences", "coach_dietary_preferences", "add_food_preferences")
+        add("allergies", "coach_allergies", "add_allergies")
+        return items
+
+    if profile.sex in (None, ""):
+        add("sex", "coach_sex_label", "add_missing_profile_data")
+    if profile.height_cm in (None, ""):
+        add("height_cm", "coach_height_cm", "add_height")
+    if profile.weight_kg in (None, ""):
+        add("weight_kg", "coach_current_weight_kg", "add_current_weight")
+    if profile.nutrition_goal in (None, ""):
+        add("nutrition_goal", "coach_nutrition_goal", "add_nutrition_goal")
+    if profile.dietary_preferences in (None, ""):
+        add("dietary_preferences", "coach_dietary_preferences", "add_food_preferences")
+    if profile.allergies in (None, ""):
+        add("allergies", "coach_allergies", "add_allergies")
+    if profile.sex == "female" and profile.pregnancy_status in (None, ""):
+        add("pregnancy_status", "coach_pregnancy_status_label", "add_pregnancy_details")
+    if is_pregnant_profile(profile):
+        for field, label_key in [
+            ("gestational_weeks", "coach_gestational_weeks"),
+            ("multiple_pregnancy", "coach_multiple_pregnancy"),
+            ("provider_cleared_exercise", "coach_provider_cleared_exercise"),
+            ("pregnancy_consent", "coach_pregnancy_consent"),
+        ]:
+            if getattr(profile, field, None) in (None, "", False):
+                add(field, label_key, "add_pregnancy_details")
+    return items
+
+
 def macro_split(total, shares):
     if not total:
         return [None for _ in shares]
@@ -4466,6 +4514,7 @@ def macro_split(total, shares):
 def personalized_nutrition_meal_plan(member, profile, language=None):
     language = language or current_language()
     targets = nutrition_target_numbers(member, profile)
+    missing_items = nutrition_missing_profile_items(member, profile, language)
     calorie_parts = macro_split(targets["calories"], [0.24, 0.31, 0.33, 0.12])
     protein_parts = macro_split(targets["protein"], [0.25, 0.30, 0.30, 0.15])
     carb_parts = macro_split(targets["carbs"], [0.25, 0.35, 0.30, 0.10])
@@ -4505,7 +4554,6 @@ def personalized_nutrition_meal_plan(member, profile, language=None):
             "carbs": carb_parts[index],
             "fat": fat_parts[index],
         })
-    missing_labels = [translated_text(key, language) for key in targets["missing"]]
     return {
         "summary": translated_text(
             "meal_plan_personalized_summary",
@@ -4513,7 +4561,8 @@ def personalized_nutrition_meal_plan(member, profile, language=None):
             goal=coach_label("nutrition", goal, language).lower(),
             days=profile.training_days or translated_text("not_available", language),
         ),
-        "missing_data": missing_labels,
+        "missing_data": [item["label"] for item in missing_items],
+        "missing_items": missing_items,
         "targets": targets,
         "meals": meals,
         "alternatives": [
@@ -5453,6 +5502,17 @@ def coach_recent_interactions(member_id, limit=8):
     )
 
 
+def floating_coach_recent_interactions(member_id, limit=4):
+    if not member_id or is_staff_user():
+        return []
+    try:
+        return coach_recent_interactions(member_id, limit=limit)
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Could not load floating Dreamz Coach conversation preview.")
+        return []
+
+
 def coach_context_summary(member, profile):
     if not profile:
         return f"Member {member.member_id}: no coach profile yet."
@@ -6370,6 +6430,7 @@ def inject_csrf_token():
         "current_staff_role": current_staff_role(),
         "current_staff_username": current_staff_username(),
         "account_notification_count": member_account_notification_count(member_id) if member_id and not is_staff_user() else 0,
+        "floating_coach_interactions": floating_coach_recent_interactions(member_id) if member_id and not is_staff_user() else [],
         "open_cancellation_count": open_cancellation_count() if is_staff_user() else 0,
         "open_email_log_count": open_email_log_count() if is_staff_user() else 0,
         "t_document_title": lambda document_type: translated_document_title(document_type, current_language()),
@@ -8655,11 +8716,15 @@ def member_nutrition():
         app.logger.exception("Runtime schema unavailable while rendering member nutrition.")
 
     context = nutrition_plan_context(member, language=current_language())
+    meal_plan = context.get("meal_plan")
+    nutrition_missing_items = meal_plan.get("missing_items", []) if meal_plan else nutrition_missing_profile_items(member, context.get("profile"), current_language())
     return render_template(
         "nutrition.html",
         member=member,
         display_name=display_member_name(member.name),
         member_photo_available=bool(is_s3_uri(member.photo_path) or resolved_photo_path(member.photo_path)),
+        nutrition_missing_items=nutrition_missing_items,
+        nutrition_profile_complete=not nutrition_missing_items,
         **context,
     )
 
@@ -8950,6 +9015,8 @@ def member_coach():
         CoachPlan.query.filter_by(member_id=member.member_id).delete()
         db.session.commit()
         flash(translated_text("coach_profile_saved", current_language()))
+        if request.form.get("return_to") == "nutrition":
+            return redirect(url_for("member_nutrition") + "#nutrition-plan")
         return redirect(url_for("member_coach"))
 
     personal_plan = coach_plan_for_member(member, profile) if profile else None
@@ -8983,6 +9050,8 @@ def member_coach():
         planned_group_classes=member_planned_group_classes(member.member_id),
         coach_interactions=coach_recent_interactions(member.member_id),
         coach_next_session=coach_next_session_context(profile, member.member_id),
+        focus_field=request.args.get("field", "").strip(),
+        return_to=request.args.get("return_to", "").strip(),
     )
 
 

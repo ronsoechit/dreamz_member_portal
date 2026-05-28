@@ -129,6 +129,52 @@
 	  {% block content %}{% endblock %}
   </main>
 
+  {% if current_member_id and not current_staff_role %}
+    <div class="dreamz-coach-widget" data-floating-coach data-message-url="{{ url_for('coach_message') }}" data-csrf-token="{{ csrf_token() }}">
+      <button type="button" class="dreamz-coach-fab" data-floating-coach-toggle aria-label="{{ t('open_dreamz_coach') }}" aria-expanded="false">
+        <span class="dreamz-coach-avatar" aria-hidden="true">DC</span>
+        <span class="dreamz-coach-fab-label">{{ t('dreamz_coach') }}</span>
+      </button>
+      <section class="dreamz-coach-panel" data-floating-coach-panel hidden aria-label="{{ t('dreamz_coach') }}">
+        <div class="dreamz-coach-panel-header">
+          <div class="flex items-center gap-3">
+            <span class="dreamz-coach-avatar dreamz-coach-avatar-large" aria-hidden="true">DC</span>
+            <div>
+              <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('dreamz_coach') }}</div>
+              <h2 class="text-lg font-semibold text-white">{{ t('coach_chat_title') }}</h2>
+            </div>
+          </div>
+          <button type="button" class="dreamz-coach-close" data-floating-coach-close aria-label="{{ t('close') }}">&times;</button>
+        </div>
+        <div class="dreamz-coach-thread" data-floating-coach-thread>
+          {% for item in floating_coach_interactions %}
+            <div class="dreamz-coach-message {% if item.actor == 'member' %}is-member{% else %}is-coach{% endif %}" data-floating-coach-message>
+              <div class="text-xs font-semibold uppercase tracking-wide {% if item.actor == 'member' %}text-yellow-200{% else %}text-green-200{% endif %}">
+                {{ t('coach_member_label') if item.actor == 'member' else t('coach_reply_label') }}
+              </div>
+              <div class="mt-1 whitespace-pre-wrap text-sm leading-6">{{ item.message }}</div>
+            </div>
+          {% else %}
+            <div class="dreamz-coach-empty" data-floating-coach-empty>{{ t('coach_chat_empty') }}</div>
+          {% endfor %}
+        </div>
+        <div class="dreamz-coach-prompts">
+          <button type="button" data-floating-coach-prompt="{{ t('ask_about_todays_workout') }}">{{ t('ask_about_todays_workout') }}</button>
+          <button type="button" data-floating-coach-prompt="{{ t('adjust_my_training') }}">{{ t('adjust_my_training') }}</button>
+          <button type="button" data-floating-coach-prompt="{{ t('review_my_meal_plan') }}">{{ t('review_my_meal_plan') }}</button>
+          <button type="button" data-floating-coach-prompt="{{ t('what_should_i_eat_today') }}">{{ t('what_should_i_eat_today') }}</button>
+          <button type="button" data-floating-coach-prompt="{{ t('recovery_advice') }}">{{ t('recovery_advice') }}</button>
+          <button type="button" data-floating-coach-prompt="{{ t('progress_review') }}">{{ t('progress_review') }}</button>
+        </div>
+        <div class="dreamz-coach-input-row">
+          <textarea rows="2" data-floating-coach-input placeholder="{{ t('coach_chat_placeholder') }}" aria-label="{{ t('coach_chat_question') }}"></textarea>
+          <button type="button" data-floating-coach-send>{{ t('coach_chat_send') }}</button>
+        </div>
+        <div class="dreamz-coach-status" data-floating-coach-status hidden></div>
+      </section>
+    </div>
+  {% endif %}
+
   <footer class="app-footer bg-gray-800 text-center py-4 text-sm text-gray-400">
     &copy; {{ current_year or 2025 }} Dreamz Fitness Bonaire
   </footer>
@@ -183,6 +229,121 @@
       });
     }
   </script>
+  {% if current_member_id and not current_staff_role %}
+    <script>
+      (() => {
+        const widget = document.querySelector("[data-floating-coach]");
+        if (!widget) return;
+        const panel = widget.querySelector("[data-floating-coach-panel]");
+        const toggle = widget.querySelector("[data-floating-coach-toggle]");
+        const closeButton = widget.querySelector("[data-floating-coach-close]");
+        const thread = widget.querySelector("[data-floating-coach-thread]");
+        const input = widget.querySelector("[data-floating-coach-input]");
+        const send = widget.querySelector("[data-floating-coach-send]");
+        const status = widget.querySelector("[data-floating-coach-status]");
+        const csrfToken = widget.dataset.csrfToken || "";
+        const messageUrl = widget.dataset.messageUrl || "";
+
+        const setOpen = (open, focus = true) => {
+          panel.hidden = !open;
+          toggle.setAttribute("aria-expanded", open ? "true" : "false");
+          widget.classList.toggle("is-open", open);
+          if (open && focus) window.setTimeout(() => input?.focus(), 80);
+        };
+
+        const escapeHtml = (value) => String(value || "").replace(/[&<>"']/g, (char) => ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#039;",
+        }[char]));
+
+        const renderMessage = (message) => escapeHtml(message)
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => {
+            const bullet = line.match(/^[-*]\s+(.+)$/);
+            if (bullet) return `<div class="flex gap-2"><span class="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-yellow-400"></span><span>${bullet[1]}</span></div>`;
+            return `<p>${line}</p>`;
+          })
+          .join("");
+
+        const appendMessage = (actor, message) => {
+          thread?.querySelector("[data-floating-coach-empty]")?.remove();
+          const card = document.createElement("div");
+          card.className = `dreamz-coach-message ${actor === "member" ? "is-member" : "is-coach"}`;
+          const label = document.createElement("div");
+          label.className = `text-xs font-semibold uppercase tracking-wide ${actor === "member" ? "text-yellow-200" : "text-green-200"}`;
+          label.textContent = actor === "member" ? "{{ t('coach_member_label') }}" : "{{ t('coach_reply_label') }}";
+          const body = document.createElement("div");
+          body.className = "mt-1 text-sm leading-6";
+          body.innerHTML = renderMessage(message);
+          card.append(label, body);
+          thread?.append(card);
+          thread?.scrollTo({ top: thread.scrollHeight, behavior: "smooth" });
+        };
+
+        const setStatus = (message, kind = "info") => {
+          if (!status) return;
+          status.hidden = !message;
+          status.textContent = message || "";
+          status.dataset.kind = kind;
+        };
+
+        const submit = async () => {
+          const message = input?.value.trim() || "";
+          if (!message || !messageUrl) return;
+          appendMessage("member", message);
+          input.value = "";
+          send.disabled = true;
+          setStatus("{{ t('coach_loading') }}");
+          try {
+            const response = await fetch(messageUrl, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-CSRF-Token": csrfToken,
+              },
+              body: JSON.stringify({ message }),
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || payload.status !== "success") {
+              throw new Error(payload.message || "{{ t('coach_question_required') }}");
+            }
+            appendMessage("coach", payload.reply || "");
+            setStatus("");
+          } catch (error) {
+            setStatus(error.message || "{{ t('coach_question_required') }}", "error");
+          } finally {
+            send.disabled = false;
+          }
+        };
+
+        toggle?.addEventListener("click", () => setOpen(panel.hidden));
+        closeButton?.addEventListener("click", () => setOpen(false, false));
+        send?.addEventListener("click", submit);
+        input?.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) submit();
+        });
+        widget.querySelectorAll("[data-floating-coach-prompt]").forEach((button) => {
+          button.addEventListener("click", () => {
+            input.value = button.dataset.floatingCoachPrompt || button.textContent.trim();
+            input.focus();
+          });
+        });
+        document.querySelectorAll("[data-open-dreamz-coach]").forEach((trigger) => {
+          trigger.addEventListener("click", (event) => {
+            event.preventDefault();
+            const prompt = trigger.dataset.coachPrompt;
+            if (prompt) input.value = prompt;
+            setOpen(true);
+          });
+        });
+      })();
+    </script>
+  {% endif %}
   <script src="{{ url_for('static', filename='js/pwa-install.js') }}" defer></script>
 </body>
 </html>
