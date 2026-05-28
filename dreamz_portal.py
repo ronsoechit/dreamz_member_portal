@@ -6715,7 +6715,20 @@ def choose_language():
     next_url = safe_local_next_url(request.args.get("next"), url_for("login"))
     if next_url == "/":
         next_url = url_for("login")
-    return render_template("language_select.html", next_url=next_url)
+    if language_choice_from_request():
+        return redirect(next_url)
+    language_cards = [
+        {
+            "code": code,
+            "label": label,
+            "flag": LANGUAGE_FLAGS.get(code, ""),
+            "title": translated_text("choose_language_title", code),
+            "action": translated_text("continue_in_language", code),
+            "aria_label": translated_text("choose_language_card_aria", code, display_language=label),
+        }
+        for code, label in LANGUAGES.items()
+    ]
+    return render_template("language_select.html", next_url=next_url, language_cards=language_cards)
 
 
 @app.get("/pricing")

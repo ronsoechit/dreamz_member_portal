@@ -188,10 +188,43 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
         self.assertIn("Choose your language", body)
+        self.assertIn("Kies je taal", body)
+        self.assertIn("Skoge bo idioma", body)
+        self.assertIn("Elige tu idioma", body)
+        self.assertIn("Continue", body)
+        self.assertIn("Doorgaan", body)
+        self.assertIn("Kontinu", body)
+        self.assertIn("Continuar", body)
         self.assertIn("English", body)
         self.assertIn("Nederlands", body)
         self.assertIn("Papiamentu", body)
         self.assertIn("Español", body)
+
+    def test_saved_language_skips_language_selection_screen(self):
+        self.client.get("/language?lang=nl&next=/login")
+
+        response = self.client.get("/choose-language?next=/login")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response.headers["Location"])
+
+    def test_selecting_each_language_opens_login_in_that_language(self):
+        cases = {
+            "en": ("Member Login", "Email address"),
+            "nl": ("Leden Login", "E-mailadres"),
+            "pap": ("Login di Miembro", "Adr"),
+            "es": ("Acceso de Miembro", "Direcci"),
+        }
+        for language, expected_texts in cases.items():
+            with self.subTest(language=language):
+                client = app.test_client()
+                response = client.get(f"/language?lang={language}&next=/login")
+                self.assertEqual(response.status_code, 302)
+                response = client.get("/login")
+                self.assertEqual(response.status_code, 200)
+                body = response.get_data(as_text=True)
+                for expected in expected_texts:
+                    self.assertIn(expected, body)
 
     def test_language_choice_is_stored_in_session(self):
         response = self.client.get("/language?lang=es&next=/login")
@@ -224,6 +257,31 @@ class PortalRouteTests(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("Leden Login", body)
         self.assertIn("E-mailadres", body)
+
+    def test_logout_keeps_selected_language(self):
+        self.add_member(member_id="1206", email="member@example.com")
+        self.client.get("/language?lang=es&next=/login")
+        self.login_as("1206")
+
+        response = self.client.get("/logout")
+        self.assertEqual(response.status_code, 302)
+
+        response = self.client.get("/login")
+        body = response.get_data(as_text=True)
+        self.assertIn("Acceso de Miembro", body)
+        self.assertIn("Direcci", body)
+
+    def test_account_language_change_updates_app_language(self):
+        self.add_member(member_id="1206", email="member@example.com")
+        self.login_as("1206")
+
+        self.client.get("/language?lang=pap&next=/account?section=preferences")
+        response = self.client.get("/account?section=preferences")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Idioma &amp; preferensianan", body)
+        self.assertIn("Login di Miembro", self.client.get("/login").get_data(as_text=True))
 
     def test_first_code_login_requires_password_setup(self):
         self.add_member(member_id="1206", email="member@example.com")
