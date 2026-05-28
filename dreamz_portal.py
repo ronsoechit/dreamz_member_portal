@@ -651,6 +651,23 @@ class CoachActivityLog(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
 
 
+class MealLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.String, nullable=False, index=True)
+    meal_key = db.Column(db.String, nullable=False, index=True)
+    meal_title = db.Column(db.String)
+    log_type = db.Column(db.String, nullable=False, default="followed", index=True)
+    food_items = db.Column(db.Text)
+    portion = db.Column(db.Text)
+    calories = db.Column(db.Float)
+    protein = db.Column(db.Float)
+    carbs = db.Column(db.Float)
+    fat = db.Column(db.Float)
+    language = db.Column(db.String, default=DEFAULT_LANGUAGE)
+    logged_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+
+
 class CoachProgressEntry(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     member_id = db.Column(db.String, nullable=False, index=True)
@@ -5026,6 +5043,39 @@ def coach_plan_for_member(member, profile, language=None, force=False):
     return plan
 
 
+def nutrition_plan_context(member, profile=None, language=None):
+    language = language or current_language()
+    profile = profile or coach_profile_for_member(member)
+    if not member or not profile:
+        return {
+            "nutrition_section": None,
+            "meal_plan": None,
+            "nutrition_next_meal": None,
+            "profile": profile,
+            "meal_logs": [],
+        }
+
+    personal_plan = coach_plan_for_member(member, profile, language=language)
+    nutrition_section = personal_plan[1] if personal_plan and len(personal_plan) > 1 else None
+    meal_plan = nutrition_section.get("meal_plan") if isinstance(nutrition_section, dict) else None
+    nutrition_next_meal = meal_plan["meals"][0] if meal_plan and meal_plan.get("meals") else None
+    meal_logs = (
+        MealLog.query
+        .filter_by(member_id=member.member_id)
+        .order_by(MealLog.logged_at.desc(), MealLog.id.desc())
+        .limit(8)
+        .all()
+    )
+    return {
+        "nutrition_section": nutrition_section,
+        "meal_plan": meal_plan,
+        "nutrition_next_meal": nutrition_next_meal,
+        "profile": profile,
+        "personal_plan": personal_plan,
+        "meal_logs": meal_logs,
+    }
+
+
 def recent_coach_workout_summary(member_id, limit=3):
     sessions = (
         CoachWorkoutSession.query
@@ -7055,16 +7105,13 @@ def member_dashboard_context(member, staff_admin_view=False):
         None,
         lambda: coach_latest_workout(member.member_id),
     )
-    nutrition_dashboard_plan = optional_dashboard_value(
-        "nutrition_dashboard_plan",
-        None,
-        lambda: personalized_nutrition_meal_plan(member, coach_profile, language) if coach_profile else None,
+    nutrition_context = optional_dashboard_value(
+        "nutrition_context",
+        {"meal_plan": None, "nutrition_next_meal": None},
+        lambda: nutrition_plan_context(member, coach_profile, language) if coach_profile else {"meal_plan": None, "nutrition_next_meal": None},
     )
-    nutrition_next_meal = (
-        nutrition_dashboard_plan["meals"][0]
-        if nutrition_dashboard_plan and nutrition_dashboard_plan.get("meals")
-        else None
-    )
+    nutrition_dashboard_plan = nutrition_context.get("meal_plan")
+    nutrition_next_meal = nutrition_context.get("nutrition_next_meal")
     coach_counts = (
         optional_dashboard_value("coach_data_counts", {"total": 0}, lambda: coach_data_counts(member.member_id))
         if staff_admin_view else {"total": 0}
@@ -8444,6 +8491,27 @@ def member_group_classes():
     )
 
 
+@app.get("/nutrition")
+def member_nutrition():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    try:
+        ensure_runtime_schema()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Runtime schema unavailable while rendering member nutrition.")
+
+    context = nutrition_plan_context(member, language=current_language())
+    return render_template(
+        "nutrition.html",
+        member=member,
+        display_name=display_member_name(member.name),
+        member_photo_available=bool(is_s3_uri(member.photo_path) or resolved_photo_path(member.photo_path)),
+        **context,
+    )
+
+
 @app.post("/coach/date-of-birth")
 def save_coach_date_of_birth():
     member, redirect_response = current_member_or_redirect()
@@ -8453,13 +8521,52 @@ def save_coach_date_of_birth():
     birthdate = parse_optional_date(request.form.get("birthdate") or request.form.get("date_of_birth"))
     if not birthdate:
         flash(translated_text("date_of_birth_required", current_language()), "error")
-        return redirect(url_for("member_coach", tab="nutrition") + "#nutrition-plan")
+        return redirect(url_for("member_nutrition") + "#nutrition-plan")
 
     member.birthdate = birthdate
     CoachPlan.query.filter_by(member_id=member.member_id).delete()
     db.session.commit()
     flash(translated_text("date_of_birth_saved", current_language()), "success")
-    return redirect(url_for("member_coach", tab="nutrition") + "#nutrition-plan")
+    return redirect(url_for("member_nutrition") + "#nutrition-plan")
+
+
+@app.post("/nutrition/meal-log")
+def save_meal_log():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    validate_csrf_token()
+    log_type = request.form.get("log_type", "followed").strip() or "followed"
+    if log_type not in {"followed", "different", "adjust"}:
+        log_type = "followed"
+    db.session.add(MealLog(
+        member_id=member.member_id,
+        meal_key=request.form.get("meal_key", "").strip() or "meal",
+        meal_title=request.form.get("meal_title", "").strip() or None,
+        log_type=log_type,
+        food_items=request.form.get("food_items", "").strip() or None,
+        portion=request.form.get("portion", "").strip() or None,
+        calories=parse_optional_float(request.form.get("calories")),
+        protein=parse_optional_float(request.form.get("protein")),
+        carbs=parse_optional_float(request.form.get("carbs")),
+        fat=parse_optional_float(request.form.get("fat")),
+        language=current_language(),
+    ))
+    db.session.commit()
+    flash(translated_text("meal_log_saved", current_language()), "success")
+    return redirect(url_for("member_nutrition") + "#nutrition-plan")
+
+
+@app.post("/nutrition/regenerate")
+def regenerate_nutrition_plan():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    validate_csrf_token()
+    CoachPlan.query.filter_by(member_id=member.member_id).delete()
+    db.session.commit()
+    flash(translated_text("nutrition_plan_regenerated", current_language()), "success")
+    return redirect(url_for("member_nutrition") + "#nutrition-plan")
 
 
 @app.post("/group-classes/preferences")

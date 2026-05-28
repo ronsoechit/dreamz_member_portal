@@ -20,7 +20,7 @@ os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
 from translations import LANGUAGES, TRANSLATIONS  # noqa: E402
-from dreamz_portal import AppSetting, AgreementCategory, CancellationConfirmation, CancellationRequest, CancellationWindow, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, DigitalSignatureAuditTrail, DigitalSignatureRecord, EmailLog, FeatureAccessRule, GroupClassOccurrence, GroupClassSchedule, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, Member, MemberAgreementAcceptance, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, MemberSignedDocument, MembershipApplication, MembershipApplicationAuditEvent, MembershipApplicationDocument, MembershipApplicationStatus, MembershipApplicationStep, PricingCategory, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, SignedPdfRecord, app, cancellation_message, coach_context_summary, coach_plan_for_member, coach_profile_completion, db, member_access_profile, member_account_notification_count, next_date_for_group_class, pricing_item_access_tags, pricing_visibility_list, seed_feature_access_rules, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
+from dreamz_portal import AppSetting, AgreementCategory, CancellationConfirmation, CancellationRequest, CancellationWindow, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, DigitalSignatureAuditTrail, DigitalSignatureRecord, EmailLog, FeatureAccessRule, GroupClassOccurrence, GroupClassSchedule, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, MealLog, Member, MemberAgreementAcceptance, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, MemberSignedDocument, MembershipApplication, MembershipApplicationAuditEvent, MembershipApplicationDocument, MembershipApplicationStatus, MembershipApplicationStep, PricingCategory, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, SignedPdfRecord, app, cancellation_message, coach_context_summary, coach_plan_for_member, coach_profile_completion, db, member_access_profile, member_account_notification_count, next_date_for_group_class, pricing_item_access_tags, pricing_visibility_list, seed_feature_access_rules, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
 
 
 class FakeS3Body:
@@ -436,7 +436,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Today&#39;s meal plan", body)
         self.assertIn("Your meal plan is ready", body)
         self.assertIn("Open meal plan", body)
-        self.assertIn("/coach?tab=nutrition#nutrition-plan", body)
+        self.assertIn("/nutrition", body)
         self.assertIn("Membership status", body)
         self.assertIn("Current membership", body)
         self.assertIn("contract Dreamz 6 months", body)
@@ -446,7 +446,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertLess(body.index("Nutrition plan"), body.index("Today at Dreamz"))
         self.assertNotIn("Set your goals, training rhythm", body)
 
-    def test_nutrition_deep_link_opens_personalized_meal_plan(self):
+    def test_dedicated_nutrition_page_opens_personalized_meal_plan(self):
         self.add_member(
             member_id="13659",
             name="Ron Soechit",
@@ -472,15 +472,17 @@ class PortalRouteTests(unittest.TestCase):
         db.session.commit()
         self.login_as("13659")
 
-        response = self.client.get("/coach?tab=nutrition")
+        response = self.client.get("/nutrition")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
         self.assertIn('id="nutrition-plan"', body)
+        self.assertIn("Nutrition", body)
         self.assertIn("Daily targets", body)
         self.assertIn("Meal plan structure", body)
         self.assertIn("Personalized for you", body)
         self.assertIn("I followed this meal", body)
+        self.assertIn("I ate something different", body)
         self.assertIn("Adjust this meal", body)
         self.assertIn("Regenerate plan", body)
         self.assertIn("This meal plan is built for muscle gain", body)
@@ -511,7 +513,7 @@ class PortalRouteTests(unittest.TestCase):
         db.session.commit()
         self.login_as("13659")
 
-        response = self.client.get("/coach?tab=nutrition")
+        response = self.client.get("/nutrition")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
@@ -525,9 +527,52 @@ class PortalRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(save_response.status_code, 302)
-        self.assertIn("/coach?tab=nutrition#nutrition-plan", save_response.headers["Location"])
+        self.assertIn("/nutrition#nutrition-plan", save_response.headers["Location"])
         member = Member.query.filter_by(member_id="13659").one()
         self.assertEqual(member.birthdate, date(1990, 1, 1))
+
+    def test_member_can_save_meal_log_from_nutrition_page(self):
+        self.add_member(
+            member_id="13659",
+            name="Ron Soechit",
+            birthdate=date(1990, 1, 1),
+        )
+        db.session.add(
+            CoachProfile(
+                member_id="13659",
+                sex="male",
+                primary_goal="build_muscle",
+                experience_level="intermediate",
+                training_days=4,
+                session_minutes=60,
+                training_place="dreamz_gym",
+                height_cm=180,
+                weight_kg=85,
+                injuries="none",
+                nutrition_goal="muscle_gain",
+                dietary_preferences="local food",
+                allergies="none",
+            )
+        )
+        db.session.commit()
+        self.login_as("13659")
+
+        response = self.client.post(
+            "/nutrition/meal-log",
+            data=self.csrf_form_data(
+                log_type="different",
+                meal_key="1",
+                meal_title="Breakfast",
+                food_items="eggs and oats",
+                portion="1 plate",
+                calories="600",
+                protein="35",
+            ),
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/nutrition#nutrition-plan", response.headers["Location"])
+        self.assertEqual(MealLog.query.filter_by(member_id="13659").count(), 1)
 
     def test_coach_page_requires_member_login(self):
         response = self.client.get("/coach")

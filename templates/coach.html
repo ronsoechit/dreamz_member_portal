@@ -73,7 +73,7 @@
         {{ t('coach_start_session') if next_session_startable else t('coach_review_guidance') }}
       </div>
     </a>
-    <a href="#nutrition-plan" data-open-coach-view="nutrition" class="coach-action-card rounded-lg border border-green-400/30 bg-green-500/10 p-4 transition hover:border-green-200 hover:bg-green-500/15">
+    <a href="{{ url_for('member_nutrition') }}" class="coach-action-card rounded-lg border border-green-400/30 bg-green-500/10 p-4 transition hover:border-green-200 hover:bg-green-500/15">
       <div class="text-xs font-semibold uppercase tracking-wide text-green-200">{{ t('nutrition_plan') }}</div>
       <div class="mt-2 text-lg font-semibold text-white">{{ t('todays_meal_plan') }}</div>
       {% if meal_plan_preview %}
@@ -1007,6 +1007,11 @@
     });
     const coachParams = new URLSearchParams(window.location.search);
     const requestedCoachView = coachParams.get("tab") || coachParams.get("view");
+    if (coachParams.get("edit") === "profile" && form) {
+      form.classList.remove("hidden");
+      editButtons.forEach((button) => button.classList.add("hidden"));
+      form.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
     if (requestedCoachView) {
       setCoachView(requestedCoachView, {
         scroll: requestedCoachView === "nutrition" || Boolean(window.location.hash),
