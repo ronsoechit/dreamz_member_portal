@@ -3139,6 +3139,55 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("status=ended", context)
         self.assertIn("status=upcoming", context)
 
+    def test_coach_context_includes_member_portal_account_pricing_and_documents(self):
+        member = self.add_member(
+            member_id="13659",
+            name="Soechit, Ron",
+            plan_type="contract Dreamz 6 months",
+            contract_type="6-months",
+            billing_amount=70,
+            balance=67.50,
+            next_payment=date(2026, 6, 1),
+            due_date=date(2026, 5, 31),
+            start_date=date(2025, 12, 24),
+            end_date=date(2026, 6, 24),
+            birthdate=date(1985, 1, 1),
+        )
+        profile = CoachProfile(
+            member_id="13659",
+            primary_goal="build_muscle",
+            experience_level="intermediate",
+            training_days=2,
+            session_minutes=45,
+            training_place="dreamz_gym",
+            height_cm=180,
+            weight_kg=82,
+            nutrition_goal="muscle_gain",
+            dietary_preferences="local food",
+            allergies="none",
+            sex="male",
+            pregnancy_status="not_pregnant",
+        )
+        db.session.add(profile)
+        self.add_document(member_id="13659", document_type="contract", title="Contract", path="contracts/13659.pdf")
+        seed_pricing_catalog()
+        seed_legal_documents()
+        db.session.commit()
+
+        context = coach_context_summary(member, profile)
+
+        self.assertIn("member_portal_context=", context)
+        self.assertIn("account_membership=plan=contract Dreamz 6 months", context)
+        self.assertIn("open_gym_balance=$67.50", context)
+        self.assertIn("payment_method=frontdesk_for_gym_balance", context)
+        self.assertIn("document_groups=contract count=1", context)
+        self.assertIn("pricing_catalog=", context)
+        self.assertIn("No contract / 1 month", context)
+        self.assertIn("/account/billing", context)
+        self.assertIn("/pricing", context)
+        self.assertIn("biological_sex=male", context)
+        self.assertNotIn("pregnancy_status=not_pregnant", context)
+
     def test_coach_group_class_question_returns_portal_schedule(self):
         member = self.add_member(member_id="13659", name="Ron Soechit")
         seed_group_class_schedule()
@@ -3175,6 +3224,23 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(payload["source"], "portal_context")
         self.assertIn("BODYPUMP", payload["reply"])
         self.assertIn("18:00-19:00", payload["reply"])
+
+    def test_coach_message_balance_question_uses_portal_context(self):
+        self.add_member(member_id="13659", name="Ron Soechit", balance=67.50, due_date=date(2026, 5, 31))
+        self.login_as("13659")
+
+        response = self.client.post(
+            "/coach/message",
+            json={"message": "Heb ik nog schuld?"},
+            headers={"X-CSRF-Token": "test-csrf-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["source"], "portal_context")
+        self.assertIn("$67.50", payload["reply"])
+        self.assertIn("front desk", payload["reply"].lower())
 
     def test_coach_context_includes_pregnancy_class_safety_for_pregnant_female(self):
         member = self.add_member(member_id="13659", name="Ron Soechit")

@@ -5696,9 +5696,216 @@ def floating_coach_recent_threads(member_id, limit=4):
     return exchanges[:limit]
 
 
+def portal_context_value(label, default, factory):
+    try:
+        with db.session.no_autoflush:
+            return factory()
+    except Exception:
+        app.logger.exception("Dreamz Coach portal context failed: %s", label)
+        return default
+
+
+def portal_context_date(value):
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return "unknown"
+
+
+def portal_context_bool(value):
+    if value is None:
+        return "unknown"
+    return "yes" if bool(value) else "no"
+
+
+def portal_member_context_summary(member, profile, language=None):
+    language = language or (current_language() if has_request_context() else DEFAULT_LANGUAGE)
+    if not member:
+        return "member_portal_context=unavailable"
+
+    policy = portal_context_value(
+        "cancellation_policy",
+        None,
+        lambda: cancellation_policy_for_member(member),
+    )
+    payment_status = portal_context_value(
+        "payment_status",
+        {},
+        lambda: payment_status_for_member(member),
+    )
+    account_notifications = portal_context_value(
+        "account_notifications",
+        0,
+        lambda: member_account_notification_count(member.member_id),
+    )
+    document_groups = portal_context_value(
+        "member_documents",
+        [],
+        lambda: member_document_groups(member),
+    )
+    signed_documents = portal_context_value(
+        "signed_documents",
+        [],
+        lambda: (
+            MemberSignedDocument.query
+            .filter_by(member_id=member.member_id)
+            .order_by(MemberSignedDocument.signed_at.desc(), MemberSignedDocument.uploaded_at.desc())
+            .limit(8)
+            .all()
+        ),
+    )
+    applications = portal_context_value(
+        "membership_applications",
+        [],
+        lambda: (
+            MembershipApplication.query
+            .filter(
+                db.or_(
+                    MembershipApplication.email == member.email,
+                    MembershipApplication.phone == (member.mobile or member.phone),
+                )
+            )
+            .order_by(MembershipApplication.created_at.desc(), MembershipApplication.id.desc())
+            .limit(5)
+            .all()
+        ) if (member.email or member.mobile or member.phone) else [],
+    )
+    pricing_items = portal_context_value(
+        "member_pricing",
+        [],
+        lambda: [
+            item for item in active_pricing_items_for_visibility(["public", "members"])
+            if item.member_eligible and item.category_key != "external_trainer_b2b"
+        ][:14],
+    )
+    meal_plan = portal_context_value(
+        "nutrition_meal_plan",
+        None,
+        lambda: personalized_nutrition_meal_plan(member, profile, language) if profile else None,
+    )
+    meal_logs = portal_context_value(
+        "meal_logs",
+        [],
+        lambda: (
+            MealLog.query
+            .filter_by(member_id=member.member_id)
+            .order_by(MealLog.logged_at.desc(), MealLog.id.desc())
+            .limit(8)
+            .all()
+        ),
+    )
+    targets = meal_plan.get("targets") if isinstance(meal_plan, dict) else {}
+    missing_nutrition = (
+        meal_plan.get("missing_data")
+        if isinstance(meal_plan, dict) else
+        [item["label"] for item in nutrition_missing_profile_items(member, profile, language)]
+    )
+    progress = portal_context_value(
+        "progress_entries",
+        [],
+        lambda: (
+            CoachProgressEntry.query
+            .filter_by(member_id=member.member_id)
+            .order_by(CoachProgressEntry.created_at.desc(), CoachProgressEntry.id.desc())
+            .limit(5)
+            .all()
+        ),
+    )
+    next_session = portal_context_value(
+        "next_session",
+        None,
+        lambda: coach_personal_plan(profile, member=member, language=language)[0]["sessions"][0]
+        if profile and coach_personal_plan(profile, member=member, language=language) else None,
+    )
+    recent_workouts = portal_context_value(
+        "recent_workouts",
+        [],
+        lambda: recent_coach_workout_summary(member.member_id, limit=5),
+    )
+
+    policy_status = policy.status if policy else "unknown"
+    policy_window = (
+        f"current_term_end={portal_context_date(policy.current_term_end)}, "
+        f"window_open={portal_context_date(policy.window_open)}, "
+        f"window_close={portal_context_date(policy.last_request_date)}, "
+        f"can_request={portal_context_bool(policy.can_request)}"
+        if policy else
+        "current_term_end=unknown, window_open=unknown, window_close=unknown, can_request=unknown"
+    )
+    document_text = "; ".join(
+        f"{group.get('document_type')} count={len(group.get('documents', []))}"
+        for group in document_groups
+    ) or "none"
+    signed_text = "; ".join(
+        f"{doc.document_type} status={doc.status} signed_at={portal_context_date(doc.signed_at)}"
+        for doc in signed_documents
+    ) or "none"
+    application_text = "; ".join(
+        f"application_id={application.id} status={application.status} membership={application.selected_membership_type or 'unknown'} payment={application.selected_payment_method or 'unknown'}"
+        for application in applications
+    ) or "none"
+    pricing_text = "; ".join(
+        f"{item.name} ${item.price_amount:.2f} {item.billing_interval} category={item.category_key} frontdesk={portal_context_bool(item.requires_front_desk_handling)} online_payment={portal_context_bool(item.online_payment_available)}"
+        for item in pricing_items
+    ) or "unavailable"
+    progress_text = "; ".join(
+        f"{portal_context_date(entry.created_at)} type={entry.entry_type} weight={entry.weight_kg or 'unknown'} notes={entry.notes or 'none'}"
+        for entry in progress
+    ) or "none"
+    meal_logs_text = "; ".join(
+        f"{portal_context_date(log.logged_at)} {log.meal_key} {log.log_type} foods={log.food_items or 'not specified'}"
+        for log in (meal_logs or [])[:5]
+    ) or "none"
+    next_session_text = "none"
+    if next_session:
+        session = next_session
+        next_session_text = (
+            f"session={session.get('number')} focus={session.get('focus')} "
+            f"minutes={session.get('minutes')} exercises={len(session.get('exercises') or [])}"
+        )
+
+    return (
+        "member_portal_context="
+        f"member_id={member.member_id}, name={display_member_name(member.name) or 'unknown'}, "
+        f"email_present={portal_context_bool(member.email)}, phone_present={portal_context_bool(member.mobile or member.phone)}, "
+        f"birthdate={portal_context_date(member.birthdate)}, visits={member.visits if member.visits is not None else 'unknown'}; "
+        "account_membership="
+        f"plan={member.plan_type or 'unknown'}, contract_type={member.contract_type or 'unknown'}, "
+        f"billing_status={member.billing_status or 'unknown'}, active={portal_context_bool(member.is_active)}, "
+        f"signup_date={portal_context_date(member.signup_date)}, contract_start={portal_context_date(member.start_date)}, contract_end={portal_context_date(member.end_date)}, "
+        f"billing_amount=${member.billing_amount or 0:.2f}, last_payment={portal_context_date(member.last_payment)}, next_payment={portal_context_date(member.next_payment)}; "
+        "account_balance="
+        f"open_gym_balance=${member.balance or 0:.2f}, due_date={portal_context_date(member.due_date)}, "
+        f"payment_status={payment_status.get('status', 'unknown')}, payment_reason={payment_status.get('reason', 'unknown')}, "
+        "payment_method=frontdesk_for_gym_balance, online_payment_available_for_gym_balance=no, "
+        f"account_notifications={account_notifications}; "
+        "cancellation="
+        f"status={policy_status}, {policy_window}; "
+        "documents_and_agreements="
+        f"document_groups={document_text}; signed_documents={signed_text}; relevant_legal_documents={','.join(member_relevant_legal_document_types(member))}; "
+        f"membership_applications={application_text}; "
+        "pricing_catalog="
+        f"{pricing_text}; "
+        "nutrition="
+        f"targets_calories={targets.get('calories', 'unknown')}, targets_protein={targets.get('protein', 'unknown')}, "
+        f"targets_carbs={targets.get('carbs', 'unknown')}, targets_fat={targets.get('fat', 'unknown')}, "
+        f"missing_nutrition_data={', '.join(missing_nutrition or []) or 'none'}, meal_logs={meal_logs_text}; "
+        "training_and_progress="
+        f"next_session={next_session_text}; recent_workouts={' | '.join(recent_workouts) or 'none'}; progress={progress_text}; "
+        "member_routes="
+        "/dashboard, /coach, /nutrition, /progress, /group-classes, /account, /account/membership, /account/billing, /account/agreements, /account/documents, /pricing"
+    )
+
+
 def coach_context_summary(member, profile):
+    portal_context = portal_member_context_summary(member, profile)
     if not profile:
-        return f"Member {member.member_id}: no coach profile yet; {coach_today_group_class_context(member)}"
+        return (
+            f"Member {member.member_id}: no coach profile yet; "
+            f"{portal_context}; "
+            f"{coach_today_group_class_context(member)}"
+        )
     latest_progress = (
         CoachProgressEntry.query
         .filter_by(member_id=member.member_id)
@@ -5721,6 +5928,7 @@ def coach_context_summary(member, profile):
         f"allergies={profile.allergies or 'none'}, home_equipment={profile.home_equipment or 'none'}, "
         f"{pregnancy_context_summary(profile)}"
         f"{progress_text}; "
+        f"{portal_context}; "
         f"{coach_today_group_class_context(member)}; "
         f"{group_class_training_load_context(member, profile)}"
     )
@@ -5805,6 +6013,89 @@ def coach_today_group_class_reply(member, language=None):
     return "\n".join(lines)
 
 
+def is_balance_or_billing_question(message):
+    text = (message or "").lower()
+    terms = (
+        "schuld", "schulden", "saldo", "open balance", "balance", "gym balance",
+        "owe", "debt", "payment", "betaling", "betalen", "factuur", "rekening",
+        "debo", "saldo habri", "pago", "deuda", "saldo abierto",
+    )
+    return any(term in text for term in terms)
+
+
+def is_membership_or_contract_question(message):
+    text = (message or "").lower()
+    terms = (
+        "membership", "lidmaatschap", "contract", "abonnement", "membership type",
+        "plan", "opzeg", "opzeggen", "cancellation", "cancel", "renewal", "verleng",
+        "membresia", "contrato", "cancelacion", "renovacion",
+    )
+    return any(term in text for term in terms)
+
+
+def is_pricing_question(message):
+    text = (message or "").lower()
+    terms = (
+        "prijs", "prijzen", "kosten", "kost", "tarief", "tarieven", "pricing",
+        "price", "cost", "fee", "fees", "membership options", "opciones",
+        "precio", "precios", "kuantu", "preis",
+    )
+    return any(term in text for term in terms)
+
+
+def coach_portal_direct_reply(member, profile, user_message, language=None):
+    language = language or current_language()
+    if not member or not user_message:
+        return None
+    balance = member.balance or 0
+    if is_balance_or_billing_question(user_message):
+        if balance > 0:
+            return translated_text(
+                "coach_portal_balance_open",
+                language,
+                amount=f"${balance:.2f}",
+                due_date=fmt_policy_date(member.due_date or member.next_payment, language),
+            )
+        return translated_text(
+            "coach_portal_balance_clear",
+            language,
+            next_payment=fmt_policy_date(member.next_payment, language),
+        )
+    if is_membership_or_contract_question(user_message):
+        policy = portal_context_value("direct_membership_policy", None, lambda: cancellation_policy_for_member(member))
+        if policy:
+            return translated_text(
+                "coach_portal_membership_summary",
+                language,
+                plan=member.plan_type or translated_text("not_available", language),
+                contract=member.contract_type or translated_text("not_available", language),
+                term_end=fmt_policy_date(policy.current_term_end, language),
+                window_open=fmt_policy_date(policy.window_open, language),
+                window_close=fmt_policy_date(policy.last_request_date, language),
+            )
+    if is_pricing_question(user_message):
+        items = portal_context_value(
+            "direct_pricing_items",
+            [],
+            lambda: [
+                item for item in active_pricing_items_for_visibility(["public", "members"])
+                if item.member_eligible and item.category_key != "external_trainer_b2b"
+            ][:8],
+        )
+        if items:
+            lines = [
+                translated_text("coach_portal_pricing_summary", language),
+                "",
+            ]
+            lines.extend(
+                f"- {item.name}: ${item.price_amount:.2f} ({translated_text('pricing_interval_' + item.billing_interval, language)})"
+                for item in items
+            )
+            lines.extend(["", translated_text("coach_portal_pricing_open_catalog", language)])
+            return "\n".join(lines)
+    return None
+
+
 def openai_text_from_response(data):
     if isinstance(data, dict) and isinstance(data.get("output_text"), str):
         return data["output_text"].strip()
@@ -5823,6 +6114,10 @@ def generate_coach_reply(member, profile, user_message=None, workout_logs=None, 
     context = coach_context_summary(member, profile)
     if user_message and is_group_class_schedule_question(user_message):
         return coach_today_group_class_reply(member, language), "portal_context", context
+    if user_message:
+        direct_reply = coach_portal_direct_reply(member, profile, user_message, language=language)
+        if direct_reply:
+            return direct_reply, "portal_context", context
     recent_workouts = "\n".join(recent_coach_workout_summary(member.member_id)) or "No previous workouts logged."
     workout_text = ""
     if workout_logs:
@@ -5832,9 +6127,14 @@ def generate_coach_reply(member, profile, user_message=None, workout_logs=None, 
         )
     prompt = (
         "You are the Dreamz Fitness digital coach and part of the Dreamz coaching service. "
+        "Before answering any member question, first inspect and use the member_portal_context below as the primary source of truth. "
+        "This context represents the member-facing portal only: dashboard, coach/training, nutrition, progress, group classes, account, membership, billing/gym balance, pricing, agreements, documents, applications and cancellation. Do not use or invent staff/admin data. "
+        "If the answer is present in the portal context, answer specifically from that data and point the member to the relevant app route when useful. "
+        "If a field is missing or unknown in the portal context, say exactly what is missing and what the member can update in the portal. "
         "Reply in the member's selected language. Give direct, practical coaching that uses the profile, recent workouts and current plan. "
         "Be specific about next training actions, weights/reps progression, food choices, recovery and what to log next. "
-        "Do not say you are an AI. Do not refer routine questions to Dreamz staff. "
+        "For account, membership, pricing, agreements, documents, cancellation, gym balance or payment questions, use the portal context first. Gym purchase balances are paid at the front desk; do not say Pay now unless online_payment_available=yes is explicitly present. "
+        "Do not say you are an AI. Do not refer routine questions to Dreamz staff when the portal context already answers them. "
         "For serious red flags such as chest pain, fainting, severe injury, severe dizziness or medical emergencies, tell the member to stop and seek qualified medical help. "
         "Never mention pregnancy, prenatal training, pregnancy_status, pregnancy weight, or prenatal nutrition unless biological_sex=female and pregnancy_status=pregnant. "
         "Pregnancy safety rules only apply when biological_sex=female and pregnancy_status=pregnant: do not advise aggressive fat loss/cutting, max-effort/PR training, high-impact/contact sport, high fall-risk exercises, overheating, dehydration, or prolonged supine exercises after 16 weeks. Use talk-test moderate intensity, safe strength, mobility, breathing, pelvic floor and hydration guidance. Provider restrictions always override. If warning symptoms are present or provider_cleared_exercise=no, do not give a workout progression; advise contacting doctor/midwife/healthcare provider before exercise. If clearance is unknown, keep advice cautious and low/moderate while recommending clearance. "
