@@ -20,6 +20,7 @@ from flask import (
 )
 
 from flask_sqlalchemy import SQLAlchemy
+from markupsafe import Markup
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from dateutil.relativedelta import relativedelta
 from datetime import datetime, date, timedelta   # ← bestaande regel uitbreiden
@@ -3406,6 +3407,42 @@ def group_class_training_load_context(member, profile=None):
     )
 
 
+def coach_today_group_class_rows(member, now=None):
+    if not member:
+        return []
+    now = now or current_portal_datetime()
+    today = now.date()
+    current_time = now.time()
+    rows = [
+        row for row in member_group_class_schedule_rows(member.member_id, selected_day=str(today.weekday()), today=today)
+        if row["class_date"] == today
+    ]
+    for row in rows:
+        row["time_status"] = group_class_time_status(row["occurrence"], current_time)
+    rows.sort(key=lambda row: row["occurrence"].start_time)
+    return rows
+
+
+def coach_today_group_class_context(member, now=None):
+    now = now or current_portal_datetime()
+    rows = coach_today_group_class_rows(member, now=now)
+    if not rows:
+        return (
+            f"today_group_class_schedule(date={now.date().isoformat()}, timezone=America/Kralendijk, "
+            "schedule_link=/group-classes)=none"
+        )
+    schedule_text = "; ".join(
+        f"{row['occurrence'].start_time.strftime('%H:%M')}-{row['occurrence'].end_time.strftime('%H:%M')} "
+        f"{row['occurrence'].class_type.name} room={row['occurrence'].room} "
+        f"status={'ended' if row['time_status'] == 'past' else row['time_status']}"
+        for row in rows
+    )
+    return (
+        f"today_group_class_schedule(date={now.date().isoformat()}, timezone=America/Kralendijk, "
+        f"schedule_link=/group-classes)={schedule_text}"
+    )
+
+
 @app.before_request
 def prepare_runtime_schema():
     try:
@@ -5622,9 +5659,43 @@ def floating_coach_recent_interactions(member_id, limit=4):
         return []
 
 
+def floating_coach_recent_threads(member_id, limit=4):
+    if not member_id or is_staff_user():
+        return []
+    try:
+        rows = (
+            CoachInteraction.query
+            .filter_by(member_id=member_id)
+            .order_by(CoachInteraction.created_at.desc(), CoachInteraction.id.desc())
+            .limit(max(limit * 3, 8))
+            .all()
+        )
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Could not load floating Dreamz Coach conversation threads.")
+        return []
+
+    exchanges = []
+    current = None
+    for item in reversed(rows):
+        if item.actor == "member":
+            current = {"member_message": item, "coach_message": None, "created_at": item.created_at}
+            exchanges.append(current)
+            continue
+        if current and current.get("coach_message") is None:
+            current["coach_message"] = item
+            current["created_at"] = item.created_at or current.get("created_at")
+        else:
+            exchanges.append({"member_message": None, "coach_message": item, "created_at": item.created_at})
+            current = None
+
+    exchanges.sort(key=lambda entry: entry.get("created_at") or datetime.min, reverse=True)
+    return exchanges[:limit]
+
+
 def coach_context_summary(member, profile):
     if not profile:
-        return f"Member {member.member_id}: no coach profile yet."
+        return f"Member {member.member_id}: no coach profile yet; {coach_today_group_class_context(member)}"
     latest_progress = (
         CoachProgressEntry.query
         .filter_by(member_id=member.member_id)
@@ -5647,6 +5718,7 @@ def coach_context_summary(member, profile):
         f"allergies={profile.allergies or 'none'}, home_equipment={profile.home_equipment or 'none'}, "
         f"{pregnancy_context_summary(profile)}"
         f"{progress_text}; "
+        f"{coach_today_group_class_context(member)}; "
         f"{group_class_training_load_context(member, profile)}"
     )
 
@@ -5667,6 +5739,8 @@ def save_coach_interaction(member_id, actor, message, category="conversation", s
 
 def fallback_coach_reply(member, profile, user_message=None, workout_logs=None, language=None):
     language = language or current_language()
+    if user_message and is_group_class_schedule_question(user_message):
+        return coach_today_group_class_reply(member, language)
     if pregnancy_safety_status(profile) in {"warning_symptoms", "not_cleared"}:
         return translated_text("coach_pregnancy_reply_medical_first", language)
     if pregnancy_safety_status(profile) == "clearance_unknown":
@@ -5681,6 +5755,51 @@ def fallback_coach_reply(member, profile, user_message=None, workout_logs=None, 
     if user_message:
         return translated_text("coach_question_fallback_answer", language, goal=goal)
     return translated_text("coach_auto_feedback_basic", language, goal=goal)
+
+
+def is_group_class_schedule_question(message):
+    text = (message or "").lower()
+    class_terms = (
+        "groepsles", "groepslessen", "group class", "group classes", "klasnan",
+        "clases", "classes", "les vandaag", "lessen vandaag", "rooster", "schedule",
+    )
+    today_terms = ("vandaag", "today", "awe", "hoy", "vanavond", "tonight", "awor")
+    return any(term in text for term in class_terms) and (
+        any(term in text for term in today_terms) or "welke" in text or "what" in text or "kiko" in text
+    )
+
+
+def coach_today_group_class_reply(member, language=None):
+    language = language or current_language()
+    rows = coach_today_group_class_rows(member)
+    heading = translated_text("coach_today_classes_heading", language)
+    if not rows:
+        return "\n".join([
+            heading,
+            "",
+            translated_text("coach_today_classes_none", language),
+            translated_text("coach_today_classes_open_schedule", language),
+        ])
+    status_key = {
+        "past": "class_status_ended",
+        "live": "class_status_live",
+        "upcoming": "class_status_upcoming",
+        "cancelled": "class_status_cancelled",
+    }
+    lines = [
+        heading,
+        "",
+        translated_text("coach_today_classes_summary", language),
+    ]
+    for row in rows:
+        occurrence = row["occurrence"]
+        status = translated_text(status_key.get(row.get("time_status"), "class_status_upcoming"), language)
+        lines.append(
+            f"- {occurrence.start_time.strftime('%H:%M')}-{occurrence.end_time.strftime('%H:%M')} "
+            f"{occurrence.class_type.name} - {occurrence.room} ({status})"
+        )
+    lines.extend(["", translated_text("coach_today_classes_open_schedule", language)])
+    return "\n".join(lines)
 
 
 def openai_text_from_response(data):
@@ -5699,6 +5818,8 @@ def openai_text_from_response(data):
 def generate_coach_reply(member, profile, user_message=None, workout_logs=None, category="conversation"):
     language = current_language()
     context = coach_context_summary(member, profile)
+    if user_message and is_group_class_schedule_question(user_message):
+        return coach_today_group_class_reply(member, language), "portal_context", context
     recent_workouts = "\n".join(recent_coach_workout_summary(member.member_id)) or "No previous workouts logged."
     workout_text = ""
     if workout_logs:
@@ -5715,6 +5836,7 @@ def generate_coach_reply(member, profile, user_message=None, workout_logs=None, 
         "Never mention pregnancy, prenatal training, pregnancy_status, pregnancy weight, or prenatal nutrition unless biological_sex=female and pregnancy_status=pregnant. "
         "Pregnancy safety rules only apply when biological_sex=female and pregnancy_status=pregnant: do not advise aggressive fat loss/cutting, max-effort/PR training, high-impact/contact sport, high fall-risk exercises, overheating, dehydration, or prolonged supine exercises after 16 weeks. Use talk-test moderate intensity, safe strength, mobility, breathing, pelvic floor and hydration guidance. Provider restrictions always override. If warning symptoms are present or provider_cleared_exercise=no, do not give a workout progression; advise contacting doctor/midwife/healthcare provider before exercise. If clearance is unknown, keep advice cautious and low/moderate while recommending clearance. "
         "Group classes count toward total training load. Use planned and attended group classes, intensity, muscle focus, cardio load, strength load, recovery impact and schedule changes when giving next-session, recovery, nutrition and progress advice. Never silently change completed history. "
+        "The portal context can include today's group class schedule with times, room and status. If the member asks which classes are today, answer from that schedule and point them to the Group Classes schedule in the app. Do not say you do not have live schedule data when today_group_class_schedule is present. "
         "If the member planned BODYPUMP, TOTAL BODY, SPINNING or BOOTY SHAPE this week, adjust nearby strength/cardio volume accordingly. "
         "Use Bonaire-friendly, realistic and budget-aware training and nutrition advice. "
         "Format the reply for a mobile app: start with a short Coach Summary, then 3-5 concrete action bullets, then an optional Details section. Keep it concise and avoid long essays.\n\n"
@@ -6540,6 +6662,7 @@ def inject_csrf_token():
         "current_staff_username": current_staff_username(),
         "account_notification_count": member_account_notification_count(member_id) if member_id and not is_staff_user() else 0,
         "floating_coach_interactions": floating_coach_recent_interactions(member_id) if member_id and not is_staff_user() else [],
+        "floating_coach_threads": floating_coach_recent_threads(member_id) if member_id and not is_staff_user() else [],
         "open_cancellation_count": open_cancellation_count() if is_staff_user() else 0,
         "open_email_log_count": open_email_log_count() if is_staff_user() else 0,
         "t_document_title": lambda document_type: translated_document_title(document_type, current_language()),
@@ -6560,6 +6683,28 @@ def format_date(value, fmt=None):
     if fmt:
         return value.strftime(fmt)
     return fmt_policy_date(value, current_language())
+
+
+@app.template_filter("coach_message_html")
+def coach_message_html(value):
+    escaped = escape_html(value or "")
+    escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+    blocks = []
+    for line in escaped.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        bullet = re.match(r"^[-*]\s+(.+)$", line)
+        if bullet:
+            blocks.append(
+                '<div class="dreamz-coach-line-bullet">'
+                '<span aria-hidden="true"></span>'
+                f"<p>{bullet.group(1)}</p>"
+                "</div>"
+            )
+        else:
+            blocks.append(f"<p>{line}</p>")
+    return Markup("".join(blocks))
 
 # ---------- e-mail helper voor annuleringen ----------
 import smtplib

@@ -22,7 +22,7 @@ os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
 from translations import LANGUAGES, TRANSLATIONS  # noqa: E402
-from dreamz_portal import AppSetting, AgreementCategory, CancellationConfirmation, CancellationRequest, CancellationWindow, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, DigitalSignatureAuditTrail, DigitalSignatureRecord, EmailLog, FeatureAccessRule, GroupClassOccurrence, GroupClassSchedule, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, MealLog, Member, MemberAgreementAcceptance, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, MemberSignedDocument, MembershipApplication, MembershipApplicationAuditEvent, MembershipApplicationDocument, MembershipApplicationStatus, MembershipApplicationStep, PricingCategory, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, SignedPdfRecord, app, cancellation_message, coach_context_summary, coach_plan_for_member, coach_profile_completion, db, member_access_profile, member_account_notification_count, next_date_for_group_class, pricing_item_access_tags, pricing_visibility_list, seed_feature_access_rules, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
+from dreamz_portal import AppSetting, AgreementCategory, CancellationConfirmation, CancellationRequest, CancellationWindow, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, DigitalSignatureAuditTrail, DigitalSignatureRecord, EmailLog, FeatureAccessRule, GroupClassOccurrence, GroupClassSchedule, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, MealLog, Member, MemberAgreementAcceptance, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, MemberSignedDocument, MembershipApplication, MembershipApplicationAuditEvent, MembershipApplicationDocument, MembershipApplicationStatus, MembershipApplicationStep, PricingCategory, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, SignedPdfRecord, app, cancellation_message, coach_context_summary, coach_plan_for_member, coach_profile_completion, coach_today_group_class_reply, db, is_group_class_schedule_question, member_access_profile, member_account_notification_count, next_date_for_group_class, pricing_item_access_tags, pricing_visibility_list, seed_feature_access_rules, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
 
 
 class FakeS3Body:
@@ -3105,6 +3105,73 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("biological_sex=male", context)
         self.assertNotIn("pregnancy_safety_level", context)
         self.assertNotIn("pregnancy_status=not_pregnant", context)
+
+    def test_coach_context_includes_today_group_class_schedule(self):
+        member = self.add_member(member_id="13659", name="Ron Soechit")
+        profile = CoachProfile(
+            member_id="13659",
+            primary_goal="build_muscle",
+            experience_level="intermediate",
+            training_days=4,
+            session_minutes=45,
+            training_place="dreamz_gym",
+            height_cm=180,
+            weight_kg=82,
+            nutrition_goal="muscle_gain",
+            sex="male",
+            pregnancy_status="not_pregnant",
+        )
+        db.session.add(profile)
+        seed_group_class_schedule()
+        db.session.commit()
+
+        monday_afternoon = datetime(2026, 5, 18, 13, 48, tzinfo=timezone(timedelta(hours=-4)))
+        with patch("dreamz_portal.current_portal_datetime", return_value=monday_afternoon):
+            context = coach_context_summary(member, profile)
+
+        self.assertIn("today_group_class_schedule", context)
+        self.assertIn("BODYPUMP", context)
+        self.assertIn("BODYCOMBAT", context)
+        self.assertIn("schedule_link=/group-classes", context)
+        self.assertIn("status=ended", context)
+        self.assertIn("status=upcoming", context)
+
+    def test_coach_group_class_question_returns_portal_schedule(self):
+        member = self.add_member(member_id="13659", name="Ron Soechit")
+        seed_group_class_schedule()
+        db.session.commit()
+
+        self.assertTrue(is_group_class_schedule_question("Welke groepslessen zijn er vandaag?"))
+        monday_afternoon = datetime(2026, 5, 18, 13, 48, tzinfo=timezone(timedelta(hours=-4)))
+        with patch("dreamz_portal.current_portal_datetime", return_value=monday_afternoon):
+            reply = coach_today_group_class_reply(member, "nl")
+
+        self.assertIn("BODYPUMP", reply)
+        self.assertIn("BODYCOMBAT", reply)
+        self.assertIn("18:00-19:00", reply)
+        self.assertIn("AEROBICS ROOM", reply)
+        self.assertIn("Groepslessen", reply)
+
+    def test_coach_message_group_class_question_uses_portal_context(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+        seed_group_class_schedule()
+        db.session.commit()
+
+        monday_afternoon = datetime(2026, 5, 18, 13, 48, tzinfo=timezone(timedelta(hours=-4)))
+        with patch("dreamz_portal.current_portal_datetime", return_value=monday_afternoon):
+            response = self.client.post(
+                "/coach/message",
+                json={"message": "Welke groepslessen zijn er vandaag?"},
+                headers={"X-CSRF-Token": "test-csrf-token"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["source"], "portal_context")
+        self.assertIn("BODYPUMP", payload["reply"])
+        self.assertIn("18:00-19:00", payload["reply"])
 
     def test_coach_context_includes_pregnancy_class_safety_for_pregnant_female(self):
         member = self.add_member(member_id="13659", name="Ron Soechit")

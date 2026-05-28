@@ -159,25 +159,63 @@
           <button type="button" class="dreamz-coach-close" data-floating-coach-close aria-label="{{ t('close') }}">&times;</button>
         </div>
         <div class="dreamz-coach-thread" data-floating-coach-thread>
-          {% for item in floating_coach_interactions %}
-            <div class="dreamz-coach-message {% if item.actor == 'member' %}is-member{% else %}is-coach{% endif %}" data-floating-coach-message>
-              <div class="text-xs font-semibold uppercase tracking-wide {% if item.actor == 'member' %}text-yellow-200{% else %}text-green-200{% endif %}">
-                {{ t('coach_member_label') if item.actor == 'member' else t('coach_reply_label') }}
-              </div>
-              <div class="mt-1 whitespace-pre-wrap text-sm leading-6">{{ item.message }}</div>
-            </div>
+          {% if floating_coach_threads %}
+            {% for thread in floating_coach_threads %}
+              {% if loop.first %}
+                <div class="dreamz-coach-exchange is-current" data-floating-coach-exchange>
+                  <div class="dreamz-coach-exchange-meta">{{ t('coach_current_conversation') }} · {{ thread.created_at|format_date('%d/%m/%Y %H:%M') }}</div>
+                  {% if thread.member_message %}
+                    <div class="dreamz-coach-message is-member" data-floating-coach-message>
+                      <div class="dreamz-coach-message-label text-yellow-200">{{ t('coach_member_label') }}</div>
+                      <div class="dreamz-coach-message-body">{{ thread.member_message.message|coach_message_html }}</div>
+                    </div>
+                  {% endif %}
+                  {% if thread.coach_message %}
+                    <div class="dreamz-coach-message is-coach" data-floating-coach-message>
+                      <div class="dreamz-coach-message-label text-green-200">{{ t('coach_reply_label') }}</div>
+                      <div class="dreamz-coach-message-body">{{ thread.coach_message.message|coach_message_html }}</div>
+                    </div>
+                  {% endif %}
+                </div>
+              {% endif %}
+            {% endfor %}
+            {% if floating_coach_threads|length > 1 %}
+              <details class="dreamz-coach-history" data-floating-coach-history>
+                <summary>{{ t('coach_recent_history') }}</summary>
+                {% for thread in floating_coach_threads[1:] %}
+                  <div class="dreamz-coach-exchange">
+                    <div class="dreamz-coach-exchange-meta">{{ thread.created_at|format_date('%d/%m/%Y %H:%M') }}</div>
+                    {% if thread.member_message %}
+                      <div class="dreamz-coach-message is-member" data-floating-coach-message>
+                        <div class="dreamz-coach-message-label text-yellow-200">{{ t('coach_member_label') }}</div>
+                        <div class="dreamz-coach-message-body">{{ thread.member_message.message|coach_message_html }}</div>
+                      </div>
+                    {% endif %}
+                    {% if thread.coach_message %}
+                      <div class="dreamz-coach-message is-coach" data-floating-coach-message>
+                        <div class="dreamz-coach-message-label text-green-200">{{ t('coach_reply_label') }}</div>
+                        <div class="dreamz-coach-message-body">{{ thread.coach_message.message|coach_message_html }}</div>
+                      </div>
+                    {% endif %}
+                  </div>
+                {% endfor %}
+              </details>
+            {% endif %}
           {% else %}
             <div class="dreamz-coach-empty" data-floating-coach-empty>{{ t('coach_chat_empty') }}</div>
-          {% endfor %}
+          {% endif %}
         </div>
-        <div class="dreamz-coach-prompts">
-          <button type="button" data-floating-coach-prompt="{{ t('ask_about_todays_workout') }}">{{ t('ask_about_todays_workout') }}</button>
-          <button type="button" data-floating-coach-prompt="{{ t('adjust_my_training') }}">{{ t('adjust_my_training') }}</button>
-          <button type="button" data-floating-coach-prompt="{{ t('review_my_meal_plan') }}">{{ t('review_my_meal_plan') }}</button>
-          <button type="button" data-floating-coach-prompt="{{ t('what_should_i_eat_today') }}">{{ t('what_should_i_eat_today') }}</button>
-          <button type="button" data-floating-coach-prompt="{{ t('recovery_advice') }}">{{ t('recovery_advice') }}</button>
-          <button type="button" data-floating-coach-prompt="{{ t('progress_review') }}">{{ t('progress_review') }}</button>
-        </div>
+        <details class="dreamz-coach-prompt-menu" open>
+          <summary>{{ t('coach_quick_questions') }}</summary>
+          <div class="dreamz-coach-prompts">
+            <button type="button" data-floating-coach-prompt="{{ t('ask_about_todays_workout') }}">{{ t('ask_about_todays_workout') }}</button>
+            <button type="button" data-floating-coach-prompt="{{ t('adjust_my_training') }}">{{ t('adjust_my_training') }}</button>
+            <button type="button" data-floating-coach-prompt="{{ t('review_my_meal_plan') }}">{{ t('review_my_meal_plan') }}</button>
+            <button type="button" data-floating-coach-prompt="{{ t('what_should_i_eat_today') }}">{{ t('what_should_i_eat_today') }}</button>
+            <button type="button" data-floating-coach-prompt="{{ t('recovery_advice') }}">{{ t('recovery_advice') }}</button>
+            <button type="button" data-floating-coach-prompt="{{ t('progress_review') }}">{{ t('progress_review') }}</button>
+          </div>
+        </details>
         <div class="dreamz-coach-input-row">
           <textarea rows="2" data-floating-coach-input placeholder="{{ t('coach_chat_placeholder') }}" aria-label="{{ t('coach_chat_question') }}"></textarea>
           <button type="button" data-floating-coach-send>{{ t('coach_chat_send') }}</button>
@@ -271,30 +309,48 @@
           "'": "&#039;",
         }[char]));
 
-        const renderMessage = (message) => escapeHtml(message)
+        let activeExchange = null;
+
+        const renderInline = (value) => escapeHtml(value).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+
+        const renderMessage = (message) => String(message || "")
           .split(/\r?\n/)
           .map((line) => line.trim())
           .filter(Boolean)
           .map((line) => {
             const bullet = line.match(/^[-*]\s+(.+)$/);
-            if (bullet) return `<div class="flex gap-2"><span class="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-yellow-400"></span><span>${bullet[1]}</span></div>`;
-            return `<p>${line}</p>`;
+            if (bullet) return `<div class="dreamz-coach-line-bullet"><span aria-hidden="true"></span><p>${renderInline(bullet[1])}</p></div>`;
+            return `<p>${renderInline(line)}</p>`;
           })
           .join("");
 
-        const appendMessage = (actor, message) => {
+        const ensureActiveExchange = () => {
           thread?.querySelector("[data-floating-coach-empty]")?.remove();
+          if (activeExchange && thread?.contains(activeExchange)) return activeExchange;
+          activeExchange = document.createElement("div");
+          activeExchange.className = "dreamz-coach-exchange is-current";
+          activeExchange.dataset.floatingCoachExchange = "true";
+          const meta = document.createElement("div");
+          meta.className = "dreamz-coach-exchange-meta";
+          meta.textContent = "{{ t('coach_current_conversation') }} · " + new Date().toLocaleString([], { dateStyle: "short", timeStyle: "short" });
+          activeExchange.append(meta);
+          thread?.prepend(activeExchange);
+          return activeExchange;
+        };
+
+        const appendMessage = (actor, message) => {
+          const exchange = ensureActiveExchange();
           const card = document.createElement("div");
           card.className = `dreamz-coach-message ${actor === "member" ? "is-member" : "is-coach"}`;
           const label = document.createElement("div");
-          label.className = `text-xs font-semibold uppercase tracking-wide ${actor === "member" ? "text-yellow-200" : "text-green-200"}`;
+          label.className = `dreamz-coach-message-label ${actor === "member" ? "text-yellow-200" : "text-green-200"}`;
           label.textContent = actor === "member" ? "{{ t('coach_member_label') }}" : "{{ t('coach_reply_label') }}";
           const body = document.createElement("div");
-          body.className = "mt-1 text-sm leading-6";
+          body.className = "dreamz-coach-message-body";
           body.innerHTML = renderMessage(message);
           card.append(label, body);
-          thread?.append(card);
-          thread?.scrollTo({ top: thread.scrollHeight, behavior: "smooth" });
+          exchange.append(card);
+          exchange.scrollIntoView({ block: "start", behavior: "smooth" });
         };
 
         const setStatus = (message, kind = "info") => {

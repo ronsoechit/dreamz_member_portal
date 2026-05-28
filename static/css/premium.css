@@ -696,6 +696,54 @@ tbody tr:hover {
   padding: 1rem;
 }
 
+.dreamz-coach-exchange {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.dreamz-coach-exchange.is-current {
+  padding-bottom: 0.2rem;
+}
+
+.dreamz-coach-exchange-meta {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.dreamz-coach-history {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 16px;
+  background: rgba(2, 6, 23, 0.32);
+}
+
+.dreamz-coach-history summary {
+  cursor: pointer;
+  padding: 0.75rem 0.85rem;
+  color: #fef3c7;
+  font-size: 0.82rem;
+  font-weight: 850;
+  list-style: none;
+}
+
+.dreamz-coach-history summary::-webkit-details-marker {
+  display: none;
+}
+
+.dreamz-coach-history summary::after {
+  content: "+";
+  float: right;
+  color: var(--dreamz-gold);
+}
+
+.dreamz-coach-history[open] summary::after {
+  content: "-";
+}
+
+.dreamz-coach-history .dreamz-coach-exchange {
+  padding: 0 0.75rem 0.75rem;
+}
+
 .dreamz-coach-message,
 .dreamz-coach-empty,
 .dreamz-coach-status {
@@ -715,22 +763,93 @@ tbody tr:hover {
   background: rgba(16, 185, 129, 0.10);
 }
 
-.dreamz-coach-prompts {
-  display: flex;
+.dreamz-coach-message-label {
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.dreamz-coach-message-body {
+  margin-top: 0.28rem;
+  display: grid;
   gap: 0.45rem;
-  overflow-x: auto;
+  color: #f8fafc;
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.dreamz-coach-message-body strong {
+  color: #fff7cc;
+  font-weight: 850;
+}
+
+.dreamz-coach-line-bullet {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.45rem;
+}
+
+.dreamz-coach-line-bullet > span {
+  margin-top: 0.58rem;
+  width: 0.36rem;
+  height: 0.36rem;
+  border-radius: 999px;
+  background: var(--dreamz-gold);
+}
+
+.dreamz-coach-prompt-menu {
   padding: 0 1rem 0.85rem;
 }
 
+.dreamz-coach-prompt-menu summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.2rem 0 0.55rem;
+  color: #cbd5e1;
+  font-size: 0.75rem;
+  font-weight: 850;
+}
+
+.dreamz-coach-prompt-menu summary::after {
+  content: "+";
+  color: var(--dreamz-gold);
+  font-size: 0.95rem;
+}
+
+.dreamz-coach-prompt-menu[open] summary::after {
+  content: "-";
+}
+
+.dreamz-coach-prompts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
 .dreamz-coach-prompts button {
-  flex: 0 0 auto;
+  min-height: 2.55rem;
   border: 1px solid rgba(250, 204, 21, 0.25);
-  border-radius: 999px;
-  padding: 0.5rem 0.7rem;
+  border-radius: 12px;
+  padding: 0.55rem 0.65rem;
   background: rgba(250, 204, 21, 0.09);
   color: #fef3c7;
   font-size: 0.75rem;
   font-weight: 750;
+  text-align: left;
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+
+.dreamz-coach-prompts button:hover,
+.dreamz-coach-prompts button:focus-visible {
+  border-color: rgba(250, 204, 21, 0.58);
+  background: rgba(250, 204, 21, 0.14);
+}
+
+.dreamz-coach-prompts button:active {
+  transform: translateY(1px);
 }
 
 .dreamz-coach-input-row {
@@ -1147,6 +1266,10 @@ span.rounded,
 
   .dreamz-coach-thread {
     max-height: min(16rem, 36vh);
+  }
+
+  .dreamz-coach-prompts {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .portal-main > div.grid,
