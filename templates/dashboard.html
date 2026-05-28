@@ -134,7 +134,7 @@
         <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('today_at_dreamz') }}</div>
         <h3 class="mt-1 text-lg font-semibold text-white">{{ t('upcoming_classes_today') if today_group_classes else t('no_more_classes_today') }}</h3>
       </div>
-      <a class="text-sm font-semibold text-yellow-300" href="{{ url_for('member_group_classes') }}">{{ t('view_full_schedule') if not today_group_classes else t('add_to_my_plan') }}</a>
+      <a class="text-sm font-semibold text-yellow-300" href="{{ url_for('member_group_classes') }}">{{ t('view_full_schedule') if not today_group_classes else t('view_group_classes') }}</a>
     </div>
     {% if today_group_classes %}
       <div class="grid gap-3 md:grid-cols-3">
@@ -149,7 +149,7 @@
             </div>
             <div class="mt-1 font-semibold text-white">{{ occurrence.class_type.name }}</div>
             <div class="mt-1 text-xs text-gray-400">{{ occurrence.room }}</div>
-            <a class="mt-3 inline-flex text-xs font-semibold text-yellow-300" href="{{ url_for('member_group_classes') }}">{{ t('add_to_my_plan') }}</a>
+            <a class="mt-3 inline-flex text-xs font-semibold text-yellow-300" href="{{ url_for('member_group_classes') }}">{{ t('view_group_classes') }}</a>
           </article>
         {% endfor %}
       </div>
@@ -171,7 +171,7 @@
               </div>
               <div class="mt-1 font-semibold text-gray-200">{{ occurrence.class_type.name }}</div>
               <div class="mt-1 text-xs text-gray-500">{{ occurrence.room }}</div>
-              <a class="mt-3 inline-flex text-xs font-semibold text-gray-300" href="{{ url_for('member_group_classes') }}">{{ t('mark_attended') }}</a>
+              <a class="mt-3 inline-flex text-xs font-semibold text-gray-300" href="{{ url_for('member_group_classes') }}">{{ t('view_group_classes') }}</a>
             </article>
           {% endfor %}
         </div>

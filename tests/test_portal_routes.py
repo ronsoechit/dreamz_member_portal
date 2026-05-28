@@ -689,8 +689,58 @@ class PortalRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/nutrition#nutrition-plan", response.headers["Location"])
+        self.assertIn("/nutrition?meal_log=saved&meal=1#nutrition-plan", response.headers["Location"])
         self.assertEqual(MealLog.query.filter_by(member_id="13659").count(), 1)
+
+        follow_response = self.client.get(response.headers["Location"].split("#", 1)[0])
+        self.assertEqual(follow_response.status_code, 200)
+        body = follow_response.get_data(as_text=True)
+        self.assertIn("Meal saved. Your recent meal logs have been updated.", body)
+        self.assertIn("eggs and oats", body)
+
+    def test_member_cannot_save_empty_different_meal_log(self):
+        self.add_member(
+            member_id="13659",
+            name="Ron Soechit",
+            birthdate=date(1990, 1, 1),
+        )
+        db.session.add(
+            CoachProfile(
+                member_id="13659",
+                sex="male",
+                primary_goal="build_muscle",
+                experience_level="intermediate",
+                training_days=4,
+                session_minutes=60,
+                training_place="dreamz_gym",
+                height_cm=180,
+                weight_kg=85,
+                injuries="none",
+                nutrition_goal="muscle_gain",
+                dietary_preferences="local food",
+                allergies="none",
+            )
+        )
+        db.session.commit()
+        self.login_as("13659")
+
+        response = self.client.post(
+            "/nutrition/meal-log",
+            data=self.csrf_form_data(
+                log_type="different",
+                meal_key="1",
+                meal_title="Breakfast",
+            ),
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/nutrition?meal_log=missing&meal=1#nutrition-plan", response.headers["Location"])
+        self.assertEqual(MealLog.query.filter_by(member_id="13659").count(), 0)
+
+        follow_response = self.client.get(response.headers["Location"].split("#", 1)[0])
+        self.assertEqual(follow_response.status_code, 200)
+        body = follow_response.get_data(as_text=True)
+        self.assertIn("Add what you ate or the portion before saving this meal.", body)
 
     def test_coach_page_requires_member_login(self):
         response = self.client.get("/coach")

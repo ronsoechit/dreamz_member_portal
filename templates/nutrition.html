@@ -37,6 +37,11 @@
 
 <section id="nutrition-plan" class="scroll-mt-28 space-y-4">
   {% if meal_plan %}
+    {% if request.args.get('meal_log') %}
+      <div class="rounded border {% if request.args.get('meal_log') == 'saved' %}border-green-500/40 bg-green-500/10 text-green-100{% else %}border-yellow-500/40 bg-yellow-500/10 text-yellow-100{% endif %} p-3 text-sm font-semibold">
+        {{ t('meal_log_saved_inline') if request.args.get('meal_log') == 'saved' else t('meal_log_food_required') }}
+      </div>
+    {% endif %}
     {% if nutrition_missing_items %}
       <article class="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4">
         <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('missing_nutrition_data') }}</div>
@@ -116,7 +121,7 @@
       </div>
       <div class="grid gap-4 lg:grid-cols-2">
         {% for meal in meal_plan.meals %}
-          <article class="rounded-lg border border-green-500/20 bg-gray-900/60 p-4">
+          <article id="meal-{{ loop.index }}" class="rounded-lg border {% if request.args.get('meal')|int == loop.index %}border-yellow-400 bg-yellow-500/10 ring-2 ring-yellow-400/40{% else %}border-green-500/20 bg-gray-900/60{% endif %} p-4">
             <div class="text-xs font-semibold uppercase tracking-wide text-green-200">{{ meal.title }}</div>
             <h4 class="mt-1 text-lg font-semibold text-white">{{ meal.name }}</h4>
             <p class="mt-2 text-sm leading-6 text-gray-200">{{ meal.foods }}</p>
@@ -134,10 +139,11 @@
                 <input type="hidden" name="log_type" value="followed">
                 <input type="hidden" name="meal_key" value="{{ loop.index }}">
                 <input type="hidden" name="meal_title" value="{{ meal.title }}">
-                <button type="submit" class="w-full rounded border border-green-500/30 bg-green-500/10 px-3 py-2 text-xs font-semibold text-green-100 hover:border-green-300">{{ t('i_followed_this_meal') }}</button>
+                <button type="submit" data-loading-text="{{ t('saving') }}" class="w-full rounded border border-green-500/30 bg-green-500/10 px-3 py-2 text-xs font-semibold text-green-100 hover:border-green-300">{{ t('i_followed_this_meal') }}</button>
               </form>
               <details class="rounded border border-gray-700 bg-gray-950/60 p-3">
                 <summary class="cursor-pointer text-xs font-semibold text-yellow-200">{{ t('i_ate_something_different') }}</summary>
+                <p class="mt-2 text-xs leading-5 text-gray-300">{{ t('meal_log_different_hint') }}</p>
                 <form method="post" action="{{ url_for('save_meal_log') }}" class="mt-3 grid gap-2">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   <input type="hidden" name="log_type" value="different">
@@ -151,10 +157,10 @@
                     <input name="carbs" inputmode="decimal" class="rounded border border-gray-700 bg-gray-900 p-2 text-sm text-white" placeholder="{{ t('carbs') }}">
                     <input name="fat" inputmode="decimal" class="rounded border border-gray-700 bg-gray-900 p-2 text-sm text-white" placeholder="{{ t('fat') }}">
                   </div>
-                  <button type="submit" class="rounded bg-yellow-500 px-3 py-2 text-xs font-semibold text-black hover:bg-yellow-400">{{ t('save') }}</button>
+                  <button type="submit" data-loading-text="{{ t('saving') }}" class="rounded bg-yellow-500 px-3 py-2 text-xs font-semibold text-black hover:bg-yellow-400">{{ t('save') }}</button>
                 </form>
               </details>
-              <a href="{{ url_for('member_coach', view='chat') }}" data-open-dreamz-coach data-no-loading="true" data-coach-prompt="{{ t('review_my_meal_plan') }}" class="rounded border border-gray-700 bg-gray-950 px-3 py-2 text-center text-xs font-semibold text-yellow-200 hover:border-yellow-400">{{ t('adjust_this_meal') }}</a>
+              <a href="{{ url_for('member_coach', view='chat') }}" data-open-dreamz-coach data-no-loading="true" data-coach-prompt="{{ t('adjust_this_meal_prompt')|replace('{meal}', meal.title ~ ' - ' ~ meal.name) }}" class="rounded border border-gray-700 bg-gray-950 px-3 py-2 text-center text-xs font-semibold text-yellow-200 hover:border-yellow-400">{{ t('adjust_this_meal') }}</a>
             </div>
           </article>
         {% endfor %}
@@ -190,7 +196,12 @@
           {% for log in meal_logs %}
             <div class="rounded border border-gray-800 bg-gray-950/50 p-3 text-sm text-gray-200">
               <span class="font-semibold text-white">{{ log.meal_title or t('nutrition_plan') }}</span>
-              <span class="text-gray-500">· {{ log.logged_at|format_date('%d/%m/%Y %H:%M') }}</span>
+              <span class="text-gray-500">&middot; {{ log.logged_at|format_date('%d/%m/%Y %H:%M') }}</span>
+              {% if log.food_items or log.portion %}
+                <div class="mt-1 text-xs leading-5 text-gray-300">
+                  {{ log.food_items or t('i_followed_this_meal') }}{% if log.portion %} &middot; {{ log.portion }}{% endif %}
+                </div>
+              {% endif %}
             </div>
           {% endfor %}
         </div>

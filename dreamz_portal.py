@@ -9446,16 +9446,23 @@ def save_meal_log():
     if redirect_response:
         return redirect_response
     validate_csrf_token()
+    meal_key = request.form.get("meal_key", "").strip() or "meal"
+    meal_title = request.form.get("meal_title", "").strip() or None
+    food_items = request.form.get("food_items", "").strip() or None
+    portion = request.form.get("portion", "").strip() or None
     log_type = request.form.get("log_type", "followed").strip() or "followed"
     if log_type not in {"followed", "different", "adjust"}:
         log_type = "followed"
+    if log_type == "different" and not food_items and not portion:
+        flash(translated_text("meal_log_food_required", current_language()), "error")
+        return redirect(url_for("member_nutrition", meal_log="missing", meal=meal_key) + "#nutrition-plan")
     db.session.add(MealLog(
         member_id=member.member_id,
-        meal_key=request.form.get("meal_key", "").strip() or "meal",
-        meal_title=request.form.get("meal_title", "").strip() or None,
+        meal_key=meal_key,
+        meal_title=meal_title,
         log_type=log_type,
-        food_items=request.form.get("food_items", "").strip() or None,
-        portion=request.form.get("portion", "").strip() or None,
+        food_items=food_items,
+        portion=portion,
         calories=parse_optional_float(request.form.get("calories")),
         protein=parse_optional_float(request.form.get("protein")),
         carbs=parse_optional_float(request.form.get("carbs")),
@@ -9464,7 +9471,7 @@ def save_meal_log():
     ))
     db.session.commit()
     flash(translated_text("meal_log_saved", current_language()), "success")
-    return redirect(url_for("member_nutrition") + "#nutrition-plan")
+    return redirect(url_for("member_nutrition", meal_log="saved", meal=meal_key) + "#nutrition-plan")
 
 
 @app.post("/nutrition/regenerate")
