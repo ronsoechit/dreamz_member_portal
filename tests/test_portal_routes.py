@@ -2,6 +2,8 @@ from datetime import date, datetime, timedelta, timezone
 import importlib.util
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 from io import BytesIO
 import re
@@ -437,6 +439,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Your meal plan is ready", body)
         self.assertIn("Open meal plan", body)
         self.assertIn("/nutrition", body)
+        self.assertIn("/coach?tab=training&amp;session=1", body)
         self.assertIn("Membership status", body)
         self.assertIn("Current membership", body)
         self.assertIn("contract Dreamz 6 months", body)
@@ -637,9 +640,66 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("data-save-url", body)
         self.assertIn("data-activity-log-form", body)
         self.assertIn("data-session-tab", body)
+        self.assertIn("data-calendar-day", body)
+        self.assertIn("data-calendar-day-detail", body)
         self.assertIn("data-exercise-toggle", body)
         self.assertIn("Use a controlled weight", body)
         self.assertIn("Build muscle", body)
+
+    def test_coach_cockpit_script_is_valid_and_wires_interaction_targets(self):
+        self.add_member(
+            member_id="13659",
+            name="Ron Soechit",
+            birthdate=date(1990, 1, 1),
+        )
+        db.session.add(
+            CoachProfile(
+                member_id="13659",
+                sex="male",
+                primary_goal="build_muscle",
+                experience_level="intermediate",
+                training_days=4,
+                session_minutes=60,
+                training_place="dreamz_gym",
+                height_cm=180,
+                weight_kg=85,
+                injuries="none",
+                nutrition_goal="muscle_gain",
+                dietary_preferences="local food",
+                allergies="none",
+            )
+        )
+        db.session.commit()
+        self.login_as("13659")
+
+        response = self.client.get("/coach?tab=conversation&session=2")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn('data-coach-view="training"', body)
+        self.assertIn('data-coach-view="chat"', body)
+        self.assertIn('data-session-tab="1"', body)
+        self.assertIn('data-calendar-session="2"', body)
+        self.assertIn("normalizeCoachView", body)
+        self.assertIn("selectCalendarDay", body)
+        node_path = shutil.which("node")
+        if not node_path:
+            self.skipTest("Node.js is not available for rendered cockpit JavaScript syntax check")
+        scripts = re.findall(r"<script>(.*?)</script>", body, flags=re.S)
+        self.assertTrue(scripts)
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as handle:
+            handle.write("\n".join(scripts))
+            script_path = handle.name
+        try:
+            result = subprocess.run(
+                [node_path, "--check", script_path],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        finally:
+            os.unlink(script_path)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_coach_page_uses_stored_personal_plan(self):
         self.add_member(member_id="13659", name="Ron Soechit")

@@ -375,7 +375,13 @@
             </div>
             <div class="coach-week-strip mt-4 flex gap-2 overflow-x-auto pb-1">
               {% for day in training_calendar.days %}
-                <div class="coach-day-tile shrink-0 rounded-lg border p-3 {% if day.status == 'done' %}border-green-400/50 bg-green-500/10{% elif day.status == 'planned' %}border-yellow-400/50 bg-yellow-500/10{% elif day.status == 'activity' %}border-blue-300/40 bg-blue-500/10{% else %}border-gray-700 bg-gray-950/50{% endif %}">
+                <div
+                  class="coach-day-tile shrink-0 cursor-pointer rounded-lg border p-3 transition hover:border-yellow-300 {% if day.is_today %}ring-2 ring-yellow-400 ring-offset-2 ring-offset-gray-950{% endif %} {% if day.status == 'done' %}border-green-400/50 bg-green-500/10{% elif day.status == 'planned' %}border-yellow-400/50 bg-yellow-500/10{% elif day.status == 'activity' %}border-blue-300/40 bg-blue-500/10{% else %}border-gray-700 bg-gray-950/50{% endif %}"
+                  data-calendar-day="{{ day.date.isoformat() }}"
+                  role="button"
+                  tabindex="0"
+                  aria-pressed="{{ 'true' if day.is_today else 'false' }}"
+                >
                   <div class="flex items-center justify-between gap-2">
                     <div class="text-xs font-semibold text-gray-300">{{ day.date|format_date('%a') }}</div>
                     {% if day.is_today %}<span class="rounded-full bg-yellow-500 px-2 py-0.5 text-[10px] font-semibold text-black">{{ t('coach_calendar_today') }}</span>{% endif %}
@@ -395,6 +401,38 @@
                     {% endif %}
                     {% if day.status == 'rest' %}
                       <span class="text-gray-500">{{ t('coach_calendar_rest') }}</span>
+                    {% endif %}
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+            <div class="mt-4 space-y-3">
+              {% for day in training_calendar.days %}
+                <div data-calendar-day-detail="{{ day.date.isoformat() }}" class="{% if not day.is_today %}hidden {% endif %}rounded-lg border border-gray-700 bg-gray-950/60 p-4">
+                  <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                    <div class="font-semibold text-white">{{ day.date|format_date('%A %d/%m') }}</div>
+                    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">
+                      {% if day.status == 'done' %}{{ t('coach_calendar_done') }}{% elif day.status == 'planned' %}{{ t('coach_calendar_planned') }}{% elif day.status == 'activity' %}{{ t('coach_activity_other') }}{% else %}{{ t('coach_calendar_rest') }}{% endif %}
+                    </div>
+                  </div>
+                  <div class="mt-3 grid gap-2 md:grid-cols-2">
+                    {% for workout in day.workouts %}
+                      <button type="button" data-open-coach-view="history" class="rounded border border-green-500/30 bg-green-500/10 px-3 py-2 text-left text-sm font-semibold text-green-100 hover:border-green-300">
+                        {{ t('coach_calendar_done') }} · {{ workout.focus or t('coach_history_title') }}
+                      </button>
+                    {% endfor %}
+                    {% for session in day.planned_sessions %}
+                      <button type="button" data-calendar-session="{{ session.number }}" class="rounded border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-left text-sm font-semibold text-yellow-100 hover:border-yellow-300">
+                        {{ t('coach_calendar_planned') }} · {{ t('coach_plan_session') }} {{ session.number }} · {{ session.focus }}
+                      </button>
+                    {% endfor %}
+                    {% for activity in day.activities %}
+                      <div class="rounded border border-blue-400/30 bg-blue-500/10 px-3 py-2 text-sm text-blue-100">
+                        {{ activity.duration_minutes }} {{ t('minutes_short') }} · {{ activity.activity_type }}
+                      </div>
+                    {% endfor %}
+                    {% if day.status == 'rest' %}
+                      <div class="rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-gray-300">{{ t('coach_calendar_rest') }}</div>
                     {% endif %}
                   </div>
                 </div>
@@ -906,7 +944,6 @@
       editButtons.forEach((button) => button.classList.add("hidden"));
       form.scrollIntoView({ behavior: "smooth", block: "start" });
     }));
-    });
 
     const escapeHtml = (value) => String(value || "").replace(/[&<>"']/g, (char) => ({
       "&": "&amp;",
@@ -978,8 +1015,9 @@
     };
 
     const setCoachView = (view, { scroll = true, highlight = false } = {}) => {
+      const requestedView = view === "conversation" ? "chat" : view;
       document.querySelectorAll("[data-coach-view]").forEach((button) => {
-        const active = button.dataset.coachView === view;
+        const active = button.dataset.coachView === requestedView;
         button.classList.toggle("border-yellow-400", active);
         button.classList.toggle("bg-yellow-500", active);
         button.classList.toggle("text-black", active);
@@ -987,11 +1025,12 @@
         button.classList.toggle("bg-gray-950", !active);
         button.classList.toggle("text-yellow-200", !active);
         button.setAttribute("aria-selected", active ? "true" : "false");
+        if (active) button.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
       });
       document.querySelectorAll("[data-coach-panel]").forEach((panel) => {
-        panel.classList.toggle("hidden", panel.dataset.coachPanel !== view);
+        panel.classList.toggle("hidden", panel.dataset.coachPanel !== requestedView);
       });
-      const target = coachScrollTarget(view);
+      const target = coachScrollTarget(requestedView);
       if (scroll && target) target.scrollIntoView({ behavior: "smooth", block: "start" });
       if (highlight) highlightCoachTarget(target);
     };
@@ -1006,7 +1045,12 @@
       });
     });
     const coachParams = new URLSearchParams(window.location.search);
-    const requestedCoachView = coachParams.get("tab") || coachParams.get("view");
+    const normalizeCoachView = (value) => {
+      if (value === "conversation") return "chat";
+      if (value === "training-week") return "training";
+      return value;
+    };
+    const requestedCoachView = normalizeCoachView(coachParams.get("tab") || coachParams.get("view"));
     if (coachParams.get("edit") === "profile" && form) {
       form.classList.remove("hidden");
       editButtons.forEach((button) => button.classList.add("hidden"));
@@ -1071,6 +1115,7 @@
           tab.classList.toggle("border-gray-700", !active);
           tab.classList.toggle("bg-gray-900", !active);
           tab.classList.toggle("text-yellow-200", !active);
+          if (active) tab.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
         });
         panels.forEach((panel, index) => panel.classList.toggle("hidden", index !== sessionIndex));
       };
@@ -1078,6 +1123,39 @@
       tabs.forEach((tab) => {
         tab.addEventListener("click", () => activateSession(Number(tab.dataset.sessionTab || 0)));
       });
+
+      const calendarDays = Array.from(plan.querySelectorAll("[data-calendar-day]"));
+      const calendarDetails = Array.from(plan.querySelectorAll("[data-calendar-day-detail]"));
+      const selectCalendarDay = (dayKey, { scroll = true } = {}) => {
+        calendarDays.forEach((day) => {
+          const active = day.dataset.calendarDay === dayKey;
+          day.setAttribute("aria-pressed", active ? "true" : "false");
+          day.classList.toggle("ring-2", active);
+          day.classList.toggle("ring-yellow-400", active);
+          day.classList.toggle("ring-offset-2", active);
+          day.classList.toggle("ring-offset-gray-950", active);
+          if (active) day.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+        });
+        calendarDetails.forEach((detail) => {
+          const active = detail.dataset.calendarDayDetail === dayKey;
+          detail.classList.toggle("hidden", !active);
+          if (active && scroll) detail.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        });
+      };
+
+      calendarDays.forEach((day) => {
+        const selectDay = () => selectCalendarDay(day.dataset.calendarDay || "");
+        day.addEventListener("click", (event) => {
+          if (event.target.closest("button,a,input,select,textarea,label")) return;
+          selectDay();
+        });
+        day.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          selectDay();
+        });
+      });
+
       plan.querySelectorAll("[data-calendar-session]").forEach((button) => {
         button.addEventListener("click", () => {
           const sessionNumber = Number(button.dataset.calendarSession || 1);
@@ -1086,6 +1164,17 @@
           panels[sessionIndex >= 0 ? sessionIndex : 0]?.scrollIntoView({ behavior: "smooth", block: "start" });
         });
       });
+
+      const requestedSession = Number(coachParams.get("session") || 0);
+      if (requestedSession) {
+        const sessionIndex = panels.findIndex((panel) => Number(panel.dataset.sessionNumber || 0) === requestedSession);
+        if (sessionIndex >= 0) {
+          activateSession(sessionIndex);
+          setCoachView("training", { scroll: false });
+        }
+      }
+      const requestedDay = coachParams.get("day");
+      if (requestedDay) selectCalendarDay(requestedDay, { scroll: false });
 
       const activityForm = plan.querySelector("[data-activity-log-form]");
       plan.querySelector("[data-toggle-activity-log]")?.addEventListener("click", () => {
