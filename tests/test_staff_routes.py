@@ -14,7 +14,7 @@ if importlib.util.find_spec("flask") is None or importlib.util.find_spec("flask_
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
-from dreamz_portal import AppSetting, CancellationRequest, CoachInteraction, DigitalSignatureRecord, EmailLog, GroupClassOccurrence, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, Member, MemberClassAttendance, MemberClassPlan, MemberDocument, MemberSignedDocument, MembershipApplication, MembershipApplicationStatus, PricingChangeLog, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, StaffUser, SyncRun, app, db, deliver_email, payment_status_for_member, pricing_visibility_list, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
+from dreamz_portal import AppSetting, CancellationRequest, CoachInteraction, DigitalSignatureRecord, EmailLog, GroupClassOccurrence, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, Member, MemberClassAttendance, MemberClassPlan, MemberDocument, MemberSignedDocument, MembershipApplication, MembershipApplicationStatus, PricingChangeLog, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, StaffUser, SyncRun, app, db, deliver_email, ensure_runtime_schema, payment_status_for_member, pricing_visibility_list, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
 
 
 class FakeS3Body:
@@ -397,38 +397,55 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("All prices and fees are non-negotiable.", body)
         self.assertIn("Changing active prices can affect public and member information.", body)
 
-    def test_staff_new_admin_sections_render_empty_state_when_context_fails(self):
+    def test_staff_new_admin_sections_load_real_seeded_data(self):
         with self.client.session_transaction() as sess:
             sess["staff_role"] = "manager"
             sess["staff_username"] = "manager"
 
-        cases = [
-            ("/staff/pricing-products", "pricing_admin_context"),
-            ("/staff/group-classes", "group_class_admin_context"),
-        ]
-        for route, context_name in cases:
+        cases = {
+            "/staff/pricing-products": "No contract / 1 month",
+            "/staff/group-classes": "BODYPUMP",
+        }
+        for route, expected in cases.items():
             with self.subTest(route=route):
-                with patch(f"dreamz_portal.{context_name}", side_effect=RuntimeError("schema drift")):
-                    response = self.client.get(route)
+                response = self.client.get(route)
                 self.assertEqual(response.status_code, 200)
-                self.assertIn("data is still being prepared", response.get_data(as_text=True))
+                body = response.get_data(as_text=True)
+                self.assertIn(expected, body)
+                self.assertNotIn("data is still being prepared", body)
 
-    def test_staff_tools_render_empty_state_when_schema_check_fails(self):
+    def test_runtime_schema_repairs_legacy_staff_settings_table(self):
+        db.session.remove()
+        db.drop_all()
+        with db.engine.begin() as connection:
+            connection.exec_driver_sql(
+                "CREATE TABLE staff_user ("
+                "id INTEGER PRIMARY KEY, "
+                "username VARCHAR UNIQUE NOT NULL, "
+                "role VARCHAR NOT NULL, "
+                "password_hash VARCHAR NOT NULL)"
+            )
+            connection.exec_driver_sql(
+                "INSERT INTO staff_user (username, role, password_hash) "
+                "VALUES ('legacy-admin', 'admin', 'hash')"
+            )
+
+        app.config["_RUNTIME_SCHEMA_READY"] = False
+        ensure_runtime_schema()
+        user = StaffUser.query.filter_by(username="legacy-admin").one()
+        self.assertTrue(user.is_active)
+        self.assertIsNotNone(user.created_at)
+        self.assertIsNotNone(user.updated_at)
+
         with self.client.session_transaction() as sess:
             sess["staff_role"] = "admin"
             sess["staff_username"] = "ron"
 
-        original_testing = app.config["TESTING"]
-        app.config["TESTING"] = False
-        try:
-            for route in ["/staff/changes", "/staff/sync", "/staff/coach"]:
-                with self.subTest(route=route):
-                    with patch("dreamz_portal.ensure_runtime_schema", side_effect=RuntimeError("schema drift")):
-                        response = self.client.get(route)
-                    self.assertEqual(response.status_code, 200)
-                    self.assertIn("data is still being prepared", response.get_data(as_text=True))
-        finally:
-            app.config["TESTING"] = original_testing
+        response = self.client.get("/staff/settings")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Staff Settings", response.get_data(as_text=True))
+        self.assertNotIn("data is still being prepared", response.get_data(as_text=True))
 
     def test_staff_can_update_pricing_item_and_log_change(self):
         seed_pricing_catalog()

@@ -1727,11 +1727,141 @@ def ensure_model_column(table_name, column_name, column_definition):
         db.session.commit()
 
 
+def runtime_column_definition(column):
+    return column.type.compile(dialect=db.engine.dialect)
+
+
+def ensure_runtime_model_columns():
+    for mapper in db.Model.registry.mappers:
+        table = mapper.local_table
+        for column in table.columns:
+            if column.primary_key:
+                continue
+            ensure_model_column(table.name, column.name, runtime_column_definition(column))
+
+
+def sql_bool(value):
+    if db.engine.dialect.name == "postgresql":
+        return "TRUE" if value else "FALSE"
+    return "1" if value else "0"
+
+
+def backfill_runtime_schema_defaults():
+    from sqlalchemy import text
+
+    true_value = sql_bool(True)
+    db.session.execute(text(
+        f"UPDATE staff_user SET is_active = {true_value} WHERE is_active IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE staff_user SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE staff_user SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE sync_run SET status = 'received' WHERE status IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE sync_run SET members_received = 0 WHERE members_received IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE sync_run SET members_new = 0 WHERE members_new IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE sync_run SET members_updated = 0 WHERE members_updated IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE sync_run SET documents_received = 0 WHERE documents_received IS NULL"
+    ))
+    db.session.execute(text(
+        f"UPDATE group_class_type SET default_bookable = {true_value} WHERE default_bookable IS NULL"
+    ))
+    db.session.execute(text(
+        f"UPDATE group_class_type SET default_publish = {true_value} WHERE default_publish IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE group_class_type SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE group_class_type SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE group_class_occurrence SET status = 'scheduled' WHERE status IS NULL"
+    ))
+    db.session.execute(text(
+        f"UPDATE group_class_occurrence SET is_bookable = {true_value} WHERE is_bookable IS NULL"
+    ))
+    db.session.execute(text(
+        f"UPDATE group_class_occurrence SET is_published = {true_value} WHERE is_published IS NULL"
+    ))
+    db.session.execute(text(
+        f"UPDATE group_class_occurrence SET blocks_room = {true_value} WHERE blocks_room IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE group_class_occurrence SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE group_class_occurrence SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL"
+    ))
+    db.session.execute(text(
+        f"UPDATE pricing_category SET is_active = {true_value} WHERE is_active IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE pricing_category SET sort_order = 0 WHERE sort_order IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE pricing_category SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE pricing_category SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE pricing_item SET price_amount = 0 WHERE price_amount IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE pricing_item SET currency = 'USD' WHERE currency IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE pricing_item SET billing_interval = 'one_time' WHERE billing_interval IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE pricing_item SET visibility = 'staff_only' WHERE visibility IS NULL"
+    ))
+    db.session.execute(text(
+        f"UPDATE pricing_item SET is_active = {true_value} WHERE is_active IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE pricing_item SET sort_order = 0 WHERE sort_order IS NULL"
+    ))
+    db.session.execute(text(
+        f"UPDATE pricing_item SET requires_front_desk_handling = {true_value} WHERE requires_front_desk_handling IS NULL"
+    ))
+    db.session.execute(text(
+        f"UPDATE pricing_item SET online_payment_available = {sql_bool(False)} WHERE online_payment_available IS NULL"
+    ))
+    db.session.execute(text(
+        f"UPDATE pricing_item SET member_eligible = {true_value} WHERE member_eligible IS NULL"
+    ))
+    db.session.execute(text(
+        f"UPDATE pricing_item SET contract_only = {sql_bool(False)} WHERE contract_only IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE pricing_item SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE pricing_item SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL"
+    ))
+    db.session.commit()
+
+
 def ensure_runtime_schema():
     if app.config.get("_RUNTIME_SCHEMA_READY") and not app.config.get("TESTING"):
         return
 
     db.create_all()
+    ensure_runtime_model_columns()
+    backfill_runtime_schema_defaults()
     ensure_sqlite_model_column("cancellation_request", "notification_to", "TEXT")
     ensure_sqlite_model_column("cancellation_request", "notification_cc", "TEXT")
     ensure_model_column("cancellation_request", "notification_bcc", "TEXT")
@@ -2010,26 +2140,8 @@ def ensure_pricing_business_rules(item):
 
 
 def pricing_admin_context():
-    try:
-        ensure_runtime_schema()
-        seed_pricing_catalog()
-    except Exception:
-        db.session.rollback()
-        app.logger.exception("Pricing admin catalog unavailable; rendering empty admin pricing page.")
-        return {
-            "pricing_items": [],
-            "pricing_categories": [],
-            "pricing_changes": [],
-            "pricing_billing_intervals": PRICING_BILLING_INTERVALS,
-            "pricing_visibility_options": PRICING_VISIBILITY_OPTIONS,
-            "selected_category": request.args.get("category", "").strip(),
-            "selected_status": request.args.get("status", "").strip(),
-            "selected_visibility": request.args.get("visibility", "").strip(),
-            "pricing_global_rule": PRICING_CATALOG_GLOBAL_RULE,
-            "pricing_terms_list": pricing_terms_list,
-            "pricing_visibility_list": pricing_visibility_list,
-            "staff_page_warning": translated_text("staff_page_temporarily_empty", current_language()),
-        }
+    ensure_runtime_schema()
+    seed_pricing_catalog()
     category_filter = request.args.get("category", "").strip()
     status_filter = request.args.get("status", "").strip()
     visibility_filter = request.args.get("visibility", "").strip()
@@ -2080,31 +2192,7 @@ def current_legal_version(document):
 
 
 def terms_admin_context():
-    try:
-        ensure_runtime_schema()
-    except Exception:
-        db.session.rollback()
-        app.logger.exception("Terms admin unavailable; rendering empty admin terms page.")
-        return {
-            "agreement_categories": [],
-            "legal_documents": [],
-            "legal_versions": [],
-            "document_versions": {},
-            "translations_by_version": {},
-            "required_rules": [],
-            "membership_applications": [],
-            "application_statuses": MEMBERSHIP_APPLICATION_STATUSES,
-            "member_signed_documents": [],
-            "digital_signatures": [],
-            "signed_pdfs": [],
-            "cancellation_requests": [],
-            "legal_languages": LANGUAGES,
-            "legal_review_statuses": LEGAL_REVIEW_STATUSES,
-            "translation_statuses": LEGAL_TRANSLATION_STATUSES,
-            "terms_admin_warnings": [translated_text("staff_page_temporarily_empty", current_language())],
-            "legal_translation_notice": LEGAL_TRANSLATION_DRAFT_NOTICE,
-            "current_legal_version": current_legal_version,
-        }
+    ensure_runtime_schema()
     documents = LegalDocument.query.order_by(LegalDocument.sort_order.asc(), LegalDocument.title.asc()).all()
     versions = LegalDocumentVersion.query.order_by(LegalDocumentVersion.created_at.desc(), LegalDocumentVersion.id.desc()).limit(100).all()
     translations = LegalTranslation.query.order_by(LegalTranslation.language.asc(), LegalTranslation.id.asc()).all()
@@ -2963,31 +3051,10 @@ def group_class_admin_context():
     selected_day = request.args.get("day", "").strip()
     selected_room = request.args.get("room", "").strip()
     selected_type = request.args.get("class_type", "").strip()
-    empty_context = {
-        "schedule": None,
-        "class_types": [],
-        "occurrences": [],
-        "rooms": [],
-        "selected_day": selected_day,
-        "selected_room": selected_room,
-        "selected_type": selected_type,
-        "day_options": [(day, group_class_day_label(day)) for day in range(7)],
-        "statuses": sorted(GROUP_CLASS_OCCURRENCE_STATUSES),
-        "future_plan_counts": {},
-        "changes": [],
-        "time_label": group_class_time_label,
-        "day_label": group_class_day_label,
-        "staff_page_warning": translated_text("staff_page_temporarily_empty", current_language()),
-    }
-    try:
-        ensure_runtime_schema()
-        schedule = GroupClassSchedule.query.filter_by(name=GROUP_CLASS_SCHEDULE_NAME).first()
-        if not schedule:
-            schedule = seed_group_class_schedule()
-    except Exception:
-        db.session.rollback()
-        app.logger.exception("Group class admin schedule unavailable; rendering empty admin group class page.")
-        return empty_context
+    ensure_runtime_schema()
+    schedule = GroupClassSchedule.query.filter_by(name=GROUP_CLASS_SCHEDULE_NAME).first()
+    if not schedule:
+        schedule = seed_group_class_schedule()
     class_types = GroupClassType.query.order_by(GroupClassType.name.asc()).all()
     occurrences_query = (
         GroupClassOccurrence.query
@@ -7294,18 +7361,10 @@ def staff_settings():
 def staff_cancellations():
     staff_role = require_staff_access()
     admin_status = request.args.get("admin_status", "").strip()
-    try:
-        query, status = cancellation_request_query()
-        if admin_status:
-            query = query.filter_by(admin_status=admin_status)
-        records = query.limit(500).all()
-        warning = None
-    except Exception:
-        db.session.rollback()
-        app.logger.exception("Staff cancellations unavailable; rendering empty cancellations page.")
-        status = request.args.get("status", "").strip()
-        records = []
-        warning = translated_text("staff_page_temporarily_empty", current_language())
+    query, status = cancellation_request_query()
+    if admin_status:
+        query = query.filter_by(admin_status=admin_status)
+    records = query.limit(500).all()
     token = request.args.get("token", "")
     return render_template(
         "staff_cancellations.html",
@@ -7314,7 +7373,6 @@ def staff_cancellations():
         selected_admin_status=admin_status,
         token=token,
         staff_role=staff_role,
-        staff_page_warning=warning,
     )
 
 
@@ -7323,27 +7381,19 @@ def staff_email_log():
     staff_role = require_staff_access()
     selected_status = request.args.get("status", "").strip()
     review_filter = request.args.get("review", "").strip()
-    try:
-        ensure_runtime_schema()
-        query = EmailLog.query
-        if selected_status:
-            query = query.filter_by(status=selected_status)
-        if review_filter == "open":
-            query = query.filter(email_log_review_required_filter())
-        logs = query.order_by(EmailLog.created_at.desc()).limit(100).all()
-        counts = {
-            "open": EmailLog.query.filter(email_log_review_required_filter()).count(),
-            "failed": EmailLog.query.filter_by(status="failed").count(),
-            "sent": EmailLog.query.filter_by(status="sent").count(),
-            "logged": EmailLog.query.filter_by(status="logged").count(),
-        }
-        warning = None
-    except Exception:
-        db.session.rollback()
-        app.logger.exception("Staff email log unavailable; rendering empty email log page.")
-        logs = []
-        counts = {"open": 0, "failed": 0, "sent": 0, "logged": 0}
-        warning = translated_text("staff_page_temporarily_empty", current_language())
+    ensure_runtime_schema()
+    query = EmailLog.query
+    if selected_status:
+        query = query.filter_by(status=selected_status)
+    if review_filter == "open":
+        query = query.filter(email_log_review_required_filter())
+    logs = query.order_by(EmailLog.created_at.desc()).limit(100).all()
+    counts = {
+        "open": EmailLog.query.filter(email_log_review_required_filter()).count(),
+        "failed": EmailLog.query.filter_by(status="failed").count(),
+        "sent": EmailLog.query.filter_by(status="sent").count(),
+        "logged": EmailLog.query.filter_by(status="logged").count(),
+    }
     return render_template(
         "staff_email_log.html",
         logs=logs,
@@ -7352,59 +7402,29 @@ def staff_email_log():
         review_filter=review_filter,
         email_log_requires_review=email_log_requires_review,
         staff_role=staff_role,
-        staff_page_warning=warning,
     )
 
 
 @app.get("/staff/sync")
 def staff_sync_status():
     require_staff_access()
-    try:
-        ensure_runtime_schema()
-        mark_stale_sync_runs()
-    except Exception:
-        db.session.rollback()
-        app.logger.exception("Staff sync status unavailable; rendering empty sync page.")
-        return render_template(
-            "staff_sync_status.html",
-            runs=[],
-            latest=None,
-            run_changes={},
-            page=1,
-            total_pages=1,
-            total_runs=0,
-            start_run=0,
-            end_run=0,
-            sync_page_numbers=[1],
-            staff_page_warning=translated_text("staff_page_temporarily_empty", current_language()),
-        )
+    ensure_runtime_schema()
+    mark_stale_sync_runs()
     try:
         page = max(int(request.args.get("page", "1")), 1)
     except ValueError:
         page = 1
-    try:
-        query = SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc())
-        total_runs = query.count()
-        total_pages = max((total_runs + SYNC_PAGE_SIZE - 1) // SYNC_PAGE_SIZE, 1)
-        page = min(page, total_pages)
-        start_index = (page - 1) * SYNC_PAGE_SIZE
-        runs = query.offset(start_index).limit(SYNC_PAGE_SIZE).all()
-        latest = query.first()
-        run_changes = {
-            run.id: sync_change_summary_for_template(run)
-            for run in runs
-        }
-    except Exception:
-        db.session.rollback()
-        app.logger.exception("Staff sync data unavailable; rendering empty sync page.")
-        warning = translated_text("staff_page_temporarily_empty", current_language())
-        total_runs = 0
-        total_pages = 1
-        page = 1
-        start_index = 0
-        runs = []
-        latest = None
-        run_changes = {}
+    query = SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc())
+    total_runs = query.count()
+    total_pages = max((total_runs + SYNC_PAGE_SIZE - 1) // SYNC_PAGE_SIZE, 1)
+    page = min(page, total_pages)
+    start_index = (page - 1) * SYNC_PAGE_SIZE
+    runs = query.offset(start_index).limit(SYNC_PAGE_SIZE).all()
+    latest = query.first()
+    run_changes = {
+        run.id: sync_change_summary_for_template(run)
+        for run in runs
+    }
     page_numbers = []
     last_page_number = 0
     for page_number in range(1, total_pages + 1):
@@ -7424,45 +7444,21 @@ def staff_sync_status():
         start_run=start_index + 1 if total_runs else 0,
         end_run=min(start_index + len(runs), total_runs),
         sync_page_numbers=page_numbers,
-        staff_page_warning=warning if "warning" in locals() else None,
     )
 
 
 @app.get("/staff/changes")
 def staff_daily_changes():
     require_staff_access()
-    try:
-        ensure_runtime_schema()
-        mark_stale_sync_runs()
-    except Exception:
-        db.session.rollback()
-        app.logger.exception("Staff daily changes unavailable; rendering empty changes page.")
-        today = local_datetime(datetime.now(timezone.utc)).date()
-        return render_template(
-            "staff_daily_changes.html",
-            selected_date=today,
-            previous_date=today - timedelta(days=1),
-            next_date=today + timedelta(days=1),
-            today=today,
-            runs=[],
-            new_members=[],
-            changed_members=[],
-            document_changes=[],
-            staff_page_warning=translated_text("staff_page_temporarily_empty", current_language()),
-        )
+    ensure_runtime_schema()
+    mark_stale_sync_runs()
     today = local_datetime(datetime.now(timezone.utc)).date()
     raw_date = request.args.get("date", "").strip()
     try:
         selected_date = date.fromisoformat(raw_date) if raw_date else today
     except ValueError:
         selected_date = today
-    try:
-        changes = daily_sync_changes(selected_date)
-    except Exception:
-        db.session.rollback()
-        app.logger.exception("Daily sync changes unavailable; rendering empty changes page.")
-        changes = {"runs": [], "new_members": [], "changed_members": [], "document_changes": []}
-        warning = translated_text("staff_page_temporarily_empty", current_language())
+    changes = daily_sync_changes(selected_date)
     return render_template(
         "staff_daily_changes.html",
         selected_date=selected_date,
@@ -7473,30 +7469,19 @@ def staff_daily_changes():
         new_members=changes["new_members"],
         changed_members=changes["changed_members"],
         document_changes=changes["document_changes"],
-        staff_page_warning=warning if "warning" in locals() else None,
     )
 
 
 @app.get("/staff/coach")
 def staff_coach_activity():
     require_staff_access(required_role="admin")
-    try:
-        ensure_runtime_schema()
-        interactions = (
-            CoachInteraction.query
-            .order_by(CoachInteraction.created_at.desc(), CoachInteraction.id.desc())
-            .limit(100)
-            .all()
-        )
-    except Exception:
-        db.session.rollback()
-        app.logger.exception("Staff coach activity unavailable; rendering empty coach activity page.")
-        return render_template(
-            "staff_coach_activity.html",
-            interactions=[],
-            members={},
-            staff_page_warning=translated_text("staff_page_temporarily_empty", current_language()),
-        )
+    ensure_runtime_schema()
+    interactions = (
+        CoachInteraction.query
+        .order_by(CoachInteraction.created_at.desc(), CoachInteraction.id.desc())
+        .limit(100)
+        .all()
+    )
     member_ids = {interaction.member_id for interaction in interactions}
     members = {}
     if member_ids:
@@ -7514,27 +7499,7 @@ def staff_coach_activity():
 @app.get("/staff/group-classes")
 def staff_group_classes():
     staff_role = require_staff_access()
-    try:
-        context = group_class_admin_context()
-    except Exception:
-        db.session.rollback()
-        app.logger.exception("Staff group classes failed; rendering empty admin page.")
-        context = {
-            "schedule": None,
-            "class_types": [],
-            "occurrences": [],
-            "rooms": [],
-            "selected_day": request.args.get("day", "").strip(),
-            "selected_room": request.args.get("room", "").strip(),
-            "selected_type": request.args.get("class_type", "").strip(),
-            "day_options": [(day, group_class_day_label(day)) for day in range(7)],
-            "statuses": sorted(GROUP_CLASS_OCCURRENCE_STATUSES),
-            "future_plan_counts": {},
-            "changes": [],
-            "time_label": group_class_time_label,
-            "day_label": group_class_day_label,
-            "staff_page_warning": translated_text("staff_page_temporarily_empty", current_language()),
-        }
+    context = group_class_admin_context()
     return render_template(
         "staff_group_classes.html",
         staff_role=staff_role,
@@ -7671,25 +7636,7 @@ def staff_group_class_publish():
 @app.get("/staff/pricing-products")
 def staff_pricing_products():
     staff_role = require_staff_access()
-    try:
-        context = pricing_admin_context()
-    except Exception:
-        db.session.rollback()
-        app.logger.exception("Staff pricing failed; rendering empty admin page.")
-        context = {
-            "pricing_items": [],
-            "pricing_categories": [],
-            "pricing_changes": [],
-            "pricing_billing_intervals": PRICING_BILLING_INTERVALS,
-            "pricing_visibility_options": PRICING_VISIBILITY_OPTIONS,
-            "selected_category": request.args.get("category", "").strip(),
-            "selected_status": request.args.get("status", "").strip(),
-            "selected_visibility": request.args.get("visibility", "").strip(),
-            "pricing_global_rule": PRICING_CATALOG_GLOBAL_RULE,
-            "pricing_terms_list": pricing_terms_list,
-            "pricing_visibility_list": pricing_visibility_list,
-            "staff_page_warning": translated_text("staff_page_temporarily_empty", current_language()),
-        }
+    context = pricing_admin_context()
     return render_template(
         "staff_pricing_products.html",
         staff_role=staff_role,
