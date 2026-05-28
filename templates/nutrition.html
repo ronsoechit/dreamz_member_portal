@@ -18,6 +18,10 @@
       <div class="inline-flex items-center justify-center rounded-full border border-green-400/30 bg-green-500/10 px-4 py-3 text-sm font-semibold text-green-100">
         {{ t('meal_plan_personalized_for_you') }}
       </div>
+    {% elif nutrition_missing_items and nutrition_missing_items[0].field == 'birthdate' %}
+      <a href="#nutrition-birthdate" class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-950 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">
+        {{ t('add_date_of_birth') }}
+      </a>
     {% else %}
       <a href="{{ url_for('member_coach', edit='profile', return_to='nutrition') }}" class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-950 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">
         {{ t('complete_nutrition_profile') }}
@@ -54,9 +58,17 @@
           </form>
           <p class="mt-2 text-xs leading-5 text-yellow-100/80">{{ t('add_dob_to_improve_nutrition') }}</p>
         {% endif %}
-        <a href="{{ url_for('member_coach', edit='profile', return_to='nutrition') }}" class="mt-4 inline-flex rounded border border-gray-700 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400">
-          {{ t('add_missing_profile_data') }}
-        </a>
+        {% set profile_missing = namespace(value=false) %}
+        {% for item in nutrition_missing_items %}
+          {% if item.field != 'birthdate' %}
+            {% set profile_missing.value = true %}
+          {% endif %}
+        {% endfor %}
+        {% if profile_missing.value %}
+          <a href="{{ url_for('member_coach', edit='profile', return_to='nutrition') }}" class="mt-4 inline-flex rounded border border-gray-700 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400">
+            {{ t('add_missing_profile_data') }}
+          </a>
+        {% endif %}
       </article>
     {% endif %}
 

@@ -560,6 +560,49 @@ class PortalRouteTests(unittest.TestCase):
         member = Member.query.filter_by(member_id="13659").one()
         self.assertEqual(member.birthdate, date(1990, 1, 1))
 
+    def test_pregnant_member_gets_meal_plan_even_when_training_safety_is_cautious(self):
+        self.add_member(
+            member_id="24680",
+            name="Pregnant Member",
+            birthdate=None,
+        )
+        profile = CoachProfile(
+            member_id="24680",
+            sex="female",
+            pregnancy_status="pregnant",
+            gestational_weeks=18,
+            multiple_pregnancy="no",
+            provider_cleared_exercise="unknown",
+            pregnancy_consent=True,
+            primary_goal="health",
+            experience_level="beginner",
+            training_days=3,
+            session_minutes=45,
+            training_place="dreamz_gym",
+            height_cm=165,
+            weight_kg=74,
+            injuries="none",
+            nutrition_goal="healthier",
+            dietary_preferences="local food",
+            allergies="none",
+        )
+        db.session.add(profile)
+        db.session.commit()
+        self.login_as("24680")
+
+        self.assertEqual(coach_profile_completion(profile), 100)
+        response = self.client.get("/nutrition")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Daily targets", body)
+        self.assertIn("Meal plan structure", body)
+        self.assertIn("Add date of birth", body)
+        self.assertIn('href="#nutrition-birthdate"', body)
+        self.assertIn('action="/coach/date-of-birth"', body)
+        self.assertIn("pregnancy", body.lower())
+        self.assertNotIn('href="/coach?edit=profile&amp;return_to=nutrition"', body)
+
     def test_nutrition_missing_fields_are_actionable_profile_deep_links(self):
         self.add_member(
             member_id="13659",

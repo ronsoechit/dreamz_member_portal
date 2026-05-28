@@ -5330,6 +5330,11 @@ def nutrition_plan_context(member, profile=None, language=None):
     personal_plan = coach_plan_for_member(member, profile, language=language)
     nutrition_section = personal_plan[1] if personal_plan and len(personal_plan) > 1 else None
     meal_plan = nutrition_section.get("meal_plan") if isinstance(nutrition_section, dict) else None
+    if not meal_plan:
+        meal_plan = personalized_nutrition_meal_plan(member, profile, language)
+        if isinstance(nutrition_section, dict):
+            nutrition_section = dict(nutrition_section)
+            nutrition_section["meal_plan"] = meal_plan
     nutrition_next_meal = meal_plan["meals"][0] if meal_plan and meal_plan.get("meals") else None
     meal_logs = (
         MealLog.query
