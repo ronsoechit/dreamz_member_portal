@@ -22,22 +22,22 @@
   </div>
 </div>
 
-<div class="mb-6 grid gap-3 md:grid-cols-4">
-  <div class="rounded border border-gray-700 bg-gray-800/40 p-4">
+<div class="mb-5 grid gap-3 md:grid-cols-4">
+  <div class="staff-metric-card rounded border border-gray-700 bg-gray-800/40 p-3">
     <div class="text-sm text-gray-300">Sync Runs</div>
-    <div class="mt-1 text-2xl font-semibold text-yellow-400">{{ runs|length }}</div>
+    <div class="mt-1 text-xl font-semibold text-yellow-400">{{ runs|length }}</div>
   </div>
-  <div class="rounded border border-gray-700 bg-gray-800/40 p-4">
+  <div class="staff-metric-card rounded border border-gray-700 bg-gray-800/40 p-3">
     <div class="text-sm text-gray-300">New Members</div>
-    <div class="mt-1 text-2xl font-semibold text-green-300">{{ new_members|length }}</div>
+    <div class="mt-1 text-xl font-semibold text-green-300">{{ new_members|length }}</div>
   </div>
-  <div class="rounded border border-gray-700 bg-gray-800/40 p-4">
+  <div class="staff-metric-card rounded border border-gray-700 bg-gray-800/40 p-3">
     <div class="text-sm text-gray-300">Changed Members</div>
-    <div class="mt-1 text-2xl font-semibold text-yellow-400">{{ changed_members|length }}</div>
+    <div class="mt-1 text-xl font-semibold text-yellow-400">{{ changed_members|length }}</div>
   </div>
-  <div class="rounded border border-gray-700 bg-gray-800/40 p-4">
+  <div class="staff-metric-card rounded border border-gray-700 bg-gray-800/40 p-3">
     <div class="text-sm text-gray-300">Document Updates</div>
-    <div class="mt-1 text-2xl font-semibold text-blue-300">{{ document_changes|length }}</div>
+    <div class="mt-1 text-xl font-semibold text-blue-300">{{ document_changes|length }}</div>
   </div>
 </div>
 
@@ -48,14 +48,14 @@
 {% endif %}
 
 {% if new_members %}
-  <section class="mb-6 rounded border border-green-500/20 bg-green-500/5 p-5">
+  <section class="mb-5 rounded border border-green-500/20 bg-green-500/5 p-4">
     <div class="mb-4 flex items-center justify-between">
       <h3 class="text-xl font-semibold text-green-300">New Members</h3>
       <span class="rounded bg-green-500/15 px-3 py-1 text-sm font-semibold text-green-200">{{ new_members|length }}</span>
     </div>
     <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
       {% for item in new_members %}
-        <a class="block rounded border border-gray-700 bg-gray-900/60 p-4 hover:border-green-400" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">
+        <a class="block rounded border border-gray-700 bg-gray-900/60 p-3 hover:border-green-400" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">
           <span class="block font-semibold text-green-200 underline">{{ item.name or 'Unknown' }}</span>
           <span class="mt-1 block text-xs text-gray-400">#{{ item.member_id }}{% if item.plan_type %} / {{ item.plan_type }}{% endif %}</span>
           <span class="mt-2 inline-block rounded bg-gray-800 px-2 py-1 text-xs text-gray-300">{{ item.run_time }}</span>
@@ -66,7 +66,7 @@
 {% endif %}
 
 {% if changed_members %}
-  <section class="mb-6 rounded border border-yellow-500/20 bg-yellow-500/5 p-5">
+  <section class="mb-5 rounded border border-yellow-500/20 bg-yellow-500/5 p-4">
     <div class="mb-4 flex items-center justify-between">
       <h3 class="text-xl font-semibold text-yellow-300">Changed Members</h3>
       <span class="rounded bg-yellow-500/15 px-3 py-1 text-sm font-semibold text-yellow-200">{{ changed_members|length }}</span>
@@ -74,19 +74,19 @@
     <div class="space-y-4">
       {% for item in changed_members %}
         <article class="rounded border border-gray-700 bg-gray-900/60">
-          <div class="flex flex-col gap-1 border-b border-gray-800 px-4 py-3 md:flex-row md:items-center md:justify-between">
+          <div class="flex flex-col gap-1 border-b border-gray-800 px-3 py-2 md:flex-row md:items-center md:justify-between">
             <a class="font-semibold text-green-200 underline" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">{{ item.name or 'Unknown' }}</a>
             <span class="text-xs text-gray-400">#{{ item.member_id }}{% if item.plan_type %} / {{ item.plan_type }}{% endif %}</span>
           </div>
           <div class="divide-y divide-gray-800">
             {% for change in item.changes %}
-              <div class="grid gap-3 px-4 py-3 text-sm lg:grid-cols-[8rem_1fr_1fr_4rem]">
+              <div class="grid gap-2 px-3 py-2 text-sm lg:grid-cols-[8rem_1fr_1fr_4rem]">
                 <div class="font-semibold text-gray-200">{{ change.label }}</div>
-                <div class="rounded bg-gray-950 px-3 py-2 text-gray-400">
+                <div class="rounded bg-gray-950 px-2 py-1.5 text-gray-400">
                   <span class="block text-xs uppercase text-gray-500">From</span>
                   {{ change.old if change.old is not none and change.old != '' else 'empty' }}
                 </div>
-                <div class="rounded bg-gray-950 px-3 py-2 text-gray-100">
+                <div class="rounded bg-gray-950 px-2 py-1.5 text-gray-100">
                   <span class="block text-xs uppercase text-gray-500">To</span>
                   {{ change.new if change.new is not none and change.new != '' else 'empty' }}
                 </div>
@@ -101,14 +101,14 @@
 {% endif %}
 
 {% if document_changes %}
-  <section class="rounded border border-blue-500/20 bg-blue-500/5 p-5">
+  <section class="rounded border border-blue-500/20 bg-blue-500/5 p-4">
     <div class="mb-4 flex items-center justify-between">
       <h3 class="text-xl font-semibold text-blue-300">Document Updates</h3>
       <span class="rounded bg-blue-500/15 px-3 py-1 text-sm font-semibold text-blue-200">{{ document_changes|length }}</span>
     </div>
     <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
       {% for item in document_changes %}
-        <a class="block rounded border border-gray-700 bg-gray-900/60 p-4 hover:border-blue-400" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">
+        <a class="block rounded border border-gray-700 bg-gray-900/60 p-3 hover:border-blue-400" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">
           <span class="block font-semibold text-green-200 underline">{{ item.name or 'Unknown' }}</span>
           <span class="mt-1 block text-xs text-gray-400">#{{ item.member_id }}</span>
           <span class="mt-2 block text-sm text-blue-100">{{ item.old_count }} -> {{ item.new_count }} documents</span>

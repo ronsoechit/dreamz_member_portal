@@ -795,7 +795,6 @@ class StaffRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_staff_home_requires_login(self):
-        self.client.get("/language?lang=en&next=/staff")
         response = self.client.get("/staff")
 
         self.assertEqual(response.status_code, 200)
@@ -863,7 +862,6 @@ class StaffRouteTests(unittest.TestCase):
             self.assertEqual(sess["staff_role"], "manager")
 
     def test_staff_login_shows_loading_state_script(self):
-        self.client.get("/language?lang=en&next=/staff/login")
         response = self.client.get("/staff/login")
 
         self.assertEqual(response.status_code, 200)
@@ -1264,8 +1262,8 @@ class StaffRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn("Member action available", body)
-        self.assertIn("member logs in through the member portal", body)
+        self.assertIn("Membership status", body)
+        self.assertIn("Payment Information", body)
         self.assertNotIn("I want to cancel my contract", body)
 
     def test_manager_can_view_staff_member_document(self):

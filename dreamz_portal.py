@@ -3600,8 +3600,36 @@ SYNC_INVALID_SENTINELS = {
 }
 
 
+SYNC_BLANK_PROTECTED_FIELDS = {
+    "name",
+    "email",
+    "phone",
+    "mobile",
+    "plan_type",
+    "contract_type",
+    "billing_status",
+    "billing_option",
+    "billing_type",
+    "last_payment",
+    "next_payment",
+    "due_date",
+    "start_date",
+    "end_date",
+    "signup_date",
+    "photo_path",
+}
+
+
 def is_sync_invalid_sentinel(value):
     return isinstance(value, str) and value.strip().upper() in SYNC_INVALID_SENTINELS
+
+
+def is_blank_sync_value(value):
+    return value is None or (isinstance(value, str) and value.strip() == "")
+
+
+def has_meaningful_sync_value(value):
+    return value not in (None, "")
 
 
 def sync_invalid_field_names(raw_member):
@@ -3611,6 +3639,23 @@ def sync_invalid_field_names(raw_member):
         for key, value in (raw_member or {}).items()
         if key in columns and key != "id" and is_sync_invalid_sentinel(value)
     ]
+
+
+def sync_blank_field_names(existing, member_data):
+    return [
+        field
+        for field in SYNC_BLANK_PROTECTED_FIELDS
+        if field in member_data
+        and is_blank_sync_value(member_data.get(field))
+        and has_meaningful_sync_value(change_value(getattr(existing, field, None)))
+    ]
+
+
+def remove_blank_sync_fields(existing, member_data):
+    ignored_fields = sync_blank_field_names(existing, member_data)
+    for field in ignored_fields:
+        member_data.pop(field, None)
+    return ignored_fields
 
 
 def parse_sync_date(value):
@@ -3726,7 +3771,16 @@ def member_field_changes(existing, member_data):
 
 
 def visible_sync_change(change):
-    return not is_sync_invalid_sentinel((change or {}).get("new"))
+    change = change or {}
+    if is_sync_invalid_sentinel(change.get("new")):
+        return False
+    if (
+        change.get("field") in SYNC_BLANK_PROTECTED_FIELDS
+        and is_blank_sync_value(change.get("new"))
+        and has_meaningful_sync_value(change.get("old"))
+    ):
+        return False
+    return True
 
 
 def document_signature(record):
@@ -3863,6 +3917,7 @@ def apply_sync_payload(payload):
         "document_changes": [],
     }
     ignored_invalid_fields = {}
+    ignored_blank_fields = {}
     try:
         for raw_member in members:
             invalid_fields = sync_invalid_field_names(raw_member)
@@ -3871,6 +3926,9 @@ def apply_sync_payload(payload):
                 ignored_invalid_fields[member_data["member_id"]] = invalid_fields
             existing = Member.query.filter_by(member_id=member_data["member_id"]).first()
             if existing:
+                blank_fields = remove_blank_sync_fields(existing, member_data)
+                if blank_fields:
+                    ignored_blank_fields[member_data["member_id"]] = blank_fields
                 changes = member_field_changes(existing, member_data)
                 if changes:
                     updated += 1
@@ -3925,6 +3983,13 @@ def apply_sync_payload(payload):
             warning_text = (
                 f"Ignored {ignored_count} invalid GymAssistant sentinel value(s) "
                 f"for {len(ignored_invalid_fields)} member(s). Create a fresh GymAssistant backup if this keeps happening."
+            )
+            sync_run.error = f"{sync_run.error}\n{warning_text}" if sync_run.error else warning_text
+        if ignored_blank_fields:
+            ignored_count = sum(len(fields) for fields in ignored_blank_fields.values())
+            warning_text = (
+                f"Ignored {ignored_count} blank GymAssistant value(s) over existing member data "
+                f"for {len(ignored_blank_fields)} member(s). Create a fresh GymAssistant backup if this keeps happening."
             )
             sync_run.error = f"{sync_run.error}\n{warning_text}" if sync_run.error else warning_text
         sync_run.change_summary = json.dumps(change_summary)
@@ -6442,7 +6507,7 @@ def require_language_selection_for_entry():
         "service_worker",
     }:
         return None
-    if request.endpoint in {"home", "login", "staff_login", "staff_home"}:
+    if request.endpoint in {"home", "login"}:
         next_url = request.full_path if request.query_string else request.path
         return redirect(url_for("choose_language", next=safe_local_next_url(next_url)))
     return None
@@ -8430,7 +8495,21 @@ def staff_data_audit_csv():
 def staff_member_detail(member_id):
     require_staff_access()
     member = Member.query.filter_by(member_id=member_id).first_or_404()
-    return render_template("dashboard.html", **member_dashboard_context(member, staff_admin_view=True))
+    documents = optional_dashboard_value("staff_member_documents", [], lambda: member_documents(member))
+    coach_counts = optional_dashboard_value("staff_member_coach_counts", {"total": 0}, lambda: coach_data_counts(member.member_id))
+    next_payment = member.next_payment or compute_next_payment(member)
+    return render_template(
+        "staff_member_detail.html",
+        member=member,
+        display_name=display_member_name(member.name),
+        member_photo_available=bool(is_s3_uri(member.photo_path) or resolved_photo_path(member.photo_path)),
+        documents=documents,
+        document_count=len(documents),
+        coach_data_total=coach_counts.get("total", 0),
+        next_payment=next_payment,
+        gym_balance=member.balance or 0.0,
+        payment_status=localized_payment_status(payment_status_for_member(member), current_language()),
+    )
 
 
 @app.post("/staff/members/<member_id>/coach/reset")

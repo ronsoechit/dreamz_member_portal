@@ -13,27 +13,39 @@
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
   <link href="{{ url_for('static', filename='css/premium.css') }}" rel="stylesheet">
 </head>
-<body class="app-body bg-gray-900 text-white min-h-screen flex flex-col">
+<body class="app-body {% if current_staff_role %}staff-app-body{% endif %} bg-gray-900 text-white min-h-screen flex flex-col">
 
-  <header class="app-header bg-gray-800 shadow-md">
+  <header class="app-header {% if current_staff_role %}staff-header{% endif %} bg-gray-800 shadow-md">
     <div class="container mx-auto flex flex-col gap-4 px-5 py-4">
       <div class="header-top-row flex items-center justify-between gap-3">
         <a href="/" class="brand-mark shrink-0">
           <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Logo" class="h-10">
         </a>
-        <div class="language-switcher flex items-center justify-end gap-1 text-xs">
-          {% for code, label in available_languages.items() %}
-            <a
-              href="{{ url_for('set_language', lang=code, next=request.full_path if request.query_string else request.path) }}"
-              class="language-pill inline-flex items-center justify-center gap-1 rounded leading-tight {% if current_language == code %}bg-yellow-500/10 text-yellow-400 font-semibold{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}"
-              title="{{ label }}"
-              aria-label="{{ label }}"
-            >
-              <span class="language-flag">{{ language_flags[code] }}</span>
-              <span class="language-code">{{ code|upper }}</span>
-            </a>
-          {% endfor %}
-        </div>
+        {% if current_staff_role %}
+          <form class="staff-language-form text-right text-xs" action="{{ url_for('set_language') }}" method="get">
+            <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
+            <label class="sr-only" for="staff-header-language">{{ t('language') }}</label>
+            <select id="staff-header-language" name="lang" class="rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white" onchange="this.form.submit()">
+              {% for code, label in available_languages.items() %}
+                <option value="{{ code }}" {% if current_language == code %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </form>
+        {% else %}
+          <div class="language-switcher flex items-center justify-end gap-1 text-xs">
+            {% for code, label in available_languages.items() %}
+              <a
+                href="{{ url_for('set_language', lang=code, next=request.full_path if request.query_string else request.path) }}"
+                class="language-pill inline-flex items-center justify-center gap-1 rounded leading-tight {% if current_language == code %}bg-yellow-500/10 text-yellow-400 font-semibold{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}"
+                title="{{ label }}"
+                aria-label="{{ label }}"
+              >
+                <span class="language-flag">{{ language_flags[code] }}</span>
+                <span class="language-code">{{ code|upper }}</span>
+              </a>
+            {% endfor %}
+          </div>
+        {% endif %}
       </div>
       <div class="app-header-actions flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-end">
         {% if current_staff_role and request.endpoint != 'staff_home' %}
@@ -95,7 +107,7 @@
     </div>
   </header>
 
-  <main class="portal-main container mx-auto flex-grow px-4 py-8">
+  <main class="portal-main {% if current_staff_role %}staff-main{% endif %} container mx-auto flex-grow px-4 py-8">
 	  {% with messages = get_flashed_messages() %}
 		{% if messages %}
 		  <div class="flash-message mb-4 bg-green-700/30 border border-green-600 rounded p-4">

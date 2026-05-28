@@ -19,6 +19,114 @@
   --dreamz-glow: 0 0 34px rgba(245, 158, 11, 0.13);
 }
 
+body.staff-app-body {
+  background:
+    radial-gradient(circle at top left, rgba(245, 158, 11, 0.10), transparent 26rem),
+    linear-gradient(135deg, #040711 0%, #07101e 48%, #050914 100%) !important;
+}
+
+body.staff-app-body .app-header {
+  position: sticky;
+  top: 0;
+  background: rgba(7, 12, 22, 0.94) !important;
+}
+
+body.staff-app-body .app-header > .container,
+body.staff-app-body .portal-main {
+  max-width: 1280px;
+}
+
+body.staff-app-body .app-header > .container {
+  gap: 0.75rem;
+  padding-top: 1rem !important;
+  padding-bottom: 1rem !important;
+}
+
+body.staff-app-body .brand-mark {
+  border-radius: 12px;
+  padding: 0.4rem 0.6rem;
+}
+
+body.staff-app-body .brand-mark img {
+  height: 2.35rem;
+}
+
+body.staff-app-body .staff-main {
+  padding-top: 1.6rem !important;
+}
+
+body.staff-app-body .staff-nav {
+  width: 100%;
+  justify-content: center;
+  gap: 0.25rem !important;
+  border-radius: 14px !important;
+}
+
+body.staff-app-body .staff-nav a {
+  min-height: 2.15rem;
+  border-radius: 10px !important;
+  padding: 0.48rem 0.72rem !important;
+  font-size: 0.82rem;
+}
+
+body.staff-app-body .staff-language-form select,
+.auth-language-form select {
+  min-height: 2rem;
+  border-radius: 10px !important;
+  padding: 0.25rem 1.8rem 0.25rem 0.55rem !important;
+}
+
+body.staff-app-body main > section,
+body.staff-app-body main > div.rounded,
+body.staff-app-body main article.rounded,
+body.staff-app-body main form.rounded,
+body.staff-app-body div[class*="bg-gray-800/40"],
+body.staff-app-body section[class*="bg-gray-800/40"],
+body.staff-app-body div[class*="bg-gray-900/60"] {
+  border-radius: 12px !important;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+body.staff-app-body .staff-page-heading h2 {
+  font-size: 1.55rem;
+}
+
+body.staff-app-body .staff-member-summary,
+body.staff-app-body .staff-member-grid section {
+  padding: 1rem !important;
+}
+
+.staff-member-photo .member-photo-frame {
+  width: 5rem !important;
+  height: 5rem !important;
+  border-radius: 12px !important;
+}
+
+.staff-member-photo .member-photo-frame .h-24 {
+  width: 3.2rem !important;
+  height: 3.2rem !important;
+}
+
+.staff-field-row {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.7fr) minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: baseline;
+}
+
+.staff-field-row dt {
+  color: #9aa8bd !important;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.staff-field-row dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #f8fafc;
+  font-weight: 650;
+}
+
 * {
   scrollbar-color: rgba(245, 158, 11, 0.7) rgba(15, 23, 42, 0.7);
 }

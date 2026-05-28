@@ -300,6 +300,80 @@ class SyncApiTests(unittest.TestCase):
         self.assertNotIn("Cecilia, Sebastian", body)
         self.assertIn("No tracked GymAssistant changes", body)
 
+    def test_sync_api_ignores_blank_values_over_existing_member_data(self):
+        db.session.add(Member(
+            member_id="34878",
+            name="Acosta, Rocila",
+            email="rocilacosta@gmail.com",
+            mobile="297-592-2601",
+            plan_type="1 WEEK PASS",
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            "/api/sync/members",
+            json={
+                "members": [
+                    {
+                        "member_id": "34878",
+                        "name": "Acosta, Rocila",
+                        "email": "",
+                        "mobile": "",
+                        "plan_type": "1 WEEK PASS",
+                    }
+                ]
+            },
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["members_updated"], 0)
+        member = Member.query.filter_by(member_id="34878").one()
+        self.assertEqual(member.email, "rocilacosta@gmail.com")
+        self.assertEqual(member.mobile, "297-592-2601")
+        summary = json.loads(SyncRun.query.one().change_summary)
+        self.assertEqual(summary["changed_members"], [])
+        self.assertIn("Ignored 2 blank GymAssistant value", SyncRun.query.one().error)
+
+    def test_staff_daily_changes_hides_legacy_blank_contact_changes(self):
+        db.session.add(Member(member_id="34878", name="Acosta, Rocila"))
+        db.session.add(SyncRun(
+            source="unit-test",
+            status="success",
+            started_at=datetime(2026, 5, 28, 5, 51),
+            completed_at=datetime(2026, 5, 28, 5, 51),
+            members_received=1,
+            members_updated=1,
+            change_summary=json.dumps({
+                "new_members": [],
+                "changed_members": [
+                    {
+                        "member_id": "34878",
+                        "name": "Acosta, Rocila",
+                        "plan_type": "1 WEEK PASS",
+                        "changes": [
+                            {"field": "email", "label": "Email", "old": "rocilacosta@gmail.com", "new": ""},
+                            {"field": "mobile", "label": "Mobile", "old": "297-592-2601", "new": ""},
+                        ],
+                    }
+                ],
+                "document_changes": [],
+            }),
+        ))
+        db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+
+        response = self.client.get("/staff/changes?date=2026-05-28")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertNotIn("Acosta, Rocila", body)
+        self.assertNotIn("rocilacosta@gmail.com", body)
+        self.assertNotIn("297-592-2601", body)
+        self.assertIn("No tracked GymAssistant changes", body)
+
     def test_staff_sync_status_lists_runs(self):
         db.session.add(SyncRun(
             source="unit-test",
