@@ -443,11 +443,46 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Membership status", body)
         self.assertIn("Current membership", body)
         self.assertIn("contract Dreamz 6 months", body)
+        self.assertNotIn("View membership options", body)
         self.assertIn("Current term ends", body)
         self.assertIn("Open gym balance", body)
         self.assertLess(body.index("Continue your Dreamz training"), body.index("Nutrition plan"))
         self.assertLess(body.index("Nutrition plan"), body.index("Today at Dreamz"))
         self.assertNotIn("Set your goals, training rhythm", body)
+
+    def test_coach_profile_complete_status_is_compact(self):
+        self.add_member(
+            member_id="13659",
+            name="Ron Soechit",
+            birthdate=date(1990, 1, 1),
+        )
+        db.session.add(
+            CoachProfile(
+                member_id="13659",
+                sex="male",
+                primary_goal="build_muscle",
+                experience_level="intermediate",
+                training_days=4,
+                session_minutes=60,
+                training_place="dreamz_gym",
+                height_cm=180,
+                weight_kg=85,
+                injuries="none",
+                nutrition_goal="muscle_gain",
+                dietary_preferences="local food",
+                allergies="none",
+            )
+        )
+        db.session.commit()
+        self.login_as("13659")
+
+        response = self.client.get("/coach")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Coach profile 100% complete", body)
+        self.assertIn("Edit", body)
+        self.assertNotIn("Update coach profile</button>", body)
 
     def test_dedicated_nutrition_page_opens_personalized_meal_plan(self):
         self.add_member(
@@ -2029,6 +2064,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Pay at front desk", body)
         self.assertIn("/account/billing", body)
         self.assertIn("View balance", body)
+        self.assertNotIn("View membership options", body)
 
     def test_member_nav_shows_account_badge_only_for_open_balance(self):
         self.add_member(member_id="13659", balance=67.50)
@@ -2634,6 +2670,34 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("No documents available yet.", body)
         self.assertNotIn("Documents 0", body)
         self.assertNotIn("Cancellation Policy", body)
+
+    def test_account_overview_keeps_cancellation_out_of_important_notices(self):
+        today = date.today()
+        self.add_member(
+            member_id="13659",
+            plan_type="contract Dreamz 6 months",
+            contract_type="6-months",
+            start_date=today - timedelta(days=153),
+            end_date=today + timedelta(days=30),
+            balance=0,
+        )
+        self.login_as("13659")
+
+        response = self.client.get("/account")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Membership", body)
+        self.assertIn("View membership", body)
+        self.assertIn("/account/membership", body)
+        self.assertNotIn("Important notices", body)
+        self.assertNotIn("View membership &amp; cancellation", body)
+        self.assertNotIn("Manage cancellation request", body)
+        self.assertNotIn("Cancellation opens", body)
+
+        detail = self.client.get("/account/membership").get_data(as_text=True)
+        self.assertIn("Cancellation &amp; renewal", detail)
+        self.assertIn("Submit cancellation request", detail)
 
     def test_account_billing_deep_link_combines_membership_and_gym_balance(self):
         self.add_member(member_id="13659", balance=67.50, billing_amount=70)

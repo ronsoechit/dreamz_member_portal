@@ -31,7 +31,7 @@
   </div>
 </section>
 
-{% if gym_balance > 0 or show_cancel %}
+{% if gym_balance > 0 %}
   <section class="mb-4 rounded-lg border border-yellow-500/35 bg-yellow-500/10 p-4">
     <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('important_notices') }}</div>
     <div class="mt-3 grid gap-3">
@@ -41,12 +41,6 @@
           <a href="{{ url_for('member_account_billing') }}" class="inline-flex items-center justify-center rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black">{{ t('view_balance') }}</a>
         </div>
       {% endif %}
-      {% if show_cancel %}
-        <div class="flex flex-col gap-3 rounded border border-green-500/25 bg-green-500/10 p-3 sm:flex-row sm:items-center sm:justify-between">
-          <p class="text-sm leading-6 text-green-50">{{ cancellation_summary }}</p>
-          <a href="{{ url_for('member_account_membership') }}#cancellation" class="inline-flex items-center justify-center rounded border border-green-400/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-green-100">{{ t('manage_cancellation_request') }}</a>
-        </div>
-      {% endif %}
     </div>
   </section>
 {% endif %}
@@ -54,7 +48,7 @@
 <section class="mb-4 rounded-lg border border-gray-700 bg-gray-800/40 p-4">
   <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
     <div>
-      <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('membership_cancellation') }}</div>
+      <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('membership') }}</div>
       <h3 class="mt-1 text-xl font-semibold text-white">{{ member.plan_type or t('current_membership') }}</h3>
       <dl class="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
         <div>
@@ -66,17 +60,12 @@
           <dd class="mt-1 text-gray-100">{{ current_term_end or t('not_available') }}</dd>
         </div>
         <div>
-          <dt class="text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('cancellation_opens') }}</dt>
-          <dd class="mt-1 text-gray-100">{{ cancel_window_open or t('not_available') }}</dd>
-        </div>
-        <div>
-          <dt class="text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('cancellation_closes') }}</dt>
-          <dd class="mt-1 text-gray-100">{{ cancel_window_close or t('not_available') }}</dd>
+          <dt class="text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('renewal') }}</dt>
+          <dd class="mt-1 text-gray-100">{{ membership_renewal_status }}</dd>
         </div>
       </dl>
-      <p class="mt-3 text-sm leading-6 text-gray-300">{{ cancellation_summary }}</p>
     </div>
-    <a href="{{ url_for('member_account_membership') }}" class="inline-flex items-center justify-center rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black">{{ t('view_membership_cancellation') }}</a>
+    <a href="{{ url_for('member_account_membership') }}" class="inline-flex items-center justify-center rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black">{{ t('view_membership') }}</a>
   </div>
 </section>
 

@@ -191,7 +191,7 @@
   </section>
 
   <section class="home-account-card rounded-lg border border-gray-700 bg-gray-800/40 p-4">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div>
       <div>
         <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('membership_status') }}</div>
         <div class="mt-3 grid gap-2 text-sm text-gray-300 sm:grid-cols-2">
@@ -221,9 +221,6 @@
           </a>
         {% endif %}
       </div>
-      <a class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400" href="{{ url_for('member_account_membership') }}">
-        {{ t('view_membership_options') }}
-      </a>
     </div>
   </section>
 {% endif %}
