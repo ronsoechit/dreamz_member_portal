@@ -350,12 +350,18 @@ class PortalRouteTests(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("Continue your Dreamz training", body)
         self.assertIn("Start next workout", body)
+        self.assertIn("Nutrition plan", body)
+        self.assertIn("Today&#39;s meal plan", body)
+        self.assertIn("Your meal plan is ready", body)
+        self.assertIn("Open meal plan", body)
         self.assertIn("/coach?tab=nutrition#nutrition-plan", body)
         self.assertIn("Membership status", body)
         self.assertIn("Current membership", body)
         self.assertIn("contract Dreamz 6 months", body)
         self.assertIn("Current term ends", body)
         self.assertIn("Open gym balance", body)
+        self.assertLess(body.index("Continue your Dreamz training"), body.index("Nutrition plan"))
+        self.assertLess(body.index("Nutrition plan"), body.index("Today at Dreamz"))
         self.assertNotIn("Set your goals, training rhythm", body)
 
     def test_nutrition_deep_link_opens_personalized_meal_plan(self):
@@ -393,8 +399,53 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Meal plan structure", body)
         self.assertIn("Personalized for you", body)
         self.assertIn("I followed this meal", body)
+        self.assertIn("Adjust this meal", body)
         self.assertIn("Regenerate plan", body)
         self.assertIn("This meal plan is built for muscle gain", body)
+
+    def test_nutrition_missing_date_of_birth_is_actionable_and_saves(self):
+        self.add_member(
+            member_id="13659",
+            name="Ron Soechit",
+            birthdate=None,
+        )
+        db.session.add(
+            CoachProfile(
+                member_id="13659",
+                sex="male",
+                primary_goal="build_muscle",
+                experience_level="intermediate",
+                training_days=4,
+                session_minutes=60,
+                training_place="dreamz_gym",
+                height_cm=180,
+                weight_kg=85,
+                injuries="none",
+                nutrition_goal="muscle_gain",
+                dietary_preferences="local food",
+                allergies="none",
+            )
+        )
+        db.session.commit()
+        self.login_as("13659")
+
+        response = self.client.get("/coach?tab=nutrition")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Add your date of birth to improve your nutrition targets.", body)
+        self.assertIn('action="/coach/date-of-birth"', body)
+        self.assertIn("Add date of birth", body)
+
+        save_response = self.client.post(
+            "/coach/date-of-birth",
+            data=self.csrf_form_data(birthdate="1990-01-01"),
+        )
+
+        self.assertEqual(save_response.status_code, 302)
+        self.assertIn("/coach?tab=nutrition#nutrition-plan", save_response.headers["Location"])
+        member = Member.query.filter_by(member_id="13659").one()
+        self.assertEqual(member.birthdate, date(1990, 1, 1))
 
     def test_coach_page_requires_member_login(self):
         response = self.client.get("/coach")
@@ -2600,6 +2651,18 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(aggregate.preferred_classes_per_week, 2)
         self.assertEqual(aggregate.plan_mode, "replace_or_supplement")
         self.assertTrue(MemberClassPreference.query.filter_by(member_id="13659", class_type_id=bodypump.id).one().is_favorite)
+
+    def test_member_group_classes_falls_back_to_empty_schedule_on_data_error(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+
+        with patch("dreamz_portal.member_group_class_schedule_rows", side_effect=RuntimeError("schema drift")):
+            response = self.client.get("/group-classes")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Group Classes", body)
+        self.assertIn("No classes match this filter.", body)
 
     def test_member_can_plan_attend_and_remove_group_classes(self):
         self.add_member(member_id="13659", name="Ron Soechit")

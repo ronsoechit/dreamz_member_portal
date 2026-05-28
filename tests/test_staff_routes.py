@@ -397,6 +397,39 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("All prices and fees are non-negotiable.", body)
         self.assertIn("Changing active prices can affect public and member information.", body)
 
+    def test_staff_new_admin_sections_render_empty_state_when_context_fails(self):
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "manager"
+
+        cases = [
+            ("/staff/pricing-products", "pricing_admin_context"),
+            ("/staff/group-classes", "group_class_admin_context"),
+        ]
+        for route, context_name in cases:
+            with self.subTest(route=route):
+                with patch(f"dreamz_portal.{context_name}", side_effect=RuntimeError("schema drift")):
+                    response = self.client.get(route)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("data is still being prepared", response.get_data(as_text=True))
+
+    def test_staff_tools_render_empty_state_when_schema_check_fails(self):
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+
+        original_testing = app.config["TESTING"]
+        app.config["TESTING"] = False
+        try:
+            for route in ["/staff/changes", "/staff/sync", "/staff/coach"]:
+                with self.subTest(route=route):
+                    with patch("dreamz_portal.ensure_runtime_schema", side_effect=RuntimeError("schema drift")):
+                        response = self.client.get(route)
+                    self.assertEqual(response.status_code, 200)
+                    self.assertIn("data is still being prepared", response.get_data(as_text=True))
+        finally:
+            app.config["TESTING"] = original_testing
+
     def test_staff_can_update_pricing_item_and_log_change(self):
         seed_pricing_catalog()
         item = PricingItem.query.filter_by(seed_key="membership-no-contract-1-month").one()

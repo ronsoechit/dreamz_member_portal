@@ -95,6 +95,39 @@
     </div>
   </section>
 
+  <section class="home-nutrition-card mb-4 rounded-lg border border-green-400/25 bg-gray-800/45 p-5">
+    <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      <div class="min-w-0">
+        <div class="text-xs font-semibold uppercase tracking-wide text-green-200">{{ t('nutrition_plan') }}</div>
+        <h3 class="mt-1 text-xl font-semibold text-white">{{ t('todays_meal_plan') }}</h3>
+        <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-200">
+          {{ t('your_meal_plan_is_ready') if nutrition_dashboard_plan else t('complete_profile_to_improve_meal_plan') }}
+        </p>
+        {% if nutrition_dashboard_plan %}
+          <div class="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+            <div class="rounded border border-gray-700 bg-gray-950/40 p-3">
+              <span class="block text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('calories') }}</span>
+              <span class="font-semibold text-white">{{ nutrition_dashboard_plan.targets.calories or t('not_available') }}</span>
+            </div>
+            <div class="rounded border border-gray-700 bg-gray-950/40 p-3">
+              <span class="block text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('protein') }}</span>
+              <span class="font-semibold text-white">{{ nutrition_dashboard_plan.targets.protein }}g</span>
+            </div>
+            {% if nutrition_next_meal %}
+              <div class="rounded border border-gray-700 bg-gray-950/40 p-3">
+                <span class="block text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('next_meal_suggestion') }}</span>
+                <span class="font-semibold text-white">{{ nutrition_next_meal.name }}</span>
+              </div>
+            {% endif %}
+          </div>
+        {% endif %}
+      </div>
+      <a class="inline-flex items-center justify-center rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400" href="{{ url_for('member_coach', tab='nutrition') }}#nutrition-plan">
+        {{ t('open_meal_plan') }}
+      </a>
+    </div>
+  </section>
+
   <section class="home-classes-card mb-4 rounded-lg border border-gray-700 bg-gray-800/40 p-5">
     <div class="mb-3 flex items-center justify-between gap-3">
       <div>
@@ -146,14 +179,10 @@
     {% endif %}
   </section>
 
-  <section class="home-action-grid mb-5 grid gap-3 md:grid-cols-3">
+  <section class="home-action-grid mb-5 grid gap-3 md:grid-cols-2">
     <a class="summary-card" href="{{ url_for('member_coach') }}">
       <span class="summary-label">{{ t('next_workout') }}</span>
       <strong>{{ coach_next_session.session.focus if coach_complete and coach_next_session else t('coach_dashboard_title') }}</strong>
-    </a>
-    <a class="summary-card" href="{{ url_for('member_coach', tab='nutrition') }}#nutrition-plan">
-      <span class="summary-label">{{ t('nutrition_focus') }}</span>
-      <strong>{{ t('nutrition_summary_ready') if coach_complete else t('complete_coach_profile') }}</strong>
     </a>
     <a class="summary-card" href="{{ url_for('member_progress') }}">
       <span class="summary-label">{{ t('progress') }}</span>

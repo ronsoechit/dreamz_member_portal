@@ -145,8 +145,9 @@ textarea:focus-visible {
   border: 1px solid transparent;
   border-radius: 999px !important;
   min-height: 2rem;
-  min-width: 2.45rem;
-  padding: 0.25rem 0.45rem !important;
+  min-width: 2rem;
+  width: 2rem;
+  padding: 0.25rem !important;
 }
 
 .language-switcher a[class*="text-yellow"] {
@@ -161,9 +162,12 @@ textarea:focus-visible {
 }
 
 .language-code {
-  font-size: 0.62rem;
-  font-weight: 800;
-  letter-spacing: 0;
+  position: absolute;
+  height: 1px;
+  width: 1px;
+  overflow: hidden;
+  clip: rect(1px, 1px, 1px, 1px);
+  white-space: nowrap;
 }
 
 .portal-main {

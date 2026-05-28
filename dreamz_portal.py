@@ -2008,7 +2008,26 @@ def ensure_pricing_business_rules(item):
 
 
 def pricing_admin_context():
-    ensure_runtime_schema()
+    try:
+        ensure_runtime_schema()
+        seed_pricing_catalog()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Pricing admin catalog unavailable; rendering empty admin pricing page.")
+        return {
+            "pricing_items": [],
+            "pricing_categories": [],
+            "pricing_changes": [],
+            "pricing_billing_intervals": PRICING_BILLING_INTERVALS,
+            "pricing_visibility_options": PRICING_VISIBILITY_OPTIONS,
+            "selected_category": request.args.get("category", "").strip(),
+            "selected_status": request.args.get("status", "").strip(),
+            "selected_visibility": request.args.get("visibility", "").strip(),
+            "pricing_global_rule": PRICING_CATALOG_GLOBAL_RULE,
+            "pricing_terms_list": pricing_terms_list,
+            "pricing_visibility_list": pricing_visibility_list,
+            "staff_page_warning": translated_text("staff_page_temporarily_empty", current_language()),
+        }
     category_filter = request.args.get("category", "").strip()
     status_filter = request.args.get("status", "").strip()
     visibility_filter = request.args.get("visibility", "").strip()
@@ -2059,7 +2078,31 @@ def current_legal_version(document):
 
 
 def terms_admin_context():
-    ensure_runtime_schema()
+    try:
+        ensure_runtime_schema()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Terms admin unavailable; rendering empty admin terms page.")
+        return {
+            "agreement_categories": [],
+            "legal_documents": [],
+            "legal_versions": [],
+            "document_versions": {},
+            "translations_by_version": {},
+            "required_rules": [],
+            "membership_applications": [],
+            "application_statuses": MEMBERSHIP_APPLICATION_STATUSES,
+            "member_signed_documents": [],
+            "digital_signatures": [],
+            "signed_pdfs": [],
+            "cancellation_requests": [],
+            "legal_languages": LANGUAGES,
+            "legal_review_statuses": LEGAL_REVIEW_STATUSES,
+            "translation_statuses": LEGAL_TRANSLATION_STATUSES,
+            "terms_admin_warnings": [translated_text("staff_page_temporarily_empty", current_language())],
+            "legal_translation_notice": LEGAL_TRANSLATION_DRAFT_NOTICE,
+            "current_legal_version": current_legal_version,
+        }
     documents = LegalDocument.query.order_by(LegalDocument.sort_order.asc(), LegalDocument.title.asc()).all()
     versions = LegalDocumentVersion.query.order_by(LegalDocumentVersion.created_at.desc(), LegalDocumentVersion.id.desc()).limit(100).all()
     translations = LegalTranslation.query.order_by(LegalTranslation.language.asc(), LegalTranslation.id.asc()).all()
@@ -2915,17 +2958,40 @@ def create_group_class_change_notifications(occurrence, change_type, old_data, n
 
 
 def group_class_admin_context():
-    ensure_runtime_schema()
-    schedule = GroupClassSchedule.query.filter_by(name=GROUP_CLASS_SCHEDULE_NAME).first()
+    selected_day = request.args.get("day", "").strip()
+    selected_room = request.args.get("room", "").strip()
+    selected_type = request.args.get("class_type", "").strip()
+    empty_context = {
+        "schedule": None,
+        "class_types": [],
+        "occurrences": [],
+        "rooms": [],
+        "selected_day": selected_day,
+        "selected_room": selected_room,
+        "selected_type": selected_type,
+        "day_options": [(day, group_class_day_label(day)) for day in range(7)],
+        "statuses": sorted(GROUP_CLASS_OCCURRENCE_STATUSES),
+        "future_plan_counts": {},
+        "changes": [],
+        "time_label": group_class_time_label,
+        "day_label": group_class_day_label,
+        "staff_page_warning": translated_text("staff_page_temporarily_empty", current_language()),
+    }
+    try:
+        ensure_runtime_schema()
+        schedule = GroupClassSchedule.query.filter_by(name=GROUP_CLASS_SCHEDULE_NAME).first()
+        if not schedule:
+            schedule = seed_group_class_schedule()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Group class admin schedule unavailable; rendering empty admin group class page.")
+        return empty_context
     class_types = GroupClassType.query.order_by(GroupClassType.name.asc()).all()
     occurrences_query = (
         GroupClassOccurrence.query
         .join(GroupClassType)
         .order_by(GroupClassOccurrence.day_of_week.asc(), GroupClassOccurrence.start_time.asc(), GroupClassType.name.asc())
     )
-    selected_day = request.args.get("day", "").strip()
-    selected_room = request.args.get("room", "").strip()
-    selected_type = request.args.get("class_type", "").strip()
     if selected_day != "":
         try:
             occurrences_query = occurrences_query.filter(GroupClassOccurrence.day_of_week == int(selected_day))
@@ -6835,6 +6901,16 @@ def member_dashboard_context(member, staff_admin_view=False):
         None,
         lambda: coach_latest_workout(member.member_id),
     )
+    nutrition_dashboard_plan = optional_dashboard_value(
+        "nutrition_dashboard_plan",
+        None,
+        lambda: personalized_nutrition_meal_plan(member, coach_profile, language) if coach_profile else None,
+    )
+    nutrition_next_meal = (
+        nutrition_dashboard_plan["meals"][0]
+        if nutrition_dashboard_plan and nutrition_dashboard_plan.get("meals")
+        else None
+    )
     coach_counts = (
         optional_dashboard_value("coach_data_counts", {"total": 0}, lambda: coach_data_counts(member.member_id))
         if staff_admin_view else {"total": 0}
@@ -6889,6 +6965,8 @@ def member_dashboard_context(member, staff_admin_view=False):
         "coach_complete": bool(coach_profile and coach_completion == 100),
         "coach_next_session": coach_next_session,
         "coach_latest_workout": coach_latest,
+        "nutrition_dashboard_plan": nutrition_dashboard_plan,
+        "nutrition_next_meal": nutrition_next_meal,
         "coach_data_counts": coach_counts,
         "coach_data_total": coach_counts.get("total", 0),
         "today_group_classes": today_group_class_sections["current"],
@@ -7141,11 +7219,19 @@ def staff_settings():
 @app.get("/staff/cancellations")
 def staff_cancellations():
     staff_role = require_staff_access()
-    query, status = cancellation_request_query()
     admin_status = request.args.get("admin_status", "").strip()
-    if admin_status:
-        query = query.filter_by(admin_status=admin_status)
-    records = query.limit(500).all()
+    try:
+        query, status = cancellation_request_query()
+        if admin_status:
+            query = query.filter_by(admin_status=admin_status)
+        records = query.limit(500).all()
+        warning = None
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Staff cancellations unavailable; rendering empty cancellations page.")
+        status = request.args.get("status", "").strip()
+        records = []
+        warning = translated_text("staff_page_temporarily_empty", current_language())
     token = request.args.get("token", "")
     return render_template(
         "staff_cancellations.html",
@@ -7154,27 +7240,36 @@ def staff_cancellations():
         selected_admin_status=admin_status,
         token=token,
         staff_role=staff_role,
+        staff_page_warning=warning,
     )
 
 
 @app.get("/staff/email-log")
 def staff_email_log():
     staff_role = require_staff_access()
-    ensure_runtime_schema()
     selected_status = request.args.get("status", "").strip()
     review_filter = request.args.get("review", "").strip()
-    query = EmailLog.query
-    if selected_status:
-        query = query.filter_by(status=selected_status)
-    if review_filter == "open":
-        query = query.filter(email_log_review_required_filter())
-    logs = query.order_by(EmailLog.created_at.desc()).limit(100).all()
-    counts = {
-        "open": EmailLog.query.filter(email_log_review_required_filter()).count(),
-        "failed": EmailLog.query.filter_by(status="failed").count(),
-        "sent": EmailLog.query.filter_by(status="sent").count(),
-        "logged": EmailLog.query.filter_by(status="logged").count(),
-    }
+    try:
+        ensure_runtime_schema()
+        query = EmailLog.query
+        if selected_status:
+            query = query.filter_by(status=selected_status)
+        if review_filter == "open":
+            query = query.filter(email_log_review_required_filter())
+        logs = query.order_by(EmailLog.created_at.desc()).limit(100).all()
+        counts = {
+            "open": EmailLog.query.filter(email_log_review_required_filter()).count(),
+            "failed": EmailLog.query.filter_by(status="failed").count(),
+            "sent": EmailLog.query.filter_by(status="sent").count(),
+            "logged": EmailLog.query.filter_by(status="logged").count(),
+        }
+        warning = None
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Staff email log unavailable; rendering empty email log page.")
+        logs = []
+        counts = {"open": 0, "failed": 0, "sent": 0, "logged": 0}
+        warning = translated_text("staff_page_temporarily_empty", current_language())
     return render_template(
         "staff_email_log.html",
         logs=logs,
@@ -7183,29 +7278,59 @@ def staff_email_log():
         review_filter=review_filter,
         email_log_requires_review=email_log_requires_review,
         staff_role=staff_role,
+        staff_page_warning=warning,
     )
 
 
 @app.get("/staff/sync")
 def staff_sync_status():
     require_staff_access()
-    ensure_runtime_schema()
-    mark_stale_sync_runs()
+    try:
+        ensure_runtime_schema()
+        mark_stale_sync_runs()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Staff sync status unavailable; rendering empty sync page.")
+        return render_template(
+            "staff_sync_status.html",
+            runs=[],
+            latest=None,
+            run_changes={},
+            page=1,
+            total_pages=1,
+            total_runs=0,
+            start_run=0,
+            end_run=0,
+            sync_page_numbers=[1],
+            staff_page_warning=translated_text("staff_page_temporarily_empty", current_language()),
+        )
     try:
         page = max(int(request.args.get("page", "1")), 1)
     except ValueError:
         page = 1
-    query = SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc())
-    total_runs = query.count()
-    total_pages = max((total_runs + SYNC_PAGE_SIZE - 1) // SYNC_PAGE_SIZE, 1)
-    page = min(page, total_pages)
-    start_index = (page - 1) * SYNC_PAGE_SIZE
-    runs = query.offset(start_index).limit(SYNC_PAGE_SIZE).all()
-    latest = query.first()
-    run_changes = {
-        run.id: sync_change_summary_for_template(run)
-        for run in runs
-    }
+    try:
+        query = SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc())
+        total_runs = query.count()
+        total_pages = max((total_runs + SYNC_PAGE_SIZE - 1) // SYNC_PAGE_SIZE, 1)
+        page = min(page, total_pages)
+        start_index = (page - 1) * SYNC_PAGE_SIZE
+        runs = query.offset(start_index).limit(SYNC_PAGE_SIZE).all()
+        latest = query.first()
+        run_changes = {
+            run.id: sync_change_summary_for_template(run)
+            for run in runs
+        }
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Staff sync data unavailable; rendering empty sync page.")
+        warning = translated_text("staff_page_temporarily_empty", current_language())
+        total_runs = 0
+        total_pages = 1
+        page = 1
+        start_index = 0
+        runs = []
+        latest = None
+        run_changes = {}
     page_numbers = []
     last_page_number = 0
     for page_number in range(1, total_pages + 1):
@@ -7225,21 +7350,45 @@ def staff_sync_status():
         start_run=start_index + 1 if total_runs else 0,
         end_run=min(start_index + len(runs), total_runs),
         sync_page_numbers=page_numbers,
+        staff_page_warning=warning if "warning" in locals() else None,
     )
 
 
 @app.get("/staff/changes")
 def staff_daily_changes():
     require_staff_access()
-    ensure_runtime_schema()
-    mark_stale_sync_runs()
+    try:
+        ensure_runtime_schema()
+        mark_stale_sync_runs()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Staff daily changes unavailable; rendering empty changes page.")
+        today = local_datetime(datetime.now(timezone.utc)).date()
+        return render_template(
+            "staff_daily_changes.html",
+            selected_date=today,
+            previous_date=today - timedelta(days=1),
+            next_date=today + timedelta(days=1),
+            today=today,
+            runs=[],
+            new_members=[],
+            changed_members=[],
+            document_changes=[],
+            staff_page_warning=translated_text("staff_page_temporarily_empty", current_language()),
+        )
     today = local_datetime(datetime.now(timezone.utc)).date()
     raw_date = request.args.get("date", "").strip()
     try:
         selected_date = date.fromisoformat(raw_date) if raw_date else today
     except ValueError:
         selected_date = today
-    changes = daily_sync_changes(selected_date)
+    try:
+        changes = daily_sync_changes(selected_date)
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Daily sync changes unavailable; rendering empty changes page.")
+        changes = {"runs": [], "new_members": [], "changed_members": [], "document_changes": []}
+        warning = translated_text("staff_page_temporarily_empty", current_language())
     return render_template(
         "staff_daily_changes.html",
         selected_date=selected_date,
@@ -7250,19 +7399,30 @@ def staff_daily_changes():
         new_members=changes["new_members"],
         changed_members=changes["changed_members"],
         document_changes=changes["document_changes"],
+        staff_page_warning=warning if "warning" in locals() else None,
     )
 
 
 @app.get("/staff/coach")
 def staff_coach_activity():
     require_staff_access(required_role="admin")
-    ensure_runtime_schema()
-    interactions = (
-        CoachInteraction.query
-        .order_by(CoachInteraction.created_at.desc(), CoachInteraction.id.desc())
-        .limit(100)
-        .all()
-    )
+    try:
+        ensure_runtime_schema()
+        interactions = (
+            CoachInteraction.query
+            .order_by(CoachInteraction.created_at.desc(), CoachInteraction.id.desc())
+            .limit(100)
+            .all()
+        )
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Staff coach activity unavailable; rendering empty coach activity page.")
+        return render_template(
+            "staff_coach_activity.html",
+            interactions=[],
+            members={},
+            staff_page_warning=translated_text("staff_page_temporarily_empty", current_language()),
+        )
     member_ids = {interaction.member_id for interaction in interactions}
     members = {}
     if member_ids:
@@ -7280,10 +7440,31 @@ def staff_coach_activity():
 @app.get("/staff/group-classes")
 def staff_group_classes():
     staff_role = require_staff_access()
+    try:
+        context = group_class_admin_context()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Staff group classes failed; rendering empty admin page.")
+        context = {
+            "schedule": None,
+            "class_types": [],
+            "occurrences": [],
+            "rooms": [],
+            "selected_day": request.args.get("day", "").strip(),
+            "selected_room": request.args.get("room", "").strip(),
+            "selected_type": request.args.get("class_type", "").strip(),
+            "day_options": [(day, group_class_day_label(day)) for day in range(7)],
+            "statuses": sorted(GROUP_CLASS_OCCURRENCE_STATUSES),
+            "future_plan_counts": {},
+            "changes": [],
+            "time_label": group_class_time_label,
+            "day_label": group_class_day_label,
+            "staff_page_warning": translated_text("staff_page_temporarily_empty", current_language()),
+        }
     return render_template(
         "staff_group_classes.html",
         staff_role=staff_role,
-        **group_class_admin_context(),
+        **context,
     )
 
 
@@ -7416,10 +7597,29 @@ def staff_group_class_publish():
 @app.get("/staff/pricing-products")
 def staff_pricing_products():
     staff_role = require_staff_access()
+    try:
+        context = pricing_admin_context()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Staff pricing failed; rendering empty admin page.")
+        context = {
+            "pricing_items": [],
+            "pricing_categories": [],
+            "pricing_changes": [],
+            "pricing_billing_intervals": PRICING_BILLING_INTERVALS,
+            "pricing_visibility_options": PRICING_VISIBILITY_OPTIONS,
+            "selected_category": request.args.get("category", "").strip(),
+            "selected_status": request.args.get("status", "").strip(),
+            "selected_visibility": request.args.get("visibility", "").strip(),
+            "pricing_global_rule": PRICING_CATALOG_GLOBAL_RULE,
+            "pricing_terms_list": pricing_terms_list,
+            "pricing_visibility_list": pricing_visibility_list,
+            "staff_page_warning": translated_text("staff_page_temporarily_empty", current_language()),
+        }
     return render_template(
         "staff_pricing_products.html",
         staff_role=staff_role,
-        **pricing_admin_context(),
+        **context,
     )
 
 
@@ -8174,10 +8374,8 @@ def member_group_classes():
         app.logger.exception("Runtime schema unavailable while rendering member group classes.")
     selected_day = request.args.get("day", "").strip()
     selected_type = request.args.get("class_type", "").strip()
-    class_types = optional_dashboard_value(
-        "member_group_class_types",
-        [],
-        lambda: (
+    try:
+        class_types = (
             GroupClassType.query
             .join(GroupClassOccurrence)
             .filter(GroupClassOccurrence.status == "scheduled")
@@ -8186,23 +8384,17 @@ def member_group_classes():
             .distinct()
             .order_by(GroupClassType.name.asc())
             .all()
-        ),
-    )
-    preference = optional_dashboard_value(
-        "member_group_class_preference",
-        None,
-        lambda: member_group_class_preference(member.member_id),
-    )
-    rows = optional_dashboard_value(
-        "member_group_class_rows",
-        [],
-        lambda: member_group_class_schedule_rows(member.member_id, selected_day=selected_day, selected_type=selected_type),
-    )
-    favorite_ids = optional_dashboard_value(
-        "member_group_class_favorites",
-        set(),
-        lambda: member_favorite_class_type_ids(member.member_id),
-    )
+        )
+        preference = member_group_class_preference(member.member_id)
+        rows = member_group_class_schedule_rows(member.member_id, selected_day=selected_day, selected_type=selected_type)
+        favorite_ids = member_favorite_class_type_ids(member.member_id)
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Member group class page fell back to an empty schedule.")
+        class_types = []
+        preference = None
+        rows = []
+        favorite_ids = set()
     return render_template(
         "group_classes.html",
         member=member,
@@ -8216,6 +8408,24 @@ def member_group_classes():
         time_label=group_class_time_label,
         day_label=group_class_day_label,
     )
+
+
+@app.post("/coach/date-of-birth")
+def save_coach_date_of_birth():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    validate_csrf_token()
+    birthdate = parse_optional_date(request.form.get("birthdate") or request.form.get("date_of_birth"))
+    if not birthdate:
+        flash(translated_text("date_of_birth_required", current_language()), "error")
+        return redirect(url_for("member_coach", tab="nutrition") + "#nutrition-plan")
+
+    member.birthdate = birthdate
+    CoachPlan.query.filter_by(member_id=member.member_id).delete()
+    db.session.commit()
+    flash(translated_text("date_of_birth_saved", current_language()), "success")
+    return redirect(url_for("member_coach", tab="nutrition") + "#nutrition-plan")
 
 
 @app.post("/group-classes/preferences")

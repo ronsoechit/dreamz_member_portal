@@ -119,6 +119,12 @@
       </section>
     {% endif %}
 
+    {% if staff_page_warning %}
+      <div class="mb-5 rounded border border-yellow-500/40 bg-yellow-500/10 p-4 text-sm leading-6 text-yellow-100">
+        {{ staff_page_warning }}
+      </div>
+    {% endif %}
+
 	  {% block content %}{% endblock %}
   </main>
 
