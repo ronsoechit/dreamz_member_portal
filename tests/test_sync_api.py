@@ -229,6 +229,77 @@ class SyncApiTests(unittest.TestCase):
         summary = json.loads(SyncRun.query.one().change_summary)
         self.assertEqual(summary["changed_members"], [])
 
+    def test_sync_api_ignores_invalid_gymassistant_sentinel_values(self):
+        db.session.add(Member(
+            member_id="15733",
+            name="Cecilia, Sebastian",
+            plan_type="KMAR medewerker 2018",
+            billing_status="ACTIVE",
+            is_active=True,
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            "/api/sync/members",
+            json={
+                "members": [
+                    {
+                        "member_id": "15733",
+                        "name": "Cecilia, Sebastian",
+                        "plan_type": "<INVALID>",
+                        "billing_status": "ACTIVE",
+                        "is_active": True,
+                    }
+                ]
+            },
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["members_updated"], 0)
+        member = Member.query.filter_by(member_id="15733").one()
+        self.assertEqual(member.plan_type, "KMAR medewerker 2018")
+        summary = json.loads(SyncRun.query.one().change_summary)
+        self.assertEqual(summary["changed_members"], [])
+        self.assertIn("Ignored 1 invalid GymAssistant sentinel", SyncRun.query.one().error)
+
+    def test_staff_daily_changes_hides_legacy_invalid_membership_changes(self):
+        db.session.add(Member(member_id="15733", name="Cecilia, Sebastian", plan_type="KMAR medewerker 2018"))
+        db.session.add(SyncRun(
+            source="unit-test",
+            status="success",
+            started_at=datetime(2026, 5, 28, 5, 36),
+            completed_at=datetime(2026, 5, 28, 5, 36),
+            members_received=1,
+            members_updated=1,
+            change_summary=json.dumps({
+                "new_members": [],
+                "changed_members": [
+                    {
+                        "member_id": "15733",
+                        "name": "Cecilia, Sebastian",
+                        "plan_type": "<INVALID>",
+                        "changes": [
+                            {"field": "plan_type", "label": "Plan", "old": "KMAR medewerker 2018", "new": "<INVALID>"}
+                        ],
+                    }
+                ],
+                "document_changes": [],
+            }),
+        ))
+        db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+
+        response = self.client.get("/staff/changes?date=2026-05-28")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertNotIn("<INVALID>", body)
+        self.assertNotIn("Cecilia, Sebastian", body)
+        self.assertIn("No tracked GymAssistant changes", body)
+
     def test_staff_sync_status_lists_runs(self):
         db.session.add(SyncRun(
             source="unit-test",

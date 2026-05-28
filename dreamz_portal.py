@@ -3233,8 +3233,8 @@ def member_group_class_plan_map(member_id, start_date, end_date):
     return {(plan.occurrence_id, plan.class_date): plan for plan in plans}
 
 
-def member_group_class_schedule_rows(member_id, selected_day="", selected_type=""):
-    today = local_datetime(datetime.now(timezone.utc)).date()
+def member_group_class_schedule_rows(member_id, selected_day="", selected_type="", today=None):
+    today = today or local_datetime(datetime.now(timezone.utc)).date()
     query = published_member_group_class_query()
     if selected_day != "":
         try:
@@ -3277,7 +3277,7 @@ def member_today_group_class_sections(member_id, now=None, limit=3, earlier_limi
     today = now.date()
     current_time = now.time()
     rows = [
-        row for row in member_group_class_schedule_rows(member_id, selected_day=str(today.weekday()))
+        row for row in member_group_class_schedule_rows(member_id, selected_day=str(today.weekday()), today=today)
         if row["class_date"] == today
     ]
     current_rows = []
@@ -3592,6 +3592,27 @@ DATE_SYNC_FIELDS = {
 }
 
 
+SYNC_INVALID_SENTINELS = {
+    "<INVALID>",
+    "INVALID",
+    "<ERROR>",
+    "#VALUE!",
+}
+
+
+def is_sync_invalid_sentinel(value):
+    return isinstance(value, str) and value.strip().upper() in SYNC_INVALID_SENTINELS
+
+
+def sync_invalid_field_names(raw_member):
+    columns = {column.name for column in Member.__table__.columns}
+    return [
+        key
+        for key, value in (raw_member or {}).items()
+        if key in columns and key != "id" and is_sync_invalid_sentinel(value)
+    ]
+
+
 def parse_sync_date(value):
     if not value:
         return None
@@ -3608,6 +3629,8 @@ def normalize_sync_member_data(raw_member):
     normalized = {}
     for key, value in (raw_member or {}).items():
         if key not in columns or key == "id":
+            continue
+        if is_sync_invalid_sentinel(value):
             continue
         if key in DATE_SYNC_FIELDS:
             normalized[key] = parse_sync_date(value)
@@ -3702,6 +3725,10 @@ def member_field_changes(existing, member_data):
     return changes
 
 
+def visible_sync_change(change):
+    return not is_sync_invalid_sentinel((change or {}).get("new"))
+
+
 def document_signature(record):
     return {
         "document_type": record.get("document_type") or "other",
@@ -3750,6 +3777,8 @@ def daily_sync_changes(selected_date):
         summary = sync_change_summary_for_template(run)
         run_time = format_date(run.started_at, "%H:%M")
         for item in summary.get("new_members", []):
+            if is_sync_invalid_sentinel(item.get("plan_type")):
+                item = {**item, "plan_type": ""}
             member_id = str(item.get("member_id") or "")
             if not member_id:
                 continue
@@ -3767,7 +3796,11 @@ def daily_sync_changes(selected_date):
                 "changes": [],
             })
             for change in item.get("changes", []):
+                if not visible_sync_change(change):
+                    continue
                 entry["changes"].append({**change, "run_time": run_time})
+            if not entry["changes"]:
+                changed_members.pop(member_id, None)
 
         for item in summary.get("document_changes", []):
             member_id = str(item.get("member_id") or "")
@@ -3829,9 +3862,13 @@ def apply_sync_payload(payload):
         "changed_members": [],
         "document_changes": [],
     }
+    ignored_invalid_fields = {}
     try:
         for raw_member in members:
+            invalid_fields = sync_invalid_field_names(raw_member)
             member_data = normalize_sync_member_data(raw_member)
+            if invalid_fields:
+                ignored_invalid_fields[member_data["member_id"]] = invalid_fields
             existing = Member.query.filter_by(member_id=member_data["member_id"]).first()
             if existing:
                 changes = member_field_changes(existing, member_data)
@@ -3883,6 +3920,13 @@ def apply_sync_payload(payload):
         sync_run.completed_at = datetime.now()
         sync_run.members_new = new
         sync_run.members_updated = updated
+        if ignored_invalid_fields:
+            ignored_count = sum(len(fields) for fields in ignored_invalid_fields.values())
+            warning_text = (
+                f"Ignored {ignored_count} invalid GymAssistant sentinel value(s) "
+                f"for {len(ignored_invalid_fields)} member(s). Create a fresh GymAssistant backup if this keeps happening."
+            )
+            sync_run.error = f"{sync_run.error}\n{warning_text}" if sync_run.error else warning_text
         sync_run.change_summary = json.dumps(change_summary)
         db.session.commit()
     except Exception as exc:
