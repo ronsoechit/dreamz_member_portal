@@ -16,7 +16,7 @@ if os.name == "nt":
 
 from flask import (
     Flask, render_template, request, abort,
-    redirect, url_for, flash, session, Response, send_file, send_from_directory, jsonify
+    redirect, url_for, flash, session, Response, send_file, send_from_directory, jsonify, has_request_context
 )
 
 from flask_sqlalchemy import SQLAlchemy
@@ -92,6 +92,8 @@ app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = os.getenv("SESSION_COOKIE_SECURE", "").lower() in ("1", "true", "yes")
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=app.config["MEMBER_SESSION_DAYS"])
+app.config["LANGUAGE_COOKIE_NAME"] = "dreamz_language"
+app.config["LANGUAGE_COOKIE_DAYS"] = 365
 app.config["GYM_ASSISTANT_ATTACHMENTS_ROOT"] = os.getenv(
     "GYM_ASSISTANT_ATTACHMENTS_ROOT",
     r"D:\Dreamz Fitness\Gym Assistant 2.6\Data\Attachments",
@@ -6078,12 +6080,77 @@ def get_csrf_token():
     return token
 
 
+def language_cookie_name():
+    return app.config["LANGUAGE_COOKIE_NAME"]
+
+
+def valid_language_choice(language):
+    return language if language in LANGUAGES else None
+
+
+def language_choice_from_request():
+    session_language = valid_language_choice(session.get("language"))
+    if session_language:
+        return session_language
+    if has_request_context():
+        return valid_language_choice(request.cookies.get(language_cookie_name()))
+    return None
+
+
 def current_language():
-    return normalize_language(session.get("language", DEFAULT_LANGUAGE))
+    return language_choice_from_request() or DEFAULT_LANGUAGE
 
 
 def t(key):
     return translate(key, current_language())
+
+
+def safe_local_next_url(value, fallback=None):
+    fallback = fallback or url_for("login")
+    if value and value.startswith("/") and not value.startswith("//"):
+        return value
+    return fallback
+
+
+def redirect_with_language_cookie(next_url, language):
+    response = redirect(next_url)
+    response.set_cookie(
+        language_cookie_name(),
+        language,
+        max_age=app.config["LANGUAGE_COOKIE_DAYS"] * 24 * 60 * 60,
+        samesite="Lax",
+        secure=app.config["SESSION_COOKIE_SECURE"],
+    )
+    return response
+
+
+@app.before_request
+def load_language_cookie():
+    cookie_language = valid_language_choice(request.cookies.get(language_cookie_name()))
+    if cookie_language and not valid_language_choice(session.get("language")):
+        session["language"] = cookie_language
+
+
+@app.before_request
+def require_language_selection_for_entry():
+    if request.method != "GET":
+        return None
+    if session.get("member_id") or session.get("staff_role"):
+        return None
+    if valid_language_choice(session.get("language")) or valid_language_choice(request.cookies.get(language_cookie_name())):
+        return None
+    if request.endpoint in {
+        "choose_language",
+        "set_language",
+        "static",
+        "web_manifest",
+        "service_worker",
+    }:
+        return None
+    if request.endpoint in {"home", "login", "staff_login", "staff_home"}:
+        next_url = request.full_path if request.query_string else request.path
+        return redirect(url_for("choose_language", next=safe_local_next_url(next_url)))
+    return None
 
 def validate_csrf_token():
     expected = session.get("_csrf_token", "")
@@ -6576,6 +6643,14 @@ def home():
     return redirect(url_for("login"))
 
 
+@app.get("/choose-language")
+def choose_language():
+    next_url = safe_local_next_url(request.args.get("next"), url_for("login"))
+    if next_url == "/":
+        next_url = url_for("login")
+    return render_template("language_select.html", next_url=next_url)
+
+
 @app.get("/pricing")
 def public_pricing():
     return render_template("pricing.html", **public_pricing_context())
@@ -6801,11 +6876,10 @@ def service_worker():
 
 @app.get("/language")
 def set_language():
-    session["language"] = normalize_language(request.args.get("lang"))
-    next_url = request.args.get("next") or request.referrer or url_for("login")
-    if not next_url.startswith("/"):
-        next_url = url_for("login")
-    return redirect(next_url)
+    language = normalize_language(request.args.get("lang"))
+    session["language"] = language
+    next_url = safe_local_next_url(request.args.get("next") or request.referrer, url_for("login"))
+    return redirect_with_language_cookie(next_url, language)
 
 
 def optional_dashboard_value(label, fallback, factory):

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f7b500">
+  <title>{{ t('choose_language_title') }} | Dreamz Fitness</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="{{ url_for('static', filename='css/premium.css') }}" rel="stylesheet">
+</head>
+<body class="auth-body bg-black text-white min-h-screen flex items-center justify-center px-4">
+  <main class="auth-card w-full max-w-lg rounded-lg border border-gray-800 bg-gray-900 p-6 shadow-lg">
+    <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Fitness" class="auth-logo h-16">
+    <div class="mt-6">
+      <div class="text-xs font-semibold uppercase tracking-wide text-yellow-400">Dreamz Fitness</div>
+      <h1 class="mt-2 text-3xl font-bold text-white">{{ t('choose_language_title') }}</h1>
+      <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('choose_language_intro') }}</p>
+    </div>
+    <div class="mt-6 grid gap-3 sm:grid-cols-2">
+      {% for code, label in available_languages.items() %}
+        <a
+          href="{{ url_for('set_language', lang=code, next=next_url) }}"
+          data-language-choice="{{ code }}"
+          class="rounded-lg border border-gray-700 bg-gray-950/70 p-4 text-left transition hover:border-yellow-400 hover:bg-gray-800"
+        >
+          <span class="block text-lg font-semibold text-white">{{ label }}</span>
+          <span class="mt-1 block text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('continue_in_language') }}</span>
+        </a>
+      {% endfor %}
+    </div>
+  </main>
+  <script>
+    document.querySelectorAll("[data-language-choice]").forEach((link) => {
+      link.addEventListener("click", () => {
+        try {
+          window.localStorage.setItem("dreamz_language", link.dataset.languageChoice || "en");
+        } catch (error) {
+          // Cookie/session persistence still handles the language choice.
+        }
+      });
+    });
+  </script>
+</body>
+</html>

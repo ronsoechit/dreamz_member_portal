@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f7b500">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Staff Login | Dreamz Fitness</title>
+  <title>{{ t('staff_login_title') }} | Dreamz Fitness</title>
   <link rel="manifest" href="{{ url_for('web_manifest') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-180.png') }}">
   <script src="https://cdn.tailwindcss.com"></script>
@@ -17,22 +17,19 @@
     <div class="mb-6">
       <div class="flex items-start justify-between gap-3">
         <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Fitness" class="auth-logo h-16">
-        <div class="language-switcher flex items-center justify-end gap-1 text-xs">
-          {% for code, label in available_languages.items() %}
-            <a
-              href="{{ url_for('set_language', lang=code, next=request.path) }}"
-              class="language-pill inline-flex items-center justify-center gap-1 rounded leading-tight {% if current_language == code %}bg-yellow-500/10 text-yellow-400 font-semibold{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}"
-              title="{{ label }}"
-              aria-label="{{ label }}"
-            >
-              <span class="language-flag">{{ language_flags[code] }}</span>
-              <span class="language-code">{{ code|upper }}</span>
-            </a>
-          {% endfor %}
-        </div>
+        <form class="auth-language-form text-right text-xs" action="{{ url_for('set_language') }}" method="get">
+          <input type="hidden" name="next" value="{{ request.path }}">
+          <label class="mb-1 block font-semibold text-gray-400" for="staff-login-language">{{ t('language') }}</label>
+          <select id="staff-login-language" name="lang" class="rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white" onchange="this.form.submit()">
+            {% for code, label in available_languages.items() %}
+              <option value="{{ code }}" {% if current_language == code %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <noscript><button class="mt-1 rounded border border-gray-700 px-2 py-1 text-yellow-200" type="submit">{{ t('save') }}</button></noscript>
+        </form>
       </div>
-      <h1 class="mt-4 text-2xl font-bold">Staff Login</h1>
-      <p class="mt-1 text-sm text-gray-400">Admin and manager access</p>
+      <h1 class="mt-4 text-2xl font-bold">{{ t('staff_login_title') }}</h1>
+      <p class="mt-1 text-sm text-gray-400">{{ t('staff_login_intro') }}</p>
     </div>
 
     {% with messages = get_flashed_messages() %}
@@ -44,7 +41,7 @@
     <form method="POST" action="{{ form_action or url_for('staff_login') }}" class="space-y-4" data-loading-form>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <label class="block">
-        <span class="mb-1 block text-sm font-semibold text-gray-200">Username</span>
+        <span class="mb-1 block text-sm font-semibold text-gray-200">{{ t('username') }}</span>
         <input
           type="text"
           name="username"
@@ -54,7 +51,7 @@
         >
       </label>
       <label class="block">
-        <span class="mb-1 block text-sm font-semibold text-gray-200">Password</span>
+        <span class="mb-1 block text-sm font-semibold text-gray-200">{{ t('password') }}</span>
         <input
           type="password"
           name="password"
@@ -63,8 +60,8 @@
           required
         >
       </label>
-      <button type="submit" data-loading-text="Logging in..." class="w-full rounded bg-yellow-500 py-2 font-bold text-black hover:bg-yellow-400">
-        Log in
+      <button type="submit" data-loading-text="{{ t('signing_in_loading') }}" class="w-full rounded bg-yellow-500 py-2 font-bold text-black hover:bg-yellow-400">
+        {{ t('log_in') }}
       </button>
     </form>
   </div>
@@ -78,7 +75,7 @@
         form.dataset.submitting = "true";
         const button = form.querySelector("button[type='submit']");
         if (button) {
-          button.textContent = button.dataset.loadingText || "Loading...";
+          button.textContent = button.dataset.loadingText || button.textContent;
           button.disabled = true;
           button.setAttribute("aria-busy", "true");
           button.classList.add("opacity-60", "cursor-wait");

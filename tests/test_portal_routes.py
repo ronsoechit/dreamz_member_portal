@@ -115,12 +115,16 @@ class PortalRouteTests(unittest.TestCase):
 
     def get_login_csrf_token(self):
         response = self.client.get("/login")
+        if response.status_code == 302 and "/choose-language" in response.headers.get("Location", ""):
+            self.client.get("/language?lang=en&next=/login")
+            response = self.client.get("/login")
         body = response.get_data(as_text=True)
         match = re.search(r'name="csrf_token" value="([^"]+)"', body)
         self.assertIsNotNone(match)
         return match.group(1)
 
     def test_login_page_shows_password_and_email_code_login(self):
+        self.client.get("/language?lang=en&next=/login")
         response = self.client.get("/login")
 
         self.assertEqual(response.status_code, 200)
@@ -132,6 +136,8 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("data-loading-form", body)
         self.assertIn("Sending code...", body)
         self.assertIn("button.disabled = true", body)
+        self.assertIn("login-language", body)
+        self.assertNotIn("language-switcher", body)
         self.assertNotIn("Birthdate", body)
 
     def test_translation_catalog_has_exact_four_language_key_parity(self):
@@ -172,11 +178,16 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Group Classes", body)
         self.assertIn("No classes match this filter.", body)
 
-    def test_login_page_shows_language_choices(self):
+    def test_first_visit_shows_language_selection_before_login(self):
         response = self.client.get("/login")
 
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/choose-language", response.headers["Location"])
+
+        response = self.client.get(response.headers["Location"])
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
+        self.assertIn("Choose your language", body)
         self.assertIn("English", body)
         self.assertIn("Nederlands", body)
         self.assertIn("Papiamentu", body)
@@ -187,6 +198,7 @@ class PortalRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login", response.headers["Location"])
+        self.assertIn("dreamz_language=es", response.headers.get("Set-Cookie", ""))
         with self.client.session_transaction() as sess:
             self.assertEqual(sess["language"], "es")
 
@@ -200,6 +212,18 @@ class PortalRouteTests(unittest.TestCase):
 
         self.assertIn("Leden Login", response.get_data(as_text=True))
         self.assertIn("E-mailadres", response.get_data(as_text=True))
+
+    def test_language_cookie_survives_session_clear(self):
+        self.client.get("/language?lang=nl&next=/login")
+        with self.client.session_transaction() as sess:
+            sess.clear()
+
+        response = self.client.get("/login")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Leden Login", body)
+        self.assertIn("E-mailadres", body)
 
     def test_first_code_login_requires_password_setup(self):
         self.add_member(member_id="1206", email="member@example.com")

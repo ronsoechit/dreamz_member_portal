@@ -18,19 +18,16 @@
     <div class="mb-6">
       <div class="flex items-start justify-between gap-3">
         <img src="/static/logo.jpg" alt="Dreamz Fitness" class="auth-logo h-16">
-        <div class="language-switcher flex items-center justify-end gap-1 text-xs">
-          {% for code, label in available_languages.items() %}
-            <a
-              href="{{ url_for('set_language', lang=code, next=request.path) }}"
-              class="language-pill inline-flex items-center justify-center gap-1 rounded leading-tight {% if current_language == code %}bg-yellow-500/10 text-yellow-400 font-semibold{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}"
-              title="{{ label }}"
-              aria-label="{{ label }}"
-            >
-              <span class="language-flag">{{ language_flags[code] }}</span>
-              <span class="language-code">{{ code|upper }}</span>
-            </a>
-          {% endfor %}
-        </div>
+        <form class="auth-language-form text-right text-xs" action="{{ url_for('set_language') }}" method="get">
+          <input type="hidden" name="next" value="{{ request.path }}">
+          <label class="mb-1 block font-semibold text-gray-400" for="login-language">{{ t('language') }}</label>
+          <select id="login-language" name="lang" class="rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white" onchange="this.form.submit()">
+            {% for code, label in available_languages.items() %}
+              <option value="{{ code }}" {% if current_language == code %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <noscript><button class="mt-1 rounded border border-gray-700 px-2 py-1 text-yellow-200" type="submit">{{ t('save') }}</button></noscript>
+        </form>
       </div>
       <h2 class="text-2xl font-bold mt-4">{{ t('member_login') }}</h2>
     </div>

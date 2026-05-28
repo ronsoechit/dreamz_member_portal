@@ -48,7 +48,7 @@ class StaffRouteTests(unittest.TestCase):
         response = self.client.get("/")
 
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["Location"], "/login")
+        self.assertIn("/choose-language", response.headers["Location"])
 
     def add_request(self, **overrides):
         data = {
@@ -742,6 +742,7 @@ class StaffRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_staff_home_requires_login(self):
+        self.client.get("/language?lang=en&next=/staff")
         response = self.client.get("/staff")
 
         self.assertEqual(response.status_code, 200)
@@ -774,6 +775,7 @@ class StaffRouteTests(unittest.TestCase):
 
         with self.client.session_transaction() as sess:
             sess["_csrf_token"] = "token"
+            sess["language"] = "en"
         response = self.client.post(
             "/staff/login",
             data={"username": "Manager", "password": "manager-pass", "csrf_token": "token"},
@@ -790,6 +792,7 @@ class StaffRouteTests(unittest.TestCase):
         app.config["TESTING"] = False
         with self.client.session_transaction() as sess:
             sess["_csrf_token"] = "token"
+            sess["language"] = "en"
         try:
             with patch("dreamz_portal.ensure_runtime_schema", side_effect=RuntimeError("schema unavailable")):
                 response = self.client.post(
@@ -807,14 +810,16 @@ class StaffRouteTests(unittest.TestCase):
             self.assertEqual(sess["staff_role"], "manager")
 
     def test_staff_login_shows_loading_state_script(self):
+        self.client.get("/language?lang=en&next=/staff/login")
         response = self.client.get("/staff/login")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
         self.assertIn("data-loading-form", body)
-        self.assertIn("Logging in...", body)
+        self.assertIn("Signing in...", body)
         self.assertIn("button.disabled = true", body)
-        self.assertIn("language-switcher", body)
+        self.assertIn("staff-login-language", body)
+        self.assertNotIn("language-switcher", body)
 
     def test_staff_data_audit_lists_member_issues(self):
         self.add_member(email="", mobile="", photo_path=None)
