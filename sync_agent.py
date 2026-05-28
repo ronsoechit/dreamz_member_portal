@@ -20,6 +20,7 @@ DEFAULT_GYM_ASSISTANT_ROOT = Path(r"D:\Dreamz Fitness\Gym Assistant 2.6")
 DEFAULT_MANIFEST_PATH = Path("instance/sync_manifest.json")
 DEFAULT_STORAGE_PREFIX = "gymassistant"
 PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
+LIVE_MEMBER_DATA_WARNING_GRACE_SECONDS = 24 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -118,9 +119,10 @@ def live_member_data_warning(source_root: Path, backup: Path | None) -> str | No
     live_dat = live_members_dat_path(source_root)
     if not backup or not live_dat.exists():
         return None
-    if live_dat.stat().st_mtime > backup.stat().st_mtime and not any(iter_member_log_files(source_root, backup)):
+    live_age_delta = live_dat.stat().st_mtime - backup.stat().st_mtime
+    if live_age_delta > LIVE_MEMBER_DATA_WARNING_GRACE_SECONDS and not any(iter_member_log_files(source_root, backup)):
         return (
-            "GymAssistant Members.dat is newer than the latest .gbu backup. "
+            "GymAssistant Members.dat is more than 24 hours newer than the latest .gbu backup. "
             "The portal imported the latest backup, so recently added or edited members may not appear until a new GymAssistant backup is created."
         )
     return None

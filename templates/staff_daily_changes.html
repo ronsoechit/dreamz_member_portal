@@ -71,31 +71,36 @@
       <h3 class="text-xl font-semibold text-yellow-300">Changed Members</h3>
       <span class="rounded bg-yellow-500/15 px-3 py-1 text-sm font-semibold text-yellow-200">{{ changed_members|length }}</span>
     </div>
-    <div class="space-y-4">
-      {% for item in changed_members %}
-        <article class="rounded border border-gray-700 bg-gray-900/60">
-          <div class="flex flex-col gap-1 border-b border-gray-800 px-3 py-2 md:flex-row md:items-center md:justify-between">
-            <a class="font-semibold text-green-200 underline" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">{{ item.name or 'Unknown' }}</a>
-            <span class="text-xs text-gray-400">#{{ item.member_id }}{% if item.plan_type %} / {{ item.plan_type }}{% endif %}</span>
-          </div>
-          <div class="divide-y divide-gray-800">
+    <div class="overflow-x-auto rounded border border-gray-700">
+      <table class="min-w-full text-sm">
+        <thead class="bg-gray-800 text-gray-200">
+          <tr>
+            <th class="p-2 text-left">Time</th>
+            <th class="p-2 text-left">Member</th>
+            <th class="p-2 text-left">Plan</th>
+            <th class="p-2 text-left">Field</th>
+            <th class="p-2 text-left">From</th>
+            <th class="p-2 text-left">To</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-800">
+          {% for item in changed_members %}
             {% for change in item.changes %}
-              <div class="grid gap-2 px-3 py-2 text-sm lg:grid-cols-[8rem_1fr_1fr_4rem]">
-                <div class="font-semibold text-gray-200">{{ change.label }}</div>
-                <div class="rounded bg-gray-950 px-2 py-1.5 text-gray-400">
-                  <span class="block text-xs uppercase text-gray-500">From</span>
-                  {{ change.old if change.old is not none and change.old != '' else 'empty' }}
-                </div>
-                <div class="rounded bg-gray-950 px-2 py-1.5 text-gray-100">
-                  <span class="block text-xs uppercase text-gray-500">To</span>
-                  {{ change.new if change.new is not none and change.new != '' else 'empty' }}
-                </div>
-                <div class="flex items-center text-xs text-gray-400">{{ change.run_time }}</div>
-              </div>
+              <tr class="align-top">
+                <td class="whitespace-nowrap p-2 text-xs text-gray-400">{{ change.run_time }}</td>
+                <td class="p-2">
+                  <a class="font-semibold text-green-200 underline" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">{{ item.name or 'Unknown' }}</a>
+                  <span class="block text-xs text-gray-500">#{{ item.member_id }}</span>
+                </td>
+                <td class="max-w-xs p-2 text-xs text-gray-300">{{ item.plan_type or 'N/A' }}</td>
+                <td class="whitespace-nowrap p-2 font-semibold text-gray-100">{{ change.label }}</td>
+                <td class="max-w-sm p-2 text-gray-300">{{ change.old if change.old is not none and change.old != '' else 'empty' }}</td>
+                <td class="max-w-sm p-2 text-white">{{ change.new if change.new is not none and change.new != '' else 'empty' }}</td>
+              </tr>
             {% endfor %}
-          </div>
-        </article>
-      {% endfor %}
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
   </section>
 {% endif %}

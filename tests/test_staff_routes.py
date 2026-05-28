@@ -946,6 +946,29 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("0 -> 2 documents", body)
         self.assertNotIn("Old Member", body)
 
+    def test_staff_sync_status_distinguishes_cleaned_warnings_from_backup_stale(self):
+        db.session.add(SyncRun(
+            source="unit-test",
+            status="success",
+            started_at=datetime(2026, 5, 28, 7, 41),
+            completed_at=datetime(2026, 5, 28, 7, 41),
+            members_received=1,
+            members_new=0,
+            members_updated=0,
+            documents_received=0,
+            error="Ignored 2 blank GymAssistant value(s) over existing member data for 1 member(s).",
+            change_summary=json.dumps({"new_members": [], "changed_members": [], "document_changes": []}),
+        ))
+        db.session.commit()
+
+        response = self.client.get("/staff/sync?token=staff-test-token")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Cleaned", body)
+        self.assertNotIn("Backup stale", body)
+        self.assertNotIn("Backup may be out of date", body)
+
     def test_staff_data_audit_paginates_500_members(self):
         for index in range(1, 506):
             self.add_member(
