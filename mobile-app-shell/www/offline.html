@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="viewport-fit=cover, width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#050914" />
+    <title>Dreamz Fitness</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #050914;
+        color: #ffffff;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        padding: max(24px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+        background: #050914;
+      }
+
+      main {
+        width: min(100%, 28rem);
+      }
+
+      .brand {
+        color: #f7b500;
+        font-size: 0.78rem;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0.55rem 0 0.8rem;
+        font-size: clamp(2rem, 9vw, 3rem);
+        line-height: 1;
+      }
+
+      p {
+        margin: 0;
+        color: rgba(255, 255, 255, 0.78);
+        font-size: 1rem;
+        line-height: 1.6;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand">Dreamz Fitness</div>
+      <h1>No connection</h1>
+      <p>Please reconnect to open the Dreamz Fitness member app.</p>
+    </main>
+  </body>
+</html>

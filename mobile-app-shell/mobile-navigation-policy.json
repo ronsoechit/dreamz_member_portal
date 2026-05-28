@@ -1,0 +1,49 @@
+{
+  "decision": "remote-member-portal-shell",
+  "portalOwns": [
+    "language selection",
+    "login/auth",
+    "member sessions",
+    "dashboard",
+    "coach",
+    "nutrition",
+    "progress",
+    "account",
+    "pricing",
+    "agreements",
+    "cancellation",
+    "group classes",
+    "all i18n"
+  ],
+  "shellOwns": [
+    "app icon",
+    "splash screen",
+    "safe area",
+    "session persistence/cookies",
+    "deep link handling",
+    "allowed navigation restrictions",
+    "future push notification foundation",
+    "future biometric/secure storage foundation"
+  ],
+  "allowedMemberPaths": [
+    "/",
+    "/choose-language",
+    "/login",
+    "/dashboard",
+    "/coach",
+    "/nutrition",
+    "/progress",
+    "/account",
+    "/account/*",
+    "/membership-options",
+    "/pricing",
+    "/group-classes",
+    "/apply"
+  ],
+  "blockedPaths": [
+    "/staff",
+    "/staff/*",
+    "/admin",
+    "/admin/*"
+  ]
+}
