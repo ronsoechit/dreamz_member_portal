@@ -3,7 +3,7 @@
 
 {% block content %}
 <section class="mb-6 rounded-lg border border-yellow-500/30 bg-gray-900/70 p-6">
-  <div class="text-xs font-semibold uppercase tracking-wide text-yellow-400">{{ t('agreements_rules') }}</div>
+  <a class="text-xs font-semibold uppercase tracking-wide text-yellow-400 hover:text-yellow-200" href="{{ url_for('member_account') }}">{{ t('account_title') }}</a>
   <h2 class="mt-1 text-2xl font-semibold text-white">{{ t('member_agreements_title') }}</h2>
   <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-300">{{ t('member_agreements_intro') }}</p>
 </section>
@@ -39,7 +39,7 @@
     <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('payment_direct_debit') }}</div>
     <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('payment_direct_debit_member_summary') }}</p>
     {% if gym_balance > 0 %}
-      <a class="mt-4 inline-flex rounded border border-yellow-500/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200" href="{{ url_for('member_account', section='billing') }}">{{ t('view_balance') }}</a>
+      <a class="mt-4 inline-flex rounded border border-yellow-500/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200" href="{{ url_for('member_account_billing') }}">{{ t('view_balance') }}</a>
     {% endif %}
   </article>
 </section>
@@ -151,4 +151,11 @@
     <div class="rounded border border-gray-700 bg-gray-900/60 p-4 text-sm text-gray-400">{{ t('no_agreements_available') }}</div>
   {% endfor %}
 </section>
+{% if request.args.get('section') == 'cancellation' %}
+  <script>
+    window.addEventListener("DOMContentLoaded", () => {
+      document.getElementById("cancellation")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  </script>
+{% endif %}
 {% endblock %}

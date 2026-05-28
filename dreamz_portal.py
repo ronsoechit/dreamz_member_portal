@@ -2390,10 +2390,12 @@ def member_pricing_context(member):
             item for item in active_pricing_items_for_visibility(["members"])
             if item.member_eligible and item.category_key != "external_trainer_b2b"
         ]
+        member_pricing_unavailable = False
     except SQLAlchemyError:
         db.session.rollback()
         app.logger.exception("Member pricing catalog unavailable; rendering empty member pricing page.")
         items = []
+        member_pricing_unavailable = True
     return {
         "member": member,
         "display_name": display_member_name(member.name),
@@ -2408,6 +2410,7 @@ def member_pricing_context(member):
         "membership_options": [item for item in items if item.category_key in {"memberships", "mcb_direct_debit_contracts", "under_18"}],
         "addon_options": [item for item in items if item.category_key in {"group_class_add_ons", "personal_training"}],
         "fee_options": [item for item in items if item.category_key == "fees_other"],
+        "member_pricing_unavailable": member_pricing_unavailable,
         "pricing_terms_list": pricing_terms_list,
         "gym_balance": member.balance or 0,
     }
@@ -8903,8 +8906,59 @@ def member_account():
     member, redirect_response = current_member_or_redirect()
     if redirect_response:
         return redirect_response
+    section = request.args.get("section", "").strip()
+    if section:
+        section_routes = {
+            "balance": "member_account_billing",
+            "billing": "member_account_billing",
+            "gym-balance": "member_account_billing",
+            "membership-billing": "member_account_billing",
+            "membership": "member_account_membership",
+            "membership-options": "member_account_membership",
+            "agreements": "member_agreements",
+            "agreements-rules": "member_agreements",
+            "documents": "member_account_documents",
+            "profile": "member_account_profile",
+            "preferences": "member_account_preferences",
+            "security": "member_account_security",
+        }
+        endpoint = section_routes.get(section)
+        if endpoint:
+            return redirect(url_for(endpoint))
 
     return render_template("account.html", **member_dashboard_context(member))
+
+
+def account_detail_context(member, account_page):
+    context = member_dashboard_context(member)
+    context["account_page"] = account_page
+    if account_page == "membership":
+        pricing_context = member_pricing_context(member)
+        context.update({
+            "current_membership": pricing_context["current_membership"],
+            "membership_options": pricing_context["membership_options"],
+            "addon_options": pricing_context["addon_options"],
+            "fee_options": pricing_context["fee_options"],
+            "member_pricing_unavailable": pricing_context["member_pricing_unavailable"],
+            "pricing_terms_list": pricing_context["pricing_terms_list"],
+        })
+    return context
+
+
+@app.get("/account/membership")
+def member_account_membership():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    return render_template("account_detail.html", **account_detail_context(member, "membership"))
+
+
+@app.get("/account/billing")
+def member_account_billing():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    return render_template("account_detail.html", **account_detail_context(member, "billing"))
 
 
 @app.get("/account/agreements")
@@ -8916,12 +8970,49 @@ def member_agreements():
     return render_template("member_agreements.html", **member_agreements_context(member))
 
 
+@app.get("/account/documents")
+def member_account_documents():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    return render_template("account_detail.html", **account_detail_context(member, "documents"))
+
+
+@app.get("/account/profile")
+def member_account_profile():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    return render_template("account_detail.html", **account_detail_context(member, "profile"))
+
+
+@app.get("/account/preferences")
+def member_account_preferences():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    return render_template("account_detail.html", **account_detail_context(member, "preferences"))
+
+
+@app.get("/account/security")
+def member_account_security():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    return render_template("account_detail.html", **account_detail_context(member, "security"))
+
+
+@app.get("/account/signout")
+def member_account_signout():
+    return redirect(url_for("logout"))
+
+
 @app.get("/membership-options")
 def member_membership_options():
     member, redirect_response = current_member_or_redirect()
     if redirect_response:
         return redirect_response
-    return render_template("membership_options.html", **member_pricing_context(member))
+    return redirect(url_for("member_account_membership"))
 
 
 @app.get("/group-classes")
@@ -9539,15 +9630,15 @@ def cancel():
     existing_request = active_cancellation_request_for_member(member)
     if not cancellation_portal_available_for_member(member):
         flash(translated_text("cancel_not_available_for_membership", current_language()))
-        return redirect(url_for("member_account"))
+        return redirect(url_for("member_account_membership"))
 
     if existing_request:
         flash(translated_text("cancel_already_reviewing", current_language()))
-        return redirect(url_for("member_account"))
+        return redirect(url_for("member_account_membership"))
 
     if not reason:
         flash(translated_text("cancel_choose_reason", current_language()))
-        return redirect(url_for("member_account"))
+        return redirect(url_for("member_account_membership"))
 
     if not policy.can_request:
         request_record = create_cancellation_request(member, policy, reason, status="blocked", language=current_language())
@@ -9567,7 +9658,7 @@ def cancel():
             request_record.mail_error = str(exc)
         db.session.commit()
         flash(cancellation_message(policy, language=current_language()))
-        return redirect(url_for("member_account"))
+        return redirect(url_for("member_account_membership"))
 
     request_record = create_cancellation_request(
         member,
@@ -9595,7 +9686,7 @@ def cancel():
     request_record.mail_error = None
     db.session.commit()
     flash(translated_text("cancel_request_received_flash", current_language()))
-    return redirect(url_for("member_agreements"))
+    return redirect(url_for("member_account_membership"))
 
 @app.route("/login", methods=["GET", "POST"])
 def login():

@@ -213,7 +213,7 @@
           </div>
         </div>
         {% if gym_balance > 0 %}
-          <a href="{{ url_for('member_account', section='billing') }}" class="mt-3 flex flex-wrap items-center gap-2 rounded border border-yellow-500/25 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-100 transition hover:border-yellow-400">
+          <a href="{{ url_for('member_account_billing') }}" class="mt-3 flex flex-wrap items-center gap-2 rounded border border-yellow-500/25 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-100 transition hover:border-yellow-400">
             <span class="font-semibold text-yellow-300">{{ t('open_gym_balance') }}</span>
             <span>{{ '$%.2f'|format(gym_balance) }}</span>
             <span class="text-yellow-50/80">{{ t('pay_at_front_desk') }}</span>
@@ -221,7 +221,7 @@
           </a>
         {% endif %}
       </div>
-      <a class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400" href="{{ url_for('member_membership_options') }}">
+      <a class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400" href="{{ url_for('member_account_membership') }}">
         {{ t('view_membership_options') }}
       </a>
     </div>

@@ -277,8 +277,8 @@ class PortalRouteTests(unittest.TestCase):
         self.add_member(member_id="1206", email="member@example.com")
         self.login_as("1206")
 
-        self.client.get("/language?lang=pap&next=/account?section=preferences")
-        response = self.client.get("/account?section=preferences")
+        self.client.get("/language?lang=pap&next=/account/preferences")
+        response = self.client.get("/account/preferences")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
@@ -381,7 +381,7 @@ class PortalRouteTests(unittest.TestCase):
         self.client.get("/language?lang=pap&next=/login")
         self.login_as("13659")
 
-        response = self.client.get("/account?section=documents")
+        response = self.client.get("/account")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
@@ -1439,7 +1439,7 @@ class PortalRouteTests(unittest.TestCase):
         )
         self.login_as("1206")
 
-        response = self.client.get("/account?section=documents")
+        response = self.client.get("/account/documents")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
@@ -1474,7 +1474,7 @@ class PortalRouteTests(unittest.TestCase):
         document = self.add_document(member_id="1206")
         self.login_as("1206")
 
-        response = self.client.get("/account?section=documents")
+        response = self.client.get("/account/documents")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
@@ -1507,7 +1507,7 @@ class PortalRouteTests(unittest.TestCase):
         )
         self.login_as("80")
 
-        response = self.client.get("/account?section=documents")
+        response = self.client.get("/account/documents")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
@@ -1922,7 +1922,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Open gym balance", body)
         self.assertIn("$63.50", body)
         self.assertIn("Pay at front desk", body)
-        self.assertIn("/account?section=billing", body)
+        self.assertIn("/account/billing", body)
         self.assertIn("View balance", body)
 
     def test_member_nav_shows_account_badge_only_for_open_balance(self):
@@ -1937,7 +1937,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("account-nav-label", body)
         self.assertIn("position:absolute;right:-0.28rem;top:-0.28rem", body)
         self.assertIn('aria-label="Account, 1 account notification"', body)
-        self.assertIn('href="/account?section=billing"', body)
+        self.assertIn('href="/account"', body)
         self.assertRegex(body, r'aria-hidden="true"[^>]*>\s*1</span>')
         self.assertNotIn("Account1", re.sub(r"\s+", "", body))
 
@@ -1987,13 +1987,15 @@ class PortalRouteTests(unittest.TestCase):
         )
         self.login_as("13659")
 
-        response = self.client.get("/account?section=gym-balance")
+        redirect_response = self.client.get("/account?section=gym-balance")
 
+        self.assertEqual(redirect_response.status_code, 302)
+        self.assertIn("/account/billing", redirect_response.headers["Location"])
+        response = self.client.get("/account/billing")
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
         self.assertIn('id="billing"', body)
         self.assertIn("Billing &amp; Gym Balance", body)
-        self.assertIn("account-target-highlight", body)
         self.assertIn("Open gym balance", body)
         self.assertIn("Gym purchases balance", body)
         self.assertIn("$67.50", body)
@@ -2003,10 +2005,8 @@ class PortalRouteTests(unittest.TestCase):
         self.assertNotIn("Pay now", body)
 
         legacy_response = self.client.get("/account?section=balance")
-        legacy_body = legacy_response.get_data(as_text=True)
-        self.assertEqual(legacy_response.status_code, 200)
-        self.assertIn('id="billing"', legacy_body)
-        self.assertIn("account-target-highlight", legacy_body)
+        self.assertEqual(legacy_response.status_code, 302)
+        self.assertIn("/account/billing", legacy_response.headers["Location"])
 
     def test_cancel_before_fixed_term_window_notifies_admin(self):
         today = date.today()
@@ -2485,18 +2485,18 @@ class PortalRouteTests(unittest.TestCase):
         self.login_as("13659")
         seed_pricing_catalog()
 
-        response = self.client.get("/membership-options")
+        response = self.client.get("/account/membership")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn("Membership options", body)
+        self.assertIn("Membership &amp; Options", body)
         self.assertIn("contract Dreamz 6 months", body)
         self.assertIn("No contract / 1 month", body)
         self.assertIn("6 months contract - MCB Direct Debit", body)
         self.assertIn("Add-on Group PT 5x a week", body)
         self.assertIn("First-time registration fee", body)
         self.assertIn("Membership changes and payments are currently handled", body)
-        self.assertIn("/account?section=billing", body)
+        self.assertIn("/account/billing", body)
         self.assertIn("/pricing", body)
         self.assertNotIn("External Personal Trainer Package", body)
         self.assertNotIn("Pay now", body)
@@ -2506,7 +2506,7 @@ class PortalRouteTests(unittest.TestCase):
         self.login_as("13659")
 
         with patch("dreamz_portal.active_pricing_items_for_visibility", side_effect=SQLAlchemyError("catalog unavailable")):
-            response = self.client.get("/membership-options")
+            response = self.client.get("/account/membership")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
@@ -2524,7 +2524,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Membership &amp; Options", body)
         self.assertIn("Billing &amp; Gym Balance", body)
         self.assertIn("Agreements &amp; Rules", body)
-        self.assertIn("/membership-options", body)
+        self.assertIn("/account/membership", body)
         self.assertLess(body.index("Membership &amp; Options"), body.index("Documents"))
         self.assertIn("No documents available yet.", body)
         self.assertNotIn("Documents 0", body)
@@ -2534,8 +2534,11 @@ class PortalRouteTests(unittest.TestCase):
         self.add_member(member_id="13659", balance=67.50, billing_amount=70)
         self.login_as("13659")
 
-        response = self.client.get("/account?section=billing")
+        redirect_response = self.client.get("/account?section=billing")
 
+        self.assertEqual(redirect_response.status_code, 302)
+        self.assertIn("/account/billing", redirect_response.headers["Location"])
+        response = self.client.get("/account/billing")
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
         self.assertIn('id="billing"', body)
@@ -2694,13 +2697,13 @@ class PortalRouteTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/account/agreements", response.headers["Location"])
+        self.assertIn("/account/membership", response.headers["Location"])
         request_record = CancellationRequest.query.filter_by(member_id="1206").one()
         self.assertTrue(request_record.confirmation_number.startswith("CAN-"))
         self.assertEqual(request_record.pdf_receipt_url, f"/cancellations/{request_record.id}/confirmation.pdf")
 
-        agreements = self.client.get("/account/agreements")
-        body = agreements.get_data(as_text=True)
+        membership = self.client.get("/account/membership")
+        body = membership.get_data(as_text=True)
         self.assertIn("Cancellation confirmation available", body)
         self.assertIn(request_record.confirmation_number, body)
 
@@ -2804,7 +2807,7 @@ class PortalRouteTests(unittest.TestCase):
 
         public_response = self.client.get("/pricing")
         self.login_as("13659")
-        member_response = self.client.get("/membership-options")
+        member_response = self.client.get("/account/membership")
         with self.client.session_transaction() as sess:
             sess["staff_role"] = "admin"
             sess["staff_username"] = "ron"

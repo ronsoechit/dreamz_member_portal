@@ -58,7 +58,7 @@
       </div>
     </div>
     {% if not staff_admin_view %}
-      <a class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400" href="{{ url_for('member_membership_options') }}">
+      <a class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400" href="{{ url_for('member_account_membership') }}">
         {{ t('view_membership_options') }}
       </a>
     {% endif %}
@@ -72,7 +72,7 @@
         <div class="font-semibold text-yellow-200">{{ t('important_notices') }}</div>
         <p class="mt-1">{{ t('gym_balance_open_notice')|replace('{amount}', '$%.2f'|format(gym_balance)) }}</p>
       </div>
-      <a href="{{ url_for('member_account', section='billing') }}" class="inline-flex items-center justify-center rounded bg-yellow-500 px-4 py-2 font-semibold text-black">{{ t('view_balance') }}</a>
+      <a href="{{ url_for('member_account_billing') }}" class="inline-flex items-center justify-center rounded bg-yellow-500 px-4 py-2 font-semibold text-black">{{ t('view_balance') }}</a>
     </div>
   </section>
 {% endif %}
@@ -80,13 +80,13 @@
 <section class="mb-6">
   <div class="mb-3 text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('main_account_sections') }}</div>
   <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-    {{ section_tile('membership-options', t('membership_options_section'), t('member_pricing_account_intro'), url_for('member_membership_options'), member.contract_type) }}
-    {{ section_tile('billing', t('billing_gym_balance'), t('billing_gym_balance_intro'), url_for('member_account', section='billing'), '$%.2f'|format(gym_balance) if gym_balance > 0 else None) }}
+    {{ section_tile('membership-options', t('membership_options_section'), t('member_pricing_account_intro'), url_for('member_account_membership'), member.contract_type) }}
+    {{ section_tile('billing', t('billing_gym_balance'), t('billing_gym_balance_intro'), url_for('member_account_billing'), '$%.2f'|format(gym_balance) if gym_balance > 0 else None) }}
     {{ section_tile('agreements', t('member_agreements_title'), t('member_agreements_account_intro'), url_for('member_agreements')) }}
-    {{ section_tile('documents', t('documents'), t('documents_empty') if not document_groups else t('view'), url_for('member_account', section='documents'), document_groups|length if document_groups else None) }}
-    {{ section_tile('profile', t('profile_information'), t('member_information'), url_for('member_account', section='profile'), display_name) }}
-    {{ section_tile('preferences', t('language_preferences'), t('language_preferences_intro'), url_for('member_account', section='preferences'), current_language|upper) }}
-    {{ section_tile('security', t('password_security'), t('password_security_intro'), url_for('member_account', section='security')) }}
+    {{ section_tile('documents', t('documents'), t('documents_empty') if not document_groups else t('view'), url_for('member_account_documents'), document_groups|length if document_groups else None) }}
+    {{ section_tile('profile', t('profile_information'), t('member_information'), url_for('member_account_profile'), display_name) }}
+    {{ section_tile('preferences', t('language_preferences'), t('language_preferences_intro'), url_for('member_account_preferences'), current_language|upper) }}
+    {{ section_tile('security', t('password_security'), t('password_security_intro'), url_for('member_account_security')) }}
     {% if not staff_admin_view %}
       {{ section_tile('sign-out', t('sign_out'), t('logout_intro'), url_for('logout')) }}
     {% endif %}
@@ -113,7 +113,7 @@
           </div>
           {% if not staff_admin_view %}
             <div class="mt-5 flex flex-wrap gap-3">
-              <a class="inline-flex rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black" href="{{ url_for('member_membership_options') }}">{{ t('view_membership_options') }}</a>
+              <a class="inline-flex rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black" href="{{ url_for('member_account_membership') }}">{{ t('view_membership_options') }}</a>
               <a class="inline-flex rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200" href="{{ url_for('public_pricing') }}">{{ t('view_full_pricing') }}</a>
             </div>
           {% endif %}
@@ -229,7 +229,7 @@
           <h3 class="mt-1 text-xl font-semibold text-white">{{ t('language_preferences') }}</h3>
           <div class="mt-4 flex flex-wrap gap-2">
             {% for code, label in available_languages.items() %}
-              <a href="{{ url_for('set_language', lang=code, next=url_for('member_account', section='preferences')) }}" class="rounded border {% if current_language == code %}border-yellow-500 bg-yellow-500/10 text-yellow-200{% else %}border-gray-700 bg-gray-900/70 text-gray-200{% endif %} px-3 py-2 text-sm font-semibold">
+              <a href="{{ url_for('set_language', lang=code, next=url_for('member_account_preferences')) }}" class="rounded border {% if current_language == code %}border-yellow-500 bg-yellow-500/10 text-yellow-200{% else %}border-gray-700 bg-gray-900/70 text-gray-200{% endif %} px-3 py-2 text-sm font-semibold">
                 {{ language_flags[code] }} {{ label }}
               </a>
             {% endfor %}

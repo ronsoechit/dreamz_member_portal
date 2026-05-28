@@ -64,7 +64,7 @@
     <h3 class="mt-1 text-xl font-semibold text-white">{{ t('frontdesk_membership_notice_title') }}</h3>
     <p class="mt-2 text-sm leading-6 text-yellow-50">{{ t('frontdesk_membership_notice') }}</p>
     {% if gym_balance > 0 %}
-      <a class="mt-4 inline-flex rounded border border-yellow-500/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200" href="{{ url_for('member_account', section='billing') }}">{{ t('view_balance') }}</a>
+      <a class="mt-4 inline-flex rounded border border-yellow-500/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200" href="{{ url_for('member_account_billing') }}">{{ t('view_balance') }}</a>
     {% endif %}
   </article>
 </section>

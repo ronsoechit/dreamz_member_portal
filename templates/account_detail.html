@@ -1,0 +1,291 @@
+{% extends "base.html" %}
+{% block title %}
+  {% if account_page == 'membership' %}{{ t('membership_options_section') }}
+  {% elif account_page == 'billing' %}{{ t('billing_gym_balance') }}
+  {% elif account_page == 'documents' %}{{ t('documents') }}
+  {% elif account_page == 'profile' %}{{ t('profile_information') }}
+  {% elif account_page == 'preferences' %}{{ t('language_preferences') }}
+  {% elif account_page == 'security' %}{{ t('password_security') }}
+  {% else %}{{ t('account') }}{% endif %} | Dreamz Fitness
+{% endblock %}
+
+{% macro field_rows(rows) %}
+  <dl class="grid gap-y-3 text-sm" style="grid-template-columns: 11rem minmax(0, 1fr);">
+    {% for label, value in rows %}
+      <dt class="pr-4 font-semibold text-gray-300">{{ label }}:</dt>
+      <dd class="min-w-0 break-words text-white">{{ value if value is not none and value != '' else t('not_available') }}</dd>
+    {% endfor %}
+  </dl>
+{% endmacro %}
+
+{% macro pricing_card(item) %}
+  {% set terms = pricing_terms_list(item) %}
+  <article class="rounded-lg border border-gray-700 bg-gray-900/60 p-4">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div>
+        <h4 class="font-semibold text-white">{{ item.name }}</h4>
+        {% if item.description %}<p class="mt-2 text-sm leading-6 text-gray-300">{{ item.description }}</p>{% endif %}
+      </div>
+      <div class="shrink-0 rounded border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-right">
+        <div class="text-xl font-bold text-yellow-300">${{ '%.2f'|format(item.price_amount or 0) }}</div>
+        <div class="text-xs font-semibold uppercase tracking-wide text-yellow-100">{{ t('pricing_interval_' ~ item.billing_interval) }}</div>
+      </div>
+    </div>
+    {% if terms %}
+      <details class="mt-3 rounded border border-gray-800 bg-black/20 p-3">
+        <summary class="cursor-pointer text-sm font-semibold text-yellow-300">{{ t('pricing_view_terms') }}</summary>
+        <ul class="mt-3 space-y-2 text-sm leading-6 text-gray-300">
+          {% for term in terms %}<li>{{ term }}</li>{% endfor %}
+        </ul>
+      </details>
+    {% endif %}
+  </article>
+{% endmacro %}
+
+{% block content %}
+<section class="mb-4 flex flex-col gap-3 rounded-lg border border-yellow-500/25 bg-gray-900/70 p-4 sm:flex-row sm:items-center sm:justify-between">
+  <div>
+    <a class="text-xs font-semibold uppercase tracking-wide text-yellow-300 hover:text-yellow-200" href="{{ url_for('member_account') }}">{{ t('account_title') }}</a>
+    <h2 class="mt-1 text-2xl font-semibold text-white">
+      {% if account_page == 'membership' %}{{ t('membership_options_section') }}
+      {% elif account_page == 'billing' %}{{ t('billing_gym_balance') }}
+      {% elif account_page == 'documents' %}{{ t('documents') }}
+      {% elif account_page == 'profile' %}{{ t('profile_information') }}
+      {% elif account_page == 'preferences' %}{{ t('language_preferences') }}
+      {% elif account_page == 'security' %}{{ t('password_security') }}
+      {% endif %}
+    </h2>
+    <p class="mt-1 text-sm text-gray-300">{{ display_name }} - {{ member.plan_type or t('not_available') }}</p>
+  </div>
+  <a class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('member_account') }}">{{ t('view_account') }}</a>
+</section>
+
+{% if account_page == 'membership' %}
+  <section class="mb-4 rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('current_membership') }}</div>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ member.plan_type or t('not_available') }}</h3>
+    <div class="mt-4">
+      {{ field_rows([
+        (t('membership_type'), member.plan_type),
+        (t('contract_type'), member.contract_type),
+        (t('billing_amount'), '$%.2f'|format(member.billing_amount or 0)),
+        (t('next_membership_payment'), member.next_payment|format_date),
+        (t('current_term_ends'), current_term_end),
+        (t('contract_begin'), member.start_date|format_date),
+        (t('renewal'), membership_renewal_status)
+      ]) }}
+    </div>
+  </section>
+
+  <section class="mb-4 rounded-lg border border-yellow-500/25 bg-yellow-500/10 p-5">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('contact_front_desk') }}</div>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ t('frontdesk_membership_notice_title') }}</h3>
+    <p class="mt-2 text-sm leading-6 text-yellow-50">{{ t('frontdesk_membership_notice') }}</p>
+    <div class="mt-4 flex flex-wrap gap-3">
+      <a class="rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black" href="{{ url_for('public_pricing') }}">{{ t('view_full_pricing') }}</a>
+      {% if gym_balance > 0 %}
+        <a class="rounded border border-yellow-500/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('member_account_billing') }}">{{ t('view_balance') }}</a>
+      {% endif %}
+      <span class="rounded border border-yellow-500/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200">{{ t('request_change') }}</span>
+      <span class="rounded border border-gray-700 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200">{{ t('contact_front_desk') }}</span>
+    </div>
+  </section>
+
+  {% if member_pricing_unavailable %}
+    <section class="mb-4 rounded-lg border border-gray-700 bg-gray-900/60 p-5">
+      <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('membership_options') }}</div>
+      <h3 class="mt-1 text-xl font-semibold text-white">{{ t('membership_options_empty_title') }}</h3>
+      <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('membership_options_empty_body') }}</p>
+      <a class="mt-4 inline-flex rounded border border-gray-700 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('member_account') }}">{{ t('view_account') }}</a>
+    </section>
+  {% endif %}
+
+  {% if membership_options or addon_options or fee_options %}
+    <section class="mb-4 grid gap-4">
+      {% if membership_options %}
+        <div>
+          <div class="mb-3 text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('available_membership_options') }}</div>
+          <div class="grid gap-3 lg:grid-cols-2">{% for item in membership_options %}{{ pricing_card(item) }}{% endfor %}</div>
+        </div>
+      {% endif %}
+      {% if addon_options %}
+        <div>
+          <div class="mb-3 text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('available_addons') }}</div>
+          <div class="grid gap-3 lg:grid-cols-2">{% for item in addon_options %}{{ pricing_card(item) }}{% endfor %}</div>
+        </div>
+      {% endif %}
+      {% if fee_options %}
+        <div>
+          <div class="mb-3 text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('fees_and_rules') }}</div>
+          <div class="grid gap-3 lg:grid-cols-2">{% for item in fee_options %}{{ pricing_card(item) }}{% endfor %}</div>
+        </div>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  <section id="cancellation" class="mb-4 rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('member_cancellation_renewal') }}</div>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ cancellation_summary }}</h3>
+    <p class="mt-2 text-sm leading-6 text-gray-300">{{ cancellation_detail }}</p>
+    <div class="mt-4">
+      {{ field_rows([
+        (t('current_term_ends'), current_term_end),
+        (t('cancellation_opens'), cancel_window_open),
+        (t('cancellation_closes'), cancel_window_close)
+      ]) }}
+    </div>
+    {% if cancellation_request_message %}
+      <div class="mt-4 rounded border {% if cancellation_request_message.tone == 'confirmed' %}border-green-500/50 bg-green-500/10 text-green-100{% else %}border-yellow-500/50 bg-yellow-500/10 text-yellow-100{% endif %} p-4">
+        <div class="font-semibold">{{ cancellation_request_message.title }}</div>
+        <p class="mt-1 text-sm">{{ cancellation_request_message.body }}</p>
+        {% if cancellation_request %}
+          <div class="mt-3 text-sm font-semibold">{{ t('cancellation_confirmation_available') }}</div>
+          <div class="mt-1 text-sm">{{ t('confirmation_number') }}: {{ cancellation_request.confirmation_number or t('not_available') }}</div>
+          {% if cancellation_request.pdf_receipt_url %}
+            <div class="mt-1 break-words text-xs">{{ cancellation_request.pdf_receipt_url }}</div>
+          {% endif %}
+        {% endif %}
+      </div>
+    {% endif %}
+    {% if show_cancel %}
+      <form action="{{ url_for('cancel') }}" method="post" class="mt-4 space-y-3">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="member_id" value="{{ member.member_id }}">
+        <label class="block">
+          <span class="text-sm">{{ t('reason_for_cancellation') }}</span>
+          <select id="cancel-reason" name="reason" class="text-black mt-1 block w-full rounded p-2" required>
+            <option value="">{{ t('choose_reason') }}</option>
+            <option value="Moving away">{{ t('moving_away') }}</option>
+            <option value="Financial reasons">{{ t('financial_reasons') }}</option>
+            <option value="Not satisfied">{{ t('not_satisfied') }}</option>
+            <option value="Other">{{ t('other') }}</option>
+          </select>
+        </label>
+        <label id="other-reason-field" class="hidden block">
+          <span class="text-sm">{{ t('please_tell_reason') }}</span>
+          <textarea name="other_reason" rows="3" class="mt-1 block w-full rounded bg-gray-900 border border-gray-700 p-2 text-white" placeholder="{{ t('type_reason_here') }}"></textarea>
+        </label>
+        <button type="submit" onclick="return confirm('{{ t('confirm_cancel') }}');" class="rounded bg-red-600 px-4 py-2 font-semibold text-white hover:bg-red-700">{{ t('submit_cancellation_request') }}</button>
+      </form>
+      <script>
+        const cancelReason = document.getElementById("cancel-reason");
+        const otherReasonField = document.getElementById("other-reason-field");
+        const otherReasonInput = otherReasonField.querySelector("textarea");
+        const updateOtherReason = () => {
+          const isOther = cancelReason.value === "Other";
+          otherReasonField.classList.toggle("hidden", !isOther);
+          otherReasonInput.required = isOther;
+          otherReasonInput.disabled = !isOther;
+        };
+        cancelReason.addEventListener("change", updateOtherReason);
+        updateOtherReason();
+      </script>
+    {% endif %}
+  </section>
+
+  <section class="rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('your_agreements') }}</div>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ t('why_this_rule_applies') }}</h3>
+    <div class="mt-4 flex flex-wrap gap-3">
+      <a class="rounded border border-gray-700 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('member_account_documents') }}">{{ t('view_signed_contract') }}</a>
+      <a class="rounded border border-gray-700 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('member_agreements', section='cancellation') }}">{{ t('view_cancellation_rules') }}</a>
+      <a class="rounded border border-gray-700 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('member_agreements') }}">{{ t('view_all_agreements_rules') }}</a>
+    </div>
+    {% if not document_groups %}
+      <p class="mt-4 text-sm text-gray-400">{{ t('signed_contract_not_available') }}</p>
+    {% endif %}
+  </section>
+
+{% elif account_page == 'billing' %}
+  <section id="billing" class="mb-4 rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('membership_billing') }}</div>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ t('membership_billing') }}</h3>
+    <div class="mt-4">{{ field_rows([
+      (t('billing_amount'), '$%.2f'|format(member.billing_amount or 0)),
+      (t('next_membership_payment'), member.next_payment|format_date),
+      (t('payment_method'), member.billing_option or member.billing_type or t('frontdesk_payment')),
+      (t('contract_type'), member.contract_type),
+      (t('renewal'), membership_renewal_status)
+    ]) }}</div>
+  </section>
+  <section class="rounded-lg border border-yellow-500/25 bg-yellow-500/10 p-5">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('gym_purchases_balance') }}</div>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ '$%.2f'|format(gym_balance) }}</h3>
+    <div class="mt-4">{{ field_rows([
+      (t('amount'), '$%.2f'|format(gym_balance)),
+      (t('open_balance_label'), t('open_gym_balance') if gym_balance > 0 else t('no_open_gym_balance')),
+      (t('due_date'), payment_status.get('due_date')|format_date if payment_status.get('due_date') else t('not_available')),
+      (t('payment_method'), t('pay_at_front_desk'))
+    ]) }}</div>
+    <p class="mt-4 text-sm leading-6 text-yellow-50">{{ t('gym_balance_open_notice')|replace('{amount}', '$%.2f'|format(gym_balance)) if gym_balance > 0 else t('gym_balance_frontdesk_note') }}</p>
+  </section>
+
+{% elif account_page == 'documents' %}
+  <section class="rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('documents') }}</div>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ t('documents') }}</h3>
+    {% if document_groups %}
+      <div class="mt-4 grid gap-3 md:grid-cols-2">
+        {% for group in document_groups %}
+          <article class="rounded border border-gray-700 bg-gray-900/60 p-4">
+            <h4 class="font-semibold text-white">{{ t_document_title(group.document_type) }}{% if group.documents|length > 1 %} ({{ group.documents|length }}){% endif %}:</h4>
+            <p class="mt-1 text-xs leading-5 text-gray-400">{{ t_document_explanation(group.document_type) }}</p>
+            <div class="mt-3 flex flex-wrap gap-2">
+              {% for document in group.documents %}
+                <div class="min-w-0">
+                  {% if document.id is defined %}
+                    <a class="rounded border border-gray-700 px-3 py-2 text-sm font-semibold text-yellow-200" href="{{ url_for('view_member_document', document_id=document.id) }}">{{ t('view') }}</a>
+                  {% else %}
+                    <a class="rounded border border-gray-700 px-3 py-2 text-sm font-semibold text-yellow-200" href="{{ url_for('view_document', document_type=document.route_type) }}">{{ t('view') }}</a>
+                  {% endif %}
+                  {% if document.source_filename %}
+                    <span class="ml-2 text-xs text-gray-400 break-words">{{ document.source_filename }}</span>
+                  {% endif %}
+                </div>
+              {% endfor %}
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="mt-4 rounded border border-gray-700 bg-gray-900/60 p-4 text-sm text-gray-300">{{ t('documents_empty') }}</div>
+    {% endif %}
+  </section>
+
+{% elif account_page == 'profile' %}
+  <section class="rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('profile_information') }}</div>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ t('member_information') }}</h3>
+    <div class="mt-4">{{ field_rows([
+      (t('member_id'), member.member_id),
+      (t('name'), display_name),
+      (t('email'), member.email),
+      (t('phone'), member.phone),
+      (t('mobile'), member.mobile),
+      (t('date_of_birth'), member.birthdate|format_date if member.birthdate else t('not_available')),
+      (t('visits'), member.visits)
+    ]) }}</div>
+  </section>
+
+{% elif account_page == 'preferences' %}
+  <section class="rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('language_preferences') }}</div>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ t('language_preferences') }}</h3>
+    <div class="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      {% for code, label in available_languages.items() %}
+        <a href="{{ url_for('set_language', lang=code, next=url_for('member_account_preferences')) }}" class="rounded border {% if current_language == code %}border-yellow-500 bg-yellow-500/10 text-yellow-200{% else %}border-gray-700 bg-gray-900/70 text-gray-200{% endif %} px-3 py-3 text-sm font-semibold">
+          {{ language_flags[code] }} {{ label }}
+        </a>
+      {% endfor %}
+    </div>
+  </section>
+
+{% elif account_page == 'security' %}
+  <section class="rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('password_security') }}</div>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ t('password_security') }}</h3>
+    <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('password_security_intro') }}</p>
+    <a class="mt-4 inline-flex rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black" href="{{ url_for('set_member_password') }}">{{ t('change_password') }}</a>
+  </section>
+{% endif %}
+{% endblock %}
