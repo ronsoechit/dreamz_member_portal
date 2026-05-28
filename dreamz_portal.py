@@ -2189,6 +2189,22 @@ def pricing_admin_context():
     }
 
 
+def empty_pricing_admin_context():
+    return {
+        "pricing_items": [],
+        "pricing_categories": [],
+        "pricing_changes": [],
+        "pricing_billing_intervals": PRICING_BILLING_INTERVALS,
+        "pricing_visibility_options": PRICING_VISIBILITY_OPTIONS,
+        "selected_category": request.args.get("category", "").strip(),
+        "selected_status": request.args.get("status", "").strip(),
+        "selected_visibility": request.args.get("visibility", "").strip(),
+        "pricing_global_rule": PRICING_CATALOG_GLOBAL_RULE,
+        "pricing_terms_list": pricing_terms_list,
+        "pricing_visibility_list": pricing_visibility_list,
+    }
+
+
 def current_legal_version(document):
     if not document:
         return None
@@ -2271,6 +2287,29 @@ def terms_admin_context():
         "translation_statuses": LEGAL_TRANSLATION_STATUSES,
         "terms_admin_warnings": warnings,
         "legal_translation_notice": setting_value("legal_translation_review_notice", LEGAL_TRANSLATION_DRAFT_NOTICE),
+        "current_legal_version": current_legal_version,
+    }
+
+
+def empty_terms_admin_context():
+    return {
+        "agreement_categories": [],
+        "legal_documents": [],
+        "legal_versions": [],
+        "document_versions": {},
+        "translations_by_version": {},
+        "required_rules": [],
+        "membership_applications": [],
+        "application_statuses": MEMBERSHIP_APPLICATION_STATUSES,
+        "member_signed_documents": [],
+        "digital_signatures": [],
+        "signed_pdfs": [],
+        "cancellation_requests": [],
+        "legal_languages": LANGUAGES,
+        "legal_review_statuses": LEGAL_REVIEW_STATUSES,
+        "translation_statuses": LEGAL_TRANSLATION_STATUSES,
+        "terms_admin_warnings": [],
+        "legal_translation_notice": LEGAL_TRANSLATION_DRAFT_NOTICE,
         "current_legal_version": current_legal_version,
     }
 
@@ -3131,6 +3170,27 @@ def group_class_admin_context():
     }
 
 
+def empty_group_class_admin_context():
+    selected_day = request.args.get("day", "").strip()
+    selected_room = request.args.get("room", "").strip()
+    selected_type = request.args.get("class_type", "").strip()
+    return {
+        "schedule": None,
+        "class_types": [],
+        "occurrences": [],
+        "rooms": [],
+        "selected_day": selected_day,
+        "selected_room": selected_room,
+        "selected_type": selected_type,
+        "day_options": [(day, group_class_day_label(day)) for day in range(7)],
+        "statuses": sorted(GROUP_CLASS_OCCURRENCE_STATUSES),
+        "future_plan_counts": {},
+        "changes": [],
+        "time_label": group_class_time_label,
+        "day_label": group_class_day_label,
+    }
+
+
 def next_date_for_group_class(day_of_week, today=None):
     today = today or local_datetime(datetime.now(timezone.utc)).date()
     days_ahead = (day_of_week - today.weekday()) % 7
@@ -3355,6 +3415,20 @@ def prepare_runtime_schema():
         app.logger.exception("Runtime schema preparation failed; continuing with existing schema.")
         if app.config.get("TESTING") or os.getenv("RUNTIME_SCHEMA_STRICT", "").lower() in ("1", "true", "yes"):
             raise
+
+
+def staff_data_warning(section_key="staff"):
+    return translated_text("staff_data_source_warning", current_language(), section=translated_text(section_key, current_language()))
+
+
+def try_staff_runtime_schema(section_key="staff"):
+    try:
+        ensure_runtime_schema()
+        return None
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Runtime schema unavailable while rendering staff section: %s", section_key)
+        return staff_data_warning(section_key)
 
 
 # lijst met labels in de volgorde van je export
@@ -7339,9 +7413,12 @@ def api_sync_missing_file_keys():
 @app.route("/staff/settings", methods=["GET", "POST"])
 def staff_settings():
     require_staff_access(required_role="admin")
-    ensure_runtime_schema()
+    staff_warning = try_staff_runtime_schema("staff_settings_nav")
 
     if request.method == "POST":
+        if staff_warning:
+            flash(staff_warning)
+            return redirect(url_for("staff_settings"))
         validate_csrf_token()
         action = request.form.get("action", "save_settings")
         if action == "send_test_email":
@@ -7349,11 +7426,11 @@ def staff_settings():
             try:
                 mail_status = send_staff_test_email(test_email)
                 if mail_status == "logged":
-                    flash("Test email logged. Set EMAIL_DELIVERY_MODE=smtp to send real email.")
+                    flash(translated_text("staff_test_email_logged", current_language()))
                 else:
-                    flash(f"Test email sent to {test_email}.")
+                    flash(translated_text("staff_test_email_sent", current_language(), email=test_email))
             except Exception as exc:
-                flash(f"Test email failed: {exc}")
+                flash(translated_text("staff_test_email_failed", current_language(), error=exc))
             return redirect(url_for("staff_settings"))
 
         set_setting_value("admin_email", request.form.get("admin_email", "").strip())
@@ -7387,10 +7464,10 @@ def staff_settings():
             if new_role not in {"admin", "manager"}:
                 abort(400, "Invalid staff role.")
             if not new_password:
-                flash("New staff users need a password.")
+                flash(translated_text("staff_new_user_password_required", current_language()))
                 return redirect(url_for("staff_settings"))
             if StaffUser.query.filter_by(username=new_username).first():
-                flash("That username already exists.")
+                flash(translated_text("staff_username_exists", current_language()))
                 return redirect(url_for("staff_settings"))
             db.session.add(StaffUser(
                 username=new_username,
@@ -7401,19 +7478,32 @@ def staff_settings():
             ))
 
         db.session.commit()
-        flash("Staff settings updated.")
+        flash(translated_text("staff_settings_updated", current_language()))
         return redirect(url_for("staff_settings"))
 
-    settings = {
-        key: setting_value(key, value)
-        for key, value in DEFAULT_SETTINGS.items()
-    }
-    staff_users = StaffUser.query.order_by(StaffUser.role.asc(), StaffUser.username.asc()).all()
+    try:
+        settings = {
+            key: setting_value(key, value)
+            for key, value in DEFAULT_SETTINGS.items()
+        }
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Staff settings table unavailable; using configured defaults.")
+        settings = dict(DEFAULT_SETTINGS)
+        staff_warning = staff_warning or staff_data_warning("staff_settings_nav")
+    try:
+        staff_users = StaffUser.query.order_by(StaffUser.role.asc(), StaffUser.username.asc()).all()
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Staff user table unavailable while rendering settings.")
+        staff_users = []
+        staff_warning = staff_warning or staff_data_warning("staff_settings_nav")
     return render_template(
         "staff_settings.html",
         settings=settings,
         staff_users=staff_users,
         mail_config=mail_config_status(),
+        staff_page_warning=staff_warning,
     )
 
 
@@ -7441,19 +7531,26 @@ def staff_email_log():
     staff_role = require_staff_access()
     selected_status = request.args.get("status", "").strip()
     review_filter = request.args.get("review", "").strip()
-    ensure_runtime_schema()
-    query = EmailLog.query
-    if selected_status:
-        query = query.filter_by(status=selected_status)
-    if review_filter == "open":
-        query = query.filter(email_log_review_required_filter())
-    logs = query.order_by(EmailLog.created_at.desc()).limit(100).all()
-    counts = {
-        "open": EmailLog.query.filter(email_log_review_required_filter()).count(),
-        "failed": EmailLog.query.filter_by(status="failed").count(),
-        "sent": EmailLog.query.filter_by(status="sent").count(),
-        "logged": EmailLog.query.filter_by(status="logged").count(),
-    }
+    staff_warning = try_staff_runtime_schema("staff_email_log_nav")
+    try:
+        query = EmailLog.query
+        if selected_status:
+            query = query.filter_by(status=selected_status)
+        if review_filter == "open":
+            query = query.filter(email_log_review_required_filter())
+        logs = query.order_by(EmailLog.created_at.desc()).limit(100).all()
+        counts = {
+            "open": EmailLog.query.filter(email_log_review_required_filter()).count(),
+            "failed": EmailLog.query.filter_by(status="failed").count(),
+            "sent": EmailLog.query.filter_by(status="sent").count(),
+            "logged": EmailLog.query.filter_by(status="logged").count(),
+        }
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Email log data unavailable while rendering staff email log.")
+        logs = []
+        counts = {"open": 0, "failed": 0, "sent": 0, "logged": 0}
+        staff_warning = staff_warning or staff_data_warning("staff_email_log_nav")
     return render_template(
         "staff_email_log.html",
         logs=logs,
@@ -7462,29 +7559,43 @@ def staff_email_log():
         review_filter=review_filter,
         email_log_requires_review=email_log_requires_review,
         staff_role=staff_role,
+        staff_page_warning=staff_warning,
     )
 
 
 @app.get("/staff/sync")
 def staff_sync_status():
     require_staff_access()
-    ensure_runtime_schema()
-    mark_stale_sync_runs()
+    staff_warning = try_staff_runtime_schema("staff_sync_nav")
+    if not staff_warning:
+        mark_stale_sync_runs()
     try:
         page = max(int(request.args.get("page", "1")), 1)
     except ValueError:
         page = 1
-    query = SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc())
-    total_runs = query.count()
-    total_pages = max((total_runs + SYNC_PAGE_SIZE - 1) // SYNC_PAGE_SIZE, 1)
-    page = min(page, total_pages)
-    start_index = (page - 1) * SYNC_PAGE_SIZE
-    runs = query.offset(start_index).limit(SYNC_PAGE_SIZE).all()
-    latest = query.first()
-    run_changes = {
-        run.id: sync_change_summary_for_template(run)
-        for run in runs
-    }
+    try:
+        query = SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc())
+        total_runs = query.count()
+        total_pages = max((total_runs + SYNC_PAGE_SIZE - 1) // SYNC_PAGE_SIZE, 1)
+        page = min(page, total_pages)
+        start_index = (page - 1) * SYNC_PAGE_SIZE
+        runs = query.offset(start_index).limit(SYNC_PAGE_SIZE).all()
+        latest = query.first()
+        run_changes = {
+            run.id: sync_change_summary_for_template(run)
+            for run in runs
+        }
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Sync run data unavailable while rendering staff sync status.")
+        total_runs = 0
+        total_pages = 1
+        page = 1
+        start_index = 0
+        runs = []
+        latest = None
+        run_changes = {}
+        staff_warning = staff_warning or staff_data_warning("staff_sync_nav")
     page_numbers = []
     last_page_number = 0
     for page_number in range(1, total_pages + 1):
@@ -7504,21 +7615,29 @@ def staff_sync_status():
         start_run=start_index + 1 if total_runs else 0,
         end_run=min(start_index + len(runs), total_runs),
         sync_page_numbers=page_numbers,
+        staff_page_warning=staff_warning,
     )
 
 
 @app.get("/staff/changes")
 def staff_daily_changes():
     require_staff_access()
-    ensure_runtime_schema()
-    mark_stale_sync_runs()
+    staff_warning = try_staff_runtime_schema("staff_changes_nav")
+    if not staff_warning:
+        mark_stale_sync_runs()
     today = local_datetime(datetime.now(timezone.utc)).date()
     raw_date = request.args.get("date", "").strip()
     try:
         selected_date = date.fromisoformat(raw_date) if raw_date else today
     except ValueError:
         selected_date = today
-    changes = daily_sync_changes(selected_date)
+    try:
+        changes = daily_sync_changes(selected_date)
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Daily sync change data unavailable while rendering staff changes.")
+        changes = {"runs": [], "new_members": [], "changed_members": [], "document_changes": []}
+        staff_warning = staff_warning or staff_data_warning("staff_changes_nav")
     return render_template(
         "staff_daily_changes.html",
         selected_date=selected_date,
@@ -7529,19 +7648,26 @@ def staff_daily_changes():
         new_members=changes["new_members"],
         changed_members=changes["changed_members"],
         document_changes=changes["document_changes"],
+        staff_page_warning=staff_warning,
     )
 
 
 @app.get("/staff/coach")
 def staff_coach_activity():
     require_staff_access(required_role="admin")
-    ensure_runtime_schema()
-    interactions = (
-        CoachInteraction.query
-        .order_by(CoachInteraction.created_at.desc(), CoachInteraction.id.desc())
-        .limit(100)
-        .all()
-    )
+    staff_warning = try_staff_runtime_schema("staff_coach_nav")
+    try:
+        interactions = (
+            CoachInteraction.query
+            .order_by(CoachInteraction.created_at.desc(), CoachInteraction.id.desc())
+            .limit(100)
+            .all()
+        )
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Coach interaction data unavailable while rendering staff coach activity.")
+        interactions = []
+        staff_warning = staff_warning or staff_data_warning("staff_coach_nav")
     member_ids = {interaction.member_id for interaction in interactions}
     members = {}
     if member_ids:
@@ -7553,16 +7679,25 @@ def staff_coach_activity():
         "staff_coach_activity.html",
         interactions=interactions,
         members=members,
+        staff_page_warning=staff_warning,
     )
 
 
 @app.get("/staff/group-classes")
 def staff_group_classes():
     staff_role = require_staff_access()
-    context = group_class_admin_context()
+    staff_warning = None
+    try:
+        context = group_class_admin_context()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Group class admin data unavailable while rendering staff group classes.")
+        staff_warning = staff_data_warning("staff_group_classes_nav")
+        context = empty_group_class_admin_context()
     return render_template(
         "staff_group_classes.html",
         staff_role=staff_role,
+        staff_page_warning=staff_warning,
         **context,
     )
 
@@ -7696,10 +7831,18 @@ def staff_group_class_publish():
 @app.get("/staff/pricing-products")
 def staff_pricing_products():
     staff_role = require_staff_access()
-    context = pricing_admin_context()
+    staff_warning = None
+    try:
+        context = pricing_admin_context()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Pricing admin data unavailable while rendering staff pricing products.")
+        staff_warning = staff_data_warning("staff_pricing_nav")
+        context = empty_pricing_admin_context()
     return render_template(
         "staff_pricing_products.html",
         staff_role=staff_role,
+        staff_page_warning=staff_warning,
         **context,
     )
 
@@ -7707,10 +7850,19 @@ def staff_pricing_products():
 @app.get("/staff/terms-agreements")
 def staff_terms_agreements():
     staff_role = require_staff_access()
+    staff_warning = None
+    try:
+        context = terms_admin_context()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Terms admin data unavailable while rendering staff terms agreements.")
+        staff_warning = staff_data_warning("staff_terms_nav")
+        context = empty_terms_admin_context()
     return render_template(
         "staff_terms_agreements.html",
         staff_role=staff_role,
-        **terms_admin_context(),
+        staff_page_warning=staff_warning,
+        **context,
     )
 
 

@@ -447,6 +447,42 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("Staff Settings", response.get_data(as_text=True))
         self.assertNotIn("data is still being prepared", response.get_data(as_text=True))
 
+    def test_staff_settings_warns_instead_of_500_when_schema_unavailable(self):
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+
+        previous_testing = app.config["TESTING"]
+        app.config["TESTING"] = False
+        try:
+            with patch("dreamz_portal.ensure_runtime_schema", side_effect=RuntimeError("schema unavailable")):
+                response = self.client.get("/staff/settings")
+        finally:
+            app.config["TESTING"] = previous_testing
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("could not load all live data", body)
+        self.assertNotIn("Internal Server Error", body)
+
+    def test_staff_admin_sections_warn_instead_of_500_when_context_fails(self):
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+
+        cases = [
+            ("/staff/group-classes", "dreamz_portal.group_class_admin_context"),
+            ("/staff/pricing-products", "dreamz_portal.pricing_admin_context"),
+            ("/staff/terms-agreements", "dreamz_portal.terms_admin_context"),
+        ]
+        for route, target in cases:
+            with self.subTest(route=route), patch(target, side_effect=RuntimeError("schema unavailable")):
+                response = self.client.get(route)
+                self.assertEqual(response.status_code, 200)
+                body = response.get_data(as_text=True)
+                self.assertIn("could not load all live data", body)
+                self.assertNotIn("Internal Server Error", body)
+
     def test_staff_can_update_pricing_item_and_log_change(self):
         seed_pricing_catalog()
         item = PricingItem.query.filter_by(seed_key="membership-no-contract-1-month").one()
