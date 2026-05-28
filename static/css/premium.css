@@ -1050,8 +1050,8 @@ main a.text-green-400:hover {
 }
 
 [data-coach-view] {
-  flex: 0 0 auto;
-  min-width: 8.25rem;
+  min-width: 0;
+  width: 100%;
 }
 
 [data-coach-view][aria-selected="true"],
@@ -1238,7 +1238,7 @@ span.rounded,
 
   .dreamz-coach-widget {
     right: 0.9rem;
-    bottom: calc(5.45rem + env(safe-area-inset-bottom));
+    bottom: calc(6.1rem + env(safe-area-inset-bottom));
   }
 
   .dreamz-coach-fab {
@@ -1258,7 +1258,7 @@ span.rounded,
   .dreamz-coach-panel {
     position: fixed;
     right: 0.75rem;
-    bottom: calc(5.2rem + env(safe-area-inset-bottom));
+    bottom: calc(5.85rem + env(safe-area-inset-bottom));
     left: 0.75rem;
     width: auto;
     max-height: min(38rem, calc(100vh - 7rem));

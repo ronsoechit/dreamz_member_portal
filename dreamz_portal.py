@@ -31,6 +31,7 @@ from translations import (
     LANGUAGES,
     LANGUAGE_FLAGS,
     MONTH_NAMES,
+    TRANSLATIONS,
     DEFAULT_LANGUAGE,
     normalize_language,
     translate,
@@ -4772,6 +4773,22 @@ def coach_label(key, value, language=None):
     return translated_text(f"coach_{key}_{value}", language or current_language())
 
 
+def translated_coach_focus_label(value, language=None):
+    if not value:
+        return ""
+    target = str(value).strip().lower()
+    if not target:
+        return ""
+    lang = language or current_language()
+    for translations in TRANSLATIONS.values():
+        for key, label in translations.items():
+            if not key.startswith("coach_focus_"):
+                continue
+            if str(label).strip().lower() == target:
+                return translated_text(key, lang)
+    return value
+
+
 def coach_profile_completion(profile, member=None):
     if not profile:
         return 0
@@ -6981,6 +6998,7 @@ def inject_csrf_token():
         "open_email_log_count": open_email_log_count() if is_staff_user() else 0,
         "t_document_title": lambda document_type: translated_document_title(document_type, current_language()),
         "t_document_explanation": lambda document_type: translated_document_explanation(document_type, current_language()),
+        "t_coach_focus": lambda value: translated_coach_focus_label(value, current_language()),
     }
 
 @app.template_filter("format_date")
