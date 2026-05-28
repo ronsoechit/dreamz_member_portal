@@ -550,6 +550,13 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn('action="/coach/date-of-birth"', body)
         self.assertIn("Add date of birth", body)
 
+        coach_response = self.client.get("/coach")
+        self.assertEqual(coach_response.status_code, 200)
+        coach_body = coach_response.get_data(as_text=True)
+        self.assertIn("Add your date of birth to improve your nutrition targets.", coach_body)
+        self.assertIn('action="/coach/date-of-birth"', coach_body)
+        self.assertIn('name="return_to" value="coach"', coach_body)
+
         save_response = self.client.post(
             "/coach/date-of-birth",
             data=self.csrf_form_data(birthdate="1990-01-01"),
@@ -590,7 +597,7 @@ class PortalRouteTests(unittest.TestCase):
         db.session.commit()
         self.login_as("24680")
 
-        self.assertEqual(coach_profile_completion(profile), 100)
+        self.assertLess(coach_profile_completion(profile), 100)
         response = self.client.get("/nutrition")
 
         self.assertEqual(response.status_code, 200)
@@ -600,6 +607,8 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Add date of birth", body)
         self.assertIn('href="#nutrition-birthdate"', body)
         self.assertIn('action="/coach/date-of-birth"', body)
+        self.assertIn("Update pregnancy clearance", body)
+        self.assertIn("field=provider_cleared_exercise", body)
         self.assertIn("pregnancy", body.lower())
         self.assertNotIn('href="/coach?edit=profile&amp;return_to=nutrition"', body)
 
@@ -690,7 +699,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("/login", response.headers["Location"])
 
     def test_coach_profile_can_be_saved(self):
-        self.add_member(member_id="13659", name="Ron Soechit")
+        self.add_member(member_id="13659", name="Ron Soechit", birthdate=date(1990, 1, 1))
         self.login_as("13659")
 
         response = self.client.post(
@@ -947,7 +956,6 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Pregnant", page)
         self.assertIn("Medical check advised", page)
         self.assertIn("Medical clearance first", page)
-        self.assertIn("Review guidance", page)
         self.assertNotIn("<button type=\"button\" data-start-session", page)
 
     def test_male_coach_profile_ignores_pregnancy_fields(self):

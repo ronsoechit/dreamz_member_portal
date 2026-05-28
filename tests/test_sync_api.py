@@ -335,6 +335,45 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(summary["changed_members"], [])
         self.assertIn("Ignored 2 blank GymAssistant value", SyncRun.query.one().error)
 
+    def test_sync_api_imports_birthdate_and_protects_app_birthdate_from_blank_backup(self):
+        db.session.add(Member(
+            member_id="13659",
+            name="Ron Soechit",
+            birthdate=date(1990, 1, 1),
+        ))
+        db.session.add(Member(member_id="24680", name="Zahira Test"))
+        db.session.commit()
+
+        response = self.client.post(
+            "/api/sync/members",
+            json={
+                "members": [
+                    {
+                        "member_id": "13659",
+                        "name": "Ron Soechit",
+                        "birthdate": None,
+                    },
+                    {
+                        "member_id": "24680",
+                        "name": "Zahira Test",
+                        "birthdate": "1992-04-15",
+                    },
+                ]
+            },
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        ron = Member.query.filter_by(member_id="13659").one()
+        zahira = Member.query.filter_by(member_id="24680").one()
+        self.assertEqual(ron.birthdate, date(1990, 1, 1))
+        self.assertEqual(zahira.birthdate, date(1992, 4, 15))
+        summary = json.loads(SyncRun.query.one().change_summary)
+        self.assertEqual(len(summary["changed_members"]), 1)
+        self.assertEqual(summary["changed_members"][0]["member_id"], "24680")
+        self.assertEqual(summary["changed_members"][0]["changes"][0]["field"], "birthdate")
+        self.assertIn("Ignored 1 blank GymAssistant value", SyncRun.query.one().error)
+
     def test_staff_daily_changes_hides_legacy_blank_contact_changes(self):
         db.session.add(Member(member_id="34878", name="Acosta, Rocila"))
         db.session.add(SyncRun(

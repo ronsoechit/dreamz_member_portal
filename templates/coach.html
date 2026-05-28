@@ -36,10 +36,17 @@
       <span class="text-gray-500">#{{ member.member_id }}</span>
     </div>
     {% if profile and profile.sex == 'female' and profile.pregnancy_status == 'pregnant' %}
-      <div class="mt-2 inline-flex flex-wrap items-center gap-2 rounded-full border {% if pregnancy_safety_status in ['warning_symptoms', 'not_cleared'] %}border-red-400/40 bg-red-500/10 text-red-100{% else %}border-green-400/30 bg-green-500/10 text-green-100{% endif %} px-3 py-1 text-xs font-semibold">
-        <span>{{ t('coach_pregnancy_status_pregnant') }}</span>
-        {% if profile.gestational_weeks %}<span>&middot; {{ profile.gestational_weeks }} {{ t('coach_pregnancy_weeks_short') }}</span>{% endif %}
-        <span>&middot; {{ t('coach_pregnancy_safety_' ~ pregnancy_safety_status) }}</span>
+      <div class="mt-2 flex flex-wrap items-center gap-2">
+        <span class="inline-flex flex-wrap items-center gap-2 rounded-full border {% if pregnancy_safety_status in ['warning_symptoms', 'not_cleared'] %}border-red-400/40 bg-red-500/10 text-red-100{% else %}border-green-400/30 bg-green-500/10 text-green-100{% endif %} px-3 py-1 text-xs font-semibold">
+          <span>{{ t('coach_pregnancy_status_pregnant') }}</span>
+          {% if profile.gestational_weeks %}<span>&middot; {{ profile.gestational_weeks }} {{ t('coach_pregnancy_weeks_short') }}</span>{% endif %}
+          <span>&middot; {{ t('coach_pregnancy_safety_' ~ pregnancy_safety_status) }}</span>
+        </span>
+        {% if pregnancy_safety_status == 'clearance_unknown' %}
+          <a href="{{ url_for('member_coach', edit='profile', field='provider_cleared_exercise') }}" class="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-1 text-xs font-semibold text-yellow-100 hover:border-yellow-300">
+            {{ t('update_pregnancy_clearance') }}
+          </a>
+        {% endif %}
       </div>
     {% endif %}
   </div>
@@ -60,6 +67,24 @@
     </div>
   {% endif %}
 </div>
+
+{% if not member.birthdate %}
+  <section class="mb-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4">
+    <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+      <div>
+        <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('date_of_birth') }}</div>
+        <p class="mt-1 text-sm leading-6 text-yellow-50">{{ t('add_dob_to_improve_nutrition') }}</p>
+      </div>
+      <form method="post" action="{{ url_for('save_coach_date_of_birth') }}" class="grid gap-2 sm:grid-cols-[1fr_auto]">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="return_to" value="coach">
+        <label class="sr-only" for="coach-birthdate">{{ t('add_date_of_birth') }}</label>
+        <input id="coach-birthdate" name="birthdate" type="date" required class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
+        <button type="submit" class="rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black hover:bg-yellow-400">{{ t('add_date_of_birth') }}</button>
+      </form>
+    </div>
+  </section>
+{% endif %}
 
 {% if coach_complete %}
   <section class="coach-quick-actions mb-4 grid gap-3 lg:grid-cols-[1.2fr_1fr_1fr_1fr]">

@@ -3645,6 +3645,7 @@ SYNC_BLANK_PROTECTED_FIELDS = {
     "email",
     "phone",
     "mobile",
+    "birthdate",
     "plan_type",
     "contract_type",
     "billing_status",
@@ -3733,6 +3734,7 @@ SYNC_CHANGE_FIELDS = [
     "email",
     "phone",
     "mobile",
+    "birthdate",
     "plan_type",
     "contract_type",
     "billing_status",
@@ -3756,6 +3758,7 @@ SYNC_CHANGE_LABELS = {
     "email": "Email",
     "phone": "Phone",
     "mobile": "Mobile",
+    "birthdate": "Birthdate",
     "plan_type": "Plan",
     "contract_type": "Contract type",
     "billing_status": "Billing status",
@@ -4651,6 +4654,8 @@ def nutrition_missing_profile_items(member, profile, language=None):
         ]:
             if getattr(profile, field, None) in (None, "", False):
                 add(field, label_key, "add_pregnancy_details")
+        if profile.provider_cleared_exercise == "unknown":
+            add("provider_cleared_exercise", "coach_provider_cleared_exercise", "update_pregnancy_clearance")
     return items
 
 
@@ -4767,10 +4772,11 @@ def coach_label(key, value, language=None):
     return translated_text(f"coach_{key}_{value}", language or current_language())
 
 
-def coach_profile_completion(profile):
+def coach_profile_completion(profile, member=None):
     if not profile:
         return 0
     fields = [
+        getattr(member, "birthdate", None) if member is not None else "not applicable",
         profile.primary_goal,
         profile.experience_level,
         profile.training_days,
@@ -4789,7 +4795,7 @@ def coach_profile_completion(profile):
         fields.extend([
             profile.gestational_weeks,
             profile.multiple_pregnancy,
-            profile.provider_cleared_exercise,
+            profile.provider_cleared_exercise if profile.provider_cleared_exercise != "unknown" else None,
             profile.pregnancy_consent,
         ])
     return round((sum(1 for field in fields if field not in (None, "")) / len(fields)) * 100)
@@ -7791,7 +7797,7 @@ def member_dashboard_context(member, staff_admin_view=False):
         None,
         lambda: coach_profile_for_member(member),
     )
-    coach_completion = coach_profile_completion(coach_profile)
+    coach_completion = coach_profile_completion(coach_profile, member)
     coach_next_session = optional_dashboard_value(
         "coach_next_session",
         None,
@@ -9399,16 +9405,21 @@ def save_coach_date_of_birth():
     if redirect_response:
         return redirect_response
     validate_csrf_token()
+    return_to = request.form.get("return_to", "").strip()
+    if return_to == "coach":
+        redirect_target = url_for("member_coach")
+    else:
+        redirect_target = url_for("member_nutrition") + "#nutrition-plan"
     birthdate = parse_optional_date(request.form.get("birthdate") or request.form.get("date_of_birth"))
     if not birthdate:
         flash(translated_text("date_of_birth_required", current_language()), "error")
-        return redirect(url_for("member_nutrition") + "#nutrition-plan")
+        return redirect(redirect_target)
 
     member.birthdate = birthdate
     CoachPlan.query.filter_by(member_id=member.member_id).delete()
     db.session.commit()
     flash(translated_text("date_of_birth_saved", current_language()), "success")
-    return redirect(url_for("member_nutrition") + "#nutrition-plan")
+    return redirect(redirect_target)
 
 
 @app.post("/nutrition/meal-log")
@@ -9690,7 +9701,7 @@ def member_coach():
         member=member,
         display_name=display_member_name(member.name),
         profile=profile,
-        completion=coach_profile_completion(profile),
+        completion=coach_profile_completion(profile, member),
         starter_guidance=coach_starter_guidance(profile),
         personal_plan=personal_plan,
         coach_goals=COACH_GOALS,

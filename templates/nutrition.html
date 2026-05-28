@@ -2,6 +2,7 @@
 {% block title %}{{ t('nutrition_plan') }} | Dreamz Fitness{% endblock %}
 
 {% block content %}
+{% set first_missing_item = nutrition_missing_items[0] if nutrition_missing_items else none %}
 <section class="mb-5 rounded-lg border border-green-400/25 bg-gray-800/45 p-5">
   <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
     <div>
@@ -18,9 +19,13 @@
       <div class="inline-flex items-center justify-center rounded-full border border-green-400/30 bg-green-500/10 px-4 py-3 text-sm font-semibold text-green-100">
         {{ t('meal_plan_personalized_for_you') }}
       </div>
-    {% elif nutrition_missing_items and nutrition_missing_items[0].field == 'birthdate' %}
+    {% elif first_missing_item and first_missing_item.field == 'birthdate' %}
       <a href="#nutrition-birthdate" class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-950 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">
         {{ t('add_date_of_birth') }}
+      </a>
+    {% elif first_missing_item %}
+      <a href="{{ url_for('member_coach', edit='profile', field=first_missing_item.field, return_to='nutrition') }}" class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-950 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">
+        {{ first_missing_item.action }}
       </a>
     {% else %}
       <a href="{{ url_for('member_coach', edit='profile', return_to='nutrition') }}" class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-950 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">
@@ -65,7 +70,7 @@
           {% endif %}
         {% endfor %}
         {% if profile_missing.value %}
-          <a href="{{ url_for('member_coach', edit='profile', return_to='nutrition') }}" class="mt-4 inline-flex rounded border border-gray-700 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400">
+          <a href="{{ url_for('member_coach', edit='profile', field=first_missing_item.field if first_missing_item and first_missing_item.field != 'birthdate' else '', return_to='nutrition') }}" class="mt-4 inline-flex rounded border border-gray-700 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400">
             {{ t('add_missing_profile_data') }}
           </a>
         {% endif %}

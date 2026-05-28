@@ -168,6 +168,14 @@ class GymAssistantImportTests(unittest.TestCase):
         self.assertEqual(member["visits"], 12)
         self.assertTrue(member["is_active"])
 
+    def test_parse_members_btx_imports_birthdate_from_gymassistant(self):
+        content = BACKUP_SAMPLE.replace("BD=00000000", "BD=19920415")
+        path = self.write_temp(".btx", content)
+        result = parse_gymassistant_export(path)
+
+        self.assertEqual(result.issues, [])
+        self.assertEqual(result.members[0]["birthdate"], date(1992, 4, 15))
+
     def test_parse_gbu_backup_export(self):
         with tempfile.NamedTemporaryFile(suffix=".gbu", delete=False) as handle:
             path = Path(handle.name)
