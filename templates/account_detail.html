@@ -77,52 +77,6 @@
     </div>
   </section>
 
-  <section class="mb-4 rounded-lg border border-yellow-500/25 bg-yellow-500/10 p-5">
-    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('contact_front_desk') }}</div>
-    <h3 class="mt-1 text-xl font-semibold text-white">{{ t('frontdesk_membership_notice_title') }}</h3>
-    <p class="mt-2 text-sm leading-6 text-yellow-50">{{ t('frontdesk_membership_notice') }}</p>
-    <div class="mt-4 flex flex-wrap gap-3">
-      <a class="rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black" href="{{ url_for('public_pricing') }}">{{ t('view_full_pricing') }}</a>
-      {% if gym_balance > 0 %}
-        <a class="rounded border border-yellow-500/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('member_account_billing') }}">{{ t('view_balance') }}</a>
-      {% endif %}
-      <span class="rounded border border-yellow-500/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200">{{ t('request_change') }}</span>
-      <span class="rounded border border-gray-700 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200">{{ t('contact_front_desk') }}</span>
-    </div>
-  </section>
-
-  {% if member_pricing_unavailable %}
-    <section class="mb-4 rounded-lg border border-gray-700 bg-gray-900/60 p-5">
-      <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('membership_options') }}</div>
-      <h3 class="mt-1 text-xl font-semibold text-white">{{ t('membership_options_empty_title') }}</h3>
-      <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('membership_options_empty_body') }}</p>
-      <a class="mt-4 inline-flex rounded border border-gray-700 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('member_account') }}">{{ t('view_account') }}</a>
-    </section>
-  {% endif %}
-
-  {% if membership_options or addon_options or fee_options %}
-    <section class="mb-4 grid gap-4">
-      {% if membership_options %}
-        <div>
-          <div class="mb-3 text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('available_membership_options') }}</div>
-          <div class="grid gap-3 lg:grid-cols-2">{% for item in membership_options %}{{ pricing_card(item) }}{% endfor %}</div>
-        </div>
-      {% endif %}
-      {% if addon_options %}
-        <div>
-          <div class="mb-3 text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('available_addons') }}</div>
-          <div class="grid gap-3 lg:grid-cols-2">{% for item in addon_options %}{{ pricing_card(item) }}{% endfor %}</div>
-        </div>
-      {% endif %}
-      {% if fee_options %}
-        <div>
-          <div class="mb-3 text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('fees_and_rules') }}</div>
-          <div class="grid gap-3 lg:grid-cols-2">{% for item in fee_options %}{{ pricing_card(item) }}{% endfor %}</div>
-        </div>
-      {% endif %}
-    </section>
-  {% endif %}
-
   <section id="cancellation" class="mb-4 rounded-lg border border-gray-700 bg-gray-800/40 p-5">
     <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('member_cancellation_renewal') }}</div>
     <h3 class="mt-1 text-xl font-semibold text-white">{{ cancellation_summary }}</h3>
@@ -183,7 +137,7 @@
     {% endif %}
   </section>
 
-  <section class="rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+  <section class="mb-4 rounded-lg border border-gray-700 bg-gray-800/40 p-5">
     <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('your_agreements') }}</div>
     <h3 class="mt-1 text-xl font-semibold text-white">{{ t('why_this_rule_applies') }}</h3>
     <div class="mt-4 flex flex-wrap gap-3">
@@ -195,6 +149,52 @@
       <p class="mt-4 text-sm text-gray-400">{{ t('signed_contract_not_available') }}</p>
     {% endif %}
   </section>
+
+  <section class="mb-4 rounded-lg border border-yellow-500/25 bg-yellow-500/10 p-5">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('contact_front_desk') }}</div>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ t('frontdesk_membership_notice_title') }}</h3>
+    <p class="mt-2 text-sm leading-6 text-yellow-50">{{ t('frontdesk_membership_notice') }}</p>
+    <div class="mt-4 flex flex-wrap gap-3">
+      <a class="rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black" href="{{ url_for('public_pricing') }}">{{ t('view_full_pricing') }}</a>
+      {% if gym_balance > 0 %}
+        <a class="rounded border border-yellow-500/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('member_account_billing') }}">{{ t('view_balance') }}</a>
+      {% endif %}
+      <span class="rounded border border-yellow-500/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200">{{ t('request_change') }}</span>
+      <span class="rounded border border-gray-700 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200">{{ t('contact_front_desk') }}</span>
+    </div>
+  </section>
+
+  {% if member_pricing_unavailable %}
+    <section class="mb-4 rounded-lg border border-gray-700 bg-gray-900/60 p-5">
+      <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('membership_options') }}</div>
+      <h3 class="mt-1 text-xl font-semibold text-white">{{ t('membership_options_empty_title') }}</h3>
+      <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('membership_options_empty_body') }}</p>
+      <a class="mt-4 inline-flex rounded border border-gray-700 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('member_account') }}">{{ t('view_account') }}</a>
+    </section>
+  {% endif %}
+
+  {% if membership_options or addon_options or fee_options %}
+    <section class="mb-4 grid gap-4">
+      {% if membership_options %}
+        <div>
+          <div class="mb-3 text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('available_membership_options') }}</div>
+          <div class="grid gap-3 lg:grid-cols-2">{% for item in membership_options %}{{ pricing_card(item) }}{% endfor %}</div>
+        </div>
+      {% endif %}
+      {% if addon_options %}
+        <div>
+          <div class="mb-3 text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('available_addons') }}</div>
+          <div class="grid gap-3 lg:grid-cols-2">{% for item in addon_options %}{{ pricing_card(item) }}{% endfor %}</div>
+        </div>
+      {% endif %}
+      {% if fee_options %}
+        <div>
+          <div class="mb-3 text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('fees_and_rules') }}</div>
+          <div class="grid gap-3 lg:grid-cols-2">{% for item in fee_options %}{{ pricing_card(item) }}{% endfor %}</div>
+        </div>
+      {% endif %}
+    </section>
+  {% endif %}
 
 {% elif account_page == 'billing' %}
   <section id="billing" class="mb-4 rounded-lg border border-gray-700 bg-gray-800/40 p-5">
