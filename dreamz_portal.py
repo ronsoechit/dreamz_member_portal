@@ -2520,6 +2520,85 @@ def equipment_item_aliases(item):
     return [alias.lower() for alias in aliases if alias]
 
 
+EQUIPMENT_SEARCH_SYNONYMS = {
+    "apparaat": ["machine", "equipment"],
+    "apparaten": ["machine", "equipment"],
+    "benen": ["leg", "legs", "quadriceps", "hamstrings", "glutes", "calf", "squat", "press"],
+    "been": ["leg", "quadriceps", "hamstrings"],
+    "pierna": ["leg", "legs", "quadriceps", "hamstrings"],
+    "piernas": ["leg", "legs", "quadriceps", "hamstrings"],
+    "pia": ["leg", "legs", "quadriceps", "hamstrings"],
+    "rug": ["back", "row", "pulldown", "lats", "upper back"],
+    "espalda": ["back", "row", "pulldown", "lats"],
+    "lomba": ["back", "row", "pulldown", "lats"],
+    "borst": ["chest", "press", "pec"],
+    "pecho": ["chest", "press", "pec"],
+    "schouder": ["shoulder", "lateral raise", "press"],
+    "schouders": ["shoulder", "lateral raise", "press"],
+    "hombro": ["shoulder", "lateral raise", "press"],
+    "hombros": ["shoulder", "lateral raise", "press"],
+    "billen": ["glute", "glutes", "hip thrust", "kickback"],
+    "bil": ["glute", "glutes", "hip thrust", "kickback"],
+    "gluteos": ["glute", "glutes", "hip thrust", "kickback"],
+    "cardio": ["treadmill", "bike", "elliptical", "rower", "spinning", "arc trainer"],
+    "gewichten": ["dumbbell", "barbell", "plates", "kettlebell", "free weights"],
+    "gewicht": ["dumbbell", "barbell", "plates", "kettlebell", "free weights"],
+    "peso": ["dumbbell", "barbell", "plates", "kettlebell", "free weights"],
+    "pesos": ["dumbbell", "barbell", "plates", "kettlebell", "free weights"],
+    "nieuw": ["new", "new arrival"],
+    "nobo": ["new", "new arrival"],
+    "nuevo": ["new", "new arrival"],
+}
+
+
+def normalized_equipment_search_text(value):
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def equipment_search_terms(search_query):
+    normalized = normalized_equipment_search_text(search_query)
+    terms = [normalized] if normalized else []
+    for token in normalized.split():
+        terms.append(token)
+        terms.extend(EQUIPMENT_SEARCH_SYNONYMS.get(token, []))
+    return [term for term in dict.fromkeys(normalized_equipment_search_text(term) for term in terms) if term]
+
+
+def equipment_search_haystack(item):
+    values = [
+        item.name,
+        item.slug,
+        item.brand,
+        item.line,
+        item.category_key,
+        equipment_category_label(item.category_key, DEFAULT_LANGUAGE),
+        item.subcategory,
+        localized_json_text(item.usage_description, DEFAULT_LANGUAGE),
+        localized_json_text(item.usage_description, "nl"),
+        localized_json_text(item.usage_description, "pap"),
+        localized_json_text(item.usage_description, "es"),
+        item.promo_label,
+    ]
+    values.extend(json_list(item.primary_muscle_groups))
+    values.extend(json_list(item.secondary_muscle_groups))
+    values.extend(json_list(item.exercise_aliases))
+    return normalized_equipment_search_text(" ".join(str(value or "") for value in values))
+
+
+def equipment_matches_search(item, search_query):
+    terms = equipment_search_terms(search_query)
+    if not terms:
+        return True
+    haystack = equipment_search_haystack(item)
+    normalized_query = normalized_equipment_search_text(search_query)
+    tokens = [token for token in normalized_query.split() if token]
+    if normalized_query and normalized_query in haystack:
+        return True
+    if tokens and all(token in haystack for token in tokens):
+        return True
+    return any(term in haystack for term in terms if len(term) >= 3)
+
+
 def equipment_gallery(item):
     gallery = json_list(item.gallery_images)
     if item.image_url and item.image_url not in gallery:
@@ -2803,16 +2882,6 @@ def equipment_member_context():
         ))
     if new_only:
         query = query.filter(EquipmentItem.is_new.is_(True))
-    if search_query:
-        like = f"%{search_query}%"
-        query = query.filter(db.or_(
-            EquipmentItem.name.like(like),
-            EquipmentItem.brand.like(like),
-            EquipmentItem.subcategory.like(like),
-            EquipmentItem.exercise_aliases.like(like),
-            EquipmentItem.primary_muscle_groups.like(like),
-            EquipmentItem.secondary_muscle_groups.like(like),
-        ))
 
     categories = EquipmentCategory.query.filter_by(is_active=True).order_by(
         EquipmentCategory.sort_order.asc(),
@@ -2823,6 +2892,18 @@ def equipment_member_context():
         EquipmentItem.sort_order.asc(),
         EquipmentItem.name.asc(),
     ).all()
+    if search_query:
+        items = [item for item in items if equipment_matches_search(item, search_query)]
+    filters_active = bool(category_filter or muscle_filter or search_query or new_only)
+    relaxed_results = False
+    if search_query and not items and (category_filter or muscle_filter or new_only):
+        relaxed_items = member_visible_equipment_query().order_by(
+            EquipmentItem.is_new.desc(),
+            EquipmentItem.sort_order.asc(),
+            EquipmentItem.name.asc(),
+        ).all()
+        items = [item for item in relaxed_items if equipment_matches_search(item, search_query)]
+        relaxed_results = bool(items)
     return {
         "equipment_items": items,
         "equipment_categories": categories,
@@ -2831,6 +2912,8 @@ def equipment_member_context():
         "selected_muscle": muscle_filter,
         "equipment_search_query": search_query,
         "new_only": new_only,
+        "equipment_filters_active": filters_active,
+        "equipment_relaxed_results": relaxed_results,
         "equipment_primary_groups": lambda item: json_list(item.primary_muscle_groups),
         "equipment_secondary_groups": lambda item: json_list(item.secondary_muscle_groups),
         "equipment_aliases": lambda item: json_list(item.exercise_aliases),
@@ -2849,6 +2932,8 @@ def empty_equipment_member_context():
         "selected_muscle": request.args.get("muscle", "").strip(),
         "equipment_search_query": request.args.get("q", "").strip(),
         "new_only": request.args.get("new", "").strip() == "1",
+        "equipment_filters_active": bool(request.args),
+        "equipment_relaxed_results": False,
         "equipment_primary_groups": lambda item: [],
         "equipment_secondary_groups": lambda item: [],
         "equipment_aliases": lambda item: [],

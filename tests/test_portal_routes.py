@@ -3581,12 +3581,33 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn(b"Equipment Library", response.data)
         self.assertIn(b"Leg Extension", response.data)
         self.assertIn(b"New at Dreamz", response.data)
+        self.assertIn(b"Quick filters", response.data)
+        self.assertIn(b"href=\"/equipment?q=benen\"", response.data)
 
         detail = self.client.get("/equipment/leg-extension")
         self.assertEqual(detail.status_code, 200)
         self.assertIn(b"quadriceps/front thighs", detail.data)
         self.assertIn(b"/static/equipment/ai-promo/leg-extension.png", detail.data)
         self.assertNotIn(b"No image available yet", detail.data)
+
+    def test_member_equipment_search_is_forgiving_and_relaxes_overfiltered_results(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+
+        dutch_legs = self.client.get("/equipment?q=benen")
+        self.assertEqual(dutch_legs.status_code, 200)
+        self.assertIn(b"Leg Extension", dutch_legs.data)
+        self.assertIn(b"Seated Leg Curl", dutch_legs.data)
+
+        dutch_back = self.client.get("/equipment?q=rug")
+        self.assertEqual(dutch_back.status_code, 200)
+        self.assertIn(b"High Row", dutch_back.data)
+
+        overfiltered = self.client.get("/equipment?q=leg&category=cardio")
+        self.assertEqual(overfiltered.status_code, 200)
+        self.assertIn(b"No exact match was found", overfiltered.data)
+        self.assertIn(b"Leg Extension", overfiltered.data)
+        self.assertIn(b"Clear filters", overfiltered.data)
 
     def test_staff_equipment_page_and_save_work(self):
         self.login_staff("admin")
