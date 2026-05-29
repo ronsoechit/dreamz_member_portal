@@ -3566,6 +3566,8 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(leg_extension.visibility, "members")
         self.assertTrue(leg_extension.available_for_ai_coach)
         self.assertIn("Quadriceps", leg_extension.primary_muscle_groups)
+        self.assertEqual(leg_extension.image_url, "/static/equipment/ai-promo/leg-extension.png")
+        self.assertIn("/static/equipment/ai-promo/leg-extension-standard.png", leg_extension.gallery_images)
         self.assertIn("lat pulldown", high_row.exercise_aliases)
 
     def test_member_equipment_library_and_detail_show_seeded_items(self):
@@ -3581,7 +3583,8 @@ class PortalRouteTests(unittest.TestCase):
         detail = self.client.get("/equipment/leg-extension")
         self.assertEqual(detail.status_code, 200)
         self.assertIn(b"quadriceps/front thighs", detail.data)
-        self.assertIn(b"No image available yet", detail.data)
+        self.assertIn(b"/static/equipment/ai-promo/leg-extension.png", detail.data)
+        self.assertNotIn(b"No image available yet", detail.data)
 
     def test_staff_equipment_page_and_save_work(self):
         self.login_staff("admin")

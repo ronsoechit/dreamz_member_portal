@@ -1028,6 +1028,8 @@ EQUIPMENT_CATEGORIES = [
     ("accessories", "Accessories", 100),
 ]
 EQUIPMENT_SEED_PATH = Path(__file__).resolve().parent / "data" / "equipment_seed.json"
+EQUIPMENT_IMAGE_MANIFEST_PATH = Path(__file__).resolve().parent / "data" / "equipment_image_manifest.json"
+EQUIPMENT_AI_PROMO_PREFIX = "/static/equipment/ai-promo/"
 LEGAL_DOCUMENT_TYPES = [
     "membership_application_form",
     "general_terms",
@@ -2525,6 +2527,33 @@ def equipment_gallery(item):
     return gallery
 
 
+def load_equipment_image_manifest():
+    if not EQUIPMENT_IMAGE_MANIFEST_PATH.exists():
+        return {}
+    try:
+        manifest = json.loads(EQUIPMENT_IMAGE_MANIFEST_PATH.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        app.logger.exception("Equipment image manifest could not be read.")
+        return {}
+    return manifest if isinstance(manifest, dict) else {}
+
+
+def equipment_image_defaults(slug, manifest=None):
+    manifest = manifest if manifest is not None else load_equipment_image_manifest()
+    raw = manifest.get(slug) if isinstance(manifest, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        "image_url": raw.get("imageUrl"),
+        "thumbnail_url": raw.get("thumbnailUrl") or raw.get("imageUrl"),
+        "gallery_images": json_list_text(raw.get("galleryImages")),
+    }
+
+
+def equipment_uses_ai_promo_image(item):
+    return bool(item and item.image_url and item.image_url.startswith(EQUIPMENT_AI_PROMO_PREFIX))
+
+
 def member_visible_equipment_query():
     return EquipmentItem.query.filter(
         EquipmentItem.status.in_(["active", "out_of_service"]),
@@ -2568,6 +2597,7 @@ def equipment_seed_defaults(item):
 
 
 def seed_equipment_library():
+    image_manifest = load_equipment_image_manifest()
     for key, name, sort_order in EQUIPMENT_CATEGORIES:
         category = EquipmentCategory.query.filter_by(key=key).first()
         if not category:
@@ -2591,6 +2621,10 @@ def seed_equipment_library():
 
     for raw_item in seed_items:
         defaults = equipment_seed_defaults(raw_item)
+        image_defaults = equipment_image_defaults(defaults["slug"], image_manifest)
+        for field, value in image_defaults.items():
+            if value and defaults.get(field) in (None, "", "[]"):
+                defaults[field] = value
         item = EquipmentItem.query.filter_by(slug=defaults["slug"]).first()
         if not item:
             item = EquipmentItem(**defaults)
@@ -2668,6 +2702,7 @@ def equipment_admin_context():
         "equipment_aliases": lambda item: json_list(item.exercise_aliases),
         "equipment_description": equipment_item_description,
         "equipment_category_label": equipment_category_label,
+        "equipment_uses_ai_promo_image": equipment_uses_ai_promo_image,
     }
 
 
@@ -2691,6 +2726,7 @@ def empty_equipment_admin_context():
         "equipment_aliases": lambda item: [],
         "equipment_description": equipment_item_description,
         "equipment_category_label": equipment_category_label,
+        "equipment_uses_ai_promo_image": equipment_uses_ai_promo_image,
     }
 
 

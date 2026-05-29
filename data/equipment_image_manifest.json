@@ -1,0 +1,442 @@
+{
+  "45-degree-back-extension": {
+    "imageUrl": "/static/equipment/ai-promo/45-degree-back-extension.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/45-degree-back-extension.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "45-degree-leg-press": {
+    "imageUrl": "/static/equipment/ai-promo/45-degree-leg-press.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/45-degree-leg-press.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "ab-coaster": {
+    "imageUrl": "/static/equipment/ai-promo/ab-coaster.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/ab-coaster.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "abdominal-isolator": {
+    "imageUrl": "/static/equipment/ai-promo/abdominal-isolator.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/abdominal-isolator.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "abductor": {
+    "imageUrl": "/static/equipment/ai-promo/abductor.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/abductor.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "adductor": {
+    "imageUrl": "/static/equipment/ai-promo/adductor.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/adductor.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "adjustable-crossover": {
+    "imageUrl": "/static/equipment/ai-promo/adjustable-crossover.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/adjustable-crossover.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "air-bike": {
+    "imageUrl": "/static/equipment/ai-promo/air-bike.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/air-bike.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "arc-trainer": {
+    "imageUrl": "/static/equipment/ai-promo/arc-trainer.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/arc-trainer.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "assist-dip-chin": {
+    "imageUrl": "/static/equipment/ai-promo/assist-dip-chin.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/assist-dip-chin.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "back-extension": {
+    "imageUrl": "/static/equipment/ai-promo/back-extension.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/back-extension.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "chest-press": {
+    "imageUrl": "/static/equipment/ai-promo/chest-press.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/chest-press.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "dumbbells": {
+    "imageUrl": "/static/equipment/ai-promo/dumbbells.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/dumbbells.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true,
+    "galleryImages": [
+      "/static/equipment/ai-promo/chrome-dumbbells.png"
+    ]
+  },
+  "rowing-machine": {
+    "imageUrl": "/static/equipment/ai-promo/rowing-machine.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/rowing-machine.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "curve-treadmill": {
+    "imageUrl": "/static/equipment/ai-promo/curve-treadmill.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/curve-treadmill.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "fitness-tree": {
+    "imageUrl": "/static/equipment/ai-promo/fitness-tree.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/fitness-tree.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "fixed-straight-barbells": {
+    "imageUrl": "/static/equipment/ai-promo/fixed-straight-barbells.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/fixed-straight-barbells.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "functional-trainer": {
+    "imageUrl": "/static/equipment/ai-promo/functional-trainer.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/functional-trainer.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "ghd": {
+    "imageUrl": "/static/equipment/ai-promo/ghd.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/ghd.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "hack-squat-hackslide": {
+    "imageUrl": "/static/equipment/ai-promo/hack-squat-hackslide.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/hack-squat-hackslide.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "plates": {
+    "imageUrl": "/static/equipment/ai-promo/plates.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/plates.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "high-row": {
+    "imageUrl": "/static/equipment/ai-promo/high-row.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/high-row.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "hip-lift-hip-thrust": {
+    "imageUrl": "/static/equipment/ai-promo/hip-lift-hip-thrust.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/hip-lift-hip-thrust.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "incline-lever-row": {
+    "imageUrl": "/static/equipment/ai-promo/incline-lever-row.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/incline-lever-row.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "incline-press": {
+    "imageUrl": "/static/equipment/ai-promo/incline-press.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/incline-press.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "lateral-raise": {
+    "imageUrl": "/static/equipment/ai-promo/lateral-raise.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/lateral-raise.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "leg-extension": {
+    "imageUrl": "/static/equipment/ai-promo/leg-extension.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/leg-extension.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true,
+    "galleryImages": [
+      "/static/equipment/ai-promo/leg-extension-standard.png"
+    ]
+  },
+  "leg-press": {
+    "imageUrl": "/static/equipment/ai-promo/leg-press.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/leg-press.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "long-pull": {
+    "imageUrl": "/static/equipment/ai-promo/long-pull.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/long-pull.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "elliptical": {
+    "imageUrl": "/static/equipment/ai-promo/elliptical.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/elliptical.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "recumbent-bike": {
+    "imageUrl": "/static/equipment/ai-promo/recumbent-bike.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/recumbent-bike.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "commercial-treadmill": {
+    "imageUrl": "/static/equipment/ai-promo/commercial-treadmill.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/commercial-treadmill.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "upright-bike": {
+    "imageUrl": "/static/equipment/ai-promo/upright-bike.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/upright-bike.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "medicine-balls": {
+    "imageUrl": "/static/equipment/ai-promo/medicine-balls.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/medicine-balls.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "glute-master-glute-kickback-machine": {
+    "imageUrl": "/static/equipment/ai-promo/glute-master-glute-kickback-machine.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/glute-master-glute-kickback-machine.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "plate-loaded-high-row-lat-pulldown": {
+    "imageUrl": "/static/equipment/ai-promo/plate-loaded-high-row-lat-pulldown.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/plate-loaded-high-row-lat-pulldown.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "seated-leg-curl": {
+    "imageUrl": "/static/equipment/ai-promo/seated-leg-curl.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/seated-leg-curl.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "olympic-decline-bench": {
+    "imageUrl": "/static/equipment/ai-promo/olympic-decline-bench.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/olympic-decline-bench.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "olympic-flat-bench": {
+    "imageUrl": "/static/equipment/ai-promo/olympic-flat-bench.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/olympic-flat-bench.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "olympic-incline-bench": {
+    "imageUrl": "/static/equipment/ai-promo/olympic-incline-bench.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/olympic-incline-bench.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "prone-leg-curl": {
+    "imageUrl": "/static/equipment/ai-promo/prone-leg-curl.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/prone-leg-curl.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "pulldown": {
+    "imageUrl": "/static/equipment/ai-promo/pulldown.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/pulldown.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "rear-delt-pec-fly": {
+    "imageUrl": "/static/equipment/ai-promo/rear-delt-pec-fly.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/rear-delt-pec-fly.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "rotary-torso": {
+    "imageUrl": "/static/equipment/ai-promo/rotary-torso.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/rotary-torso.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "slam-balls": {
+    "imageUrl": "/static/equipment/ai-promo/slam-balls.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/slam-balls.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "seated-calf": {
+    "imageUrl": "/static/equipment/ai-promo/seated-calf.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/seated-calf.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "seated-chest-press": {
+    "imageUrl": "/static/equipment/ai-promo/seated-chest-press.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/seated-chest-press.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "seated-dip": {
+    "imageUrl": "/static/equipment/ai-promo/seated-dip.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/seated-dip.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "seated-preacher-curl": {
+    "imageUrl": "/static/equipment/ai-promo/seated-preacher-curl.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/seated-preacher-curl.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "seated-row": {
+    "imageUrl": "/static/equipment/ai-promo/seated-row.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/seated-row.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "seated-standing-shrug": {
+    "imageUrl": "/static/equipment/ai-promo/seated-standing-shrug.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/seated-standing-shrug.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "seated-triceps": {
+    "imageUrl": "/static/equipment/ai-promo/seated-triceps.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/seated-triceps.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "shoulder-press": {
+    "imageUrl": "/static/equipment/ai-promo/shoulder-press.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/shoulder-press.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "sissy-squat-station": {
+    "imageUrl": "/static/equipment/ai-promo/sissy-squat-station.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/sissy-squat-station.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "smith-machine": {
+    "imageUrl": "/static/equipment/ai-promo/smith-machine.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/smith-machine.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "spinning-bike": {
+    "imageUrl": "/static/equipment/ai-promo/spinning-bike.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/spinning-bike.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "squat-lunge": {
+    "imageUrl": "/static/equipment/ai-promo/squat-lunge.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/squat-lunge.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "standing-calf": {
+    "imageUrl": "/static/equipment/ai-promo/standing-calf.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/standing-calf.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "tire-flip": {
+    "imageUrl": "/static/equipment/ai-promo/tire-flip.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/tire-flip.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "vertical-knee-up-dip": {
+    "imageUrl": "/static/equipment/ai-promo/vertical-knee-up-dip.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/vertical-knee-up-dip.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "v-squat": {
+    "imageUrl": "/static/equipment/ai-promo/v-squat.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/v-squat.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  },
+  "waist-board-dual-twister": {
+    "imageUrl": "/static/equipment/ai-promo/waist-board-dual-twister.png",
+    "thumbnailUrl": "/static/equipment/ai-promo/waist-board-dual-twister.png",
+    "imageType": "ai_promo",
+    "source": "Dreamz AI promo image",
+    "canBeReplacedByAdmin": true
+  }
+}

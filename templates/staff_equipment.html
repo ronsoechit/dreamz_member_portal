@@ -131,6 +131,7 @@
               <div class="flex flex-wrap gap-2 text-xs">
                 <span class="rounded-full border border-gray-700 bg-gray-950 px-2 py-1 text-gray-200">{{ t('equipment_status_' ~ item.status) }}</span>
                 <span class="rounded-full border border-gray-700 bg-gray-950 px-2 py-1 text-gray-200">{{ t('equipment_visibility_' ~ item.visibility) }}</span>
+                {% if equipment_uses_ai_promo_image(item) %}<span class="rounded-full border border-blue-400/30 bg-blue-500/10 px-2 py-1 font-semibold text-blue-100">{{ t('equipment_ai_promo_image') }}</span>{% endif %}
                 {% if item.is_new %}<span class="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-1 font-semibold text-yellow-100">{{ t('equipment_new_arrival') }}</span>{% endif %}
               </div>
             </div>
