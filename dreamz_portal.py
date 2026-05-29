@@ -2514,6 +2514,56 @@ def equipment_item_description(item, language=None):
     return localized_json_text(item.usage_description, language) or translated_text("equipment_no_description", language or current_language())
 
 
+def equipment_primary_muscle_text(item, language=None):
+    language = normalize_language(language or (current_language() if has_request_context() else DEFAULT_LANGUAGE))
+    return ", ".join(json_list(item.primary_muscle_groups)[:3]) or translated_text("not_available", language)
+
+
+def equipment_setup_guidance(item, language=None):
+    language = normalize_language(language or (current_language() if has_request_context() else DEFAULT_LANGUAGE))
+    existing = localized_json_text(item.setup_instructions, language)
+    if existing:
+        return existing
+    key = "equipment_auto_setup_cardio" if item.category_key == "cardio" else "equipment_auto_setup"
+    return translated_text(
+        key,
+        language,
+        name=item.name or translated_text("equipment", language),
+        primary=equipment_primary_muscle_text(item, language),
+        category=equipment_category_label(item.category_key, language),
+    )
+
+
+def equipment_tips_guidance(item, language=None):
+    language = normalize_language(language or (current_language() if has_request_context() else DEFAULT_LANGUAGE))
+    existing = localized_json_text(item.beginner_tips, language)
+    if existing:
+        return existing
+    return translated_text(
+        "equipment_auto_tips",
+        language,
+        name=item.name or translated_text("equipment", language),
+        primary=equipment_primary_muscle_text(item, language),
+    )
+
+
+def equipment_mistakes_guidance(item, language=None):
+    language = normalize_language(language or (current_language() if has_request_context() else DEFAULT_LANGUAGE))
+    existing = localized_json_text(item.common_mistakes, language)
+    if existing:
+        return existing
+    return translated_text("equipment_auto_mistakes", language)
+
+
+def equipment_alternatives_guidance(item, language=None):
+    language = normalize_language(language or (current_language() if has_request_context() else DEFAULT_LANGUAGE))
+    return translated_text(
+        "equipment_auto_alternatives",
+        language,
+        primary=equipment_primary_muscle_text(item, language),
+    )
+
+
 def equipment_item_aliases(item):
     aliases = json_list(item.exercise_aliases)
     aliases.extend([item.name or "", item.slug or ""])
@@ -6769,31 +6819,42 @@ def is_equipment_question(message):
 
 def coach_equipment_direct_reply(member, user_message, language=None):
     language = language or current_language()
-    text = (user_message or "").lower()
 
     def matching_items():
         query = member_visible_equipment_query().filter(EquipmentItem.available_for_ai_coach.is_(True))
         items = query.order_by(EquipmentItem.is_new.desc(), EquipmentItem.sort_order.asc(), EquipmentItem.name.asc()).all()
-        specific = []
-        for item in items:
-            search_values = [item.name.lower(), item.category_key.lower(), (item.subcategory or "").lower()]
-            search_values.extend(alias.lower() for alias in equipment_item_aliases(item))
-            search_values.extend(group.lower() for group in json_list(item.primary_muscle_groups) + json_list(item.secondary_muscle_groups))
-            if any(value and value in text for value in search_values):
-                specific.append(item)
+        normalized_message = normalized_equipment_search_text(user_message)
+        direct_name_matches = [
+            item for item in items
+            if item.name and normalized_equipment_search_text(item.name) in normalized_message
+        ]
+        direct_alias_matches = [
+            item for item in items
+            if any(
+                normalized_equipment_search_text(alias) and normalized_equipment_search_text(alias) in normalized_message
+                for alias in equipment_item_aliases(item)
+            )
+        ]
+        if direct_name_matches or direct_alias_matches:
+            return list(dict.fromkeys(direct_name_matches + direct_alias_matches))[:6]
+        specific = [item for item in items if equipment_matches_search(item, user_message)]
+        if specific and len(specific) != len(items):
+            return specific[:6]
         return specific or items[:8]
 
     items = portal_context_value("direct_equipment_items", [], matching_items)
     if not items:
         return translated_text("coach_portal_equipment_none", language)
     lines = [translated_text("coach_portal_equipment_summary", language), ""]
-    for item in items[:8]:
-        muscles = ", ".join(json_list(item.primary_muscle_groups)[:3]) or translated_text("not_available", language)
+    for item in items[:4]:
         status = translated_text(f"equipment_status_{item.status}", language)
-        lines.append(
-            f"- {item.name}: {equipment_category_label(item.category_key, language)}; "
-            f"{translated_text('equipment_primary_muscles', language).lower()}: {muscles}; {status}."
-        )
+        lines.append(f"{item.name} - {equipment_category_label(item.category_key, language)} - {status}")
+        lines.append(f"- {equipment_item_description(item, language)}")
+        lines.append(f"- {translated_text('equipment_primary_muscles', language)}: {equipment_primary_muscle_text(item, language)}")
+        lines.append(f"- {translated_text('equipment_setup', language)}: {equipment_setup_guidance(item, language)}")
+        lines.append(f"- {translated_text('equipment_tips', language)}: {equipment_tips_guidance(item, language)}")
+        lines.append(f"- {translated_text('equipment_common_mistakes', language)}: {equipment_mistakes_guidance(item, language)}")
+        lines.append("")
     lines.extend(["", translated_text("coach_portal_equipment_open_library", language)])
     return "\n".join(lines)
 
@@ -9346,6 +9407,7 @@ def member_equipment_detail(slug):
     ensure_runtime_schema()
     seed_equipment_library()
     item = member_visible_equipment_query().filter_by(slug=slug).first_or_404()
+    language = current_language()
     return render_template(
         "equipment_detail.html",
         member=member,
@@ -9354,12 +9416,13 @@ def member_equipment_detail(slug):
         secondary_groups=json_list(item.secondary_muscle_groups),
         aliases=equipment_item_aliases(item),
         gallery=equipment_gallery(item),
-        description=equipment_item_description(item),
-        category_label=equipment_category_label(item.category_key),
-        setup_text=localized_json_text(item.setup_instructions),
-        tips_text=localized_json_text(item.beginner_tips),
-        mistakes_text=localized_json_text(item.common_mistakes),
+        description=equipment_item_description(item, language),
+        category_label=equipment_category_label(item.category_key, language),
+        setup_text=equipment_setup_guidance(item, language),
+        tips_text=equipment_tips_guidance(item, language),
+        mistakes_text=equipment_mistakes_guidance(item, language),
         alternatives=json_list(item.alternatives),
+        alternatives_fallback=equipment_alternatives_guidance(item, language),
     )
 
 

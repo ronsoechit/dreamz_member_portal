@@ -3590,12 +3590,17 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn(b"New at Dreamz", response.data)
         self.assertIn(b"Quick filters", response.data)
         self.assertIn(b"href=\"/equipment?q=benen\"", response.data)
+        self.assertIn(b"Ask coach about equipment", response.data)
+        self.assertNotIn(b"Ask coach about this machine</a>", response.data)
 
         detail = self.client.get("/equipment/leg-extension")
         self.assertEqual(detail.status_code, 200)
         self.assertIn(b"quadriceps/front thighs", detail.data)
         self.assertIn(b"/static/equipment/ai-promo/leg-extension.png", detail.data)
         self.assertNotIn(b"No image available yet", detail.data)
+        self.assertIn(b"Ask coach about this machine", detail.data)
+        self.assertIn(b"Start light", detail.data)
+        self.assertNotIn(b"Details can be added by the Dreamz staff team", detail.data)
 
     def test_member_equipment_search_is_forgiving_and_relaxes_overfiltered_results(self):
         self.add_member(member_id="13659", name="Ron Soechit")
@@ -3674,6 +3679,8 @@ class PortalRouteTests(unittest.TestCase):
         reply = coach_equipment_direct_reply(member, "Welke leg extension apparaten zijn er?", "nl")
         self.assertIn("Leg Extension", reply)
         self.assertIn("Apparatenbibliotheek", reply)
+        self.assertIn("Instellen", reply)
+        self.assertIn("Veelgemaakte fouten", reply)
 
 
 if __name__ == "__main__":

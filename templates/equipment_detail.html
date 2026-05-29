@@ -96,7 +96,7 @@
       {% for alternative in alternatives %}
         <span class="rounded-full border border-gray-700 bg-gray-950 px-3 py-1 text-sm text-gray-200">{{ alternative }}</span>
       {% else %}
-        <span class="text-sm text-gray-400">{{ t('equipment_no_description') }}</span>
+        <span class="text-sm text-gray-300">{{ alternatives_fallback }}</span>
       {% endfor %}
     </div>
     <h3 class="mt-5 text-sm font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_aliases') }}</h3>
