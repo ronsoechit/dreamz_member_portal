@@ -3628,24 +3628,23 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn(b"Leg Extension", overfiltered.data)
         self.assertIn(b"Clear filters", overfiltered.data)
 
-    def test_member_equipment_repairs_seeded_items_when_catalog_is_not_visible(self):
+    def test_member_equipment_respects_staff_hidden_seeded_items(self):
         self.add_member(member_id="13659", name="Ron Soechit")
         seed_equipment_library()
-        EquipmentItem.query.update({
-            EquipmentItem.status: "hidden",
-            EquipmentItem.visibility: "staff_only",
-        })
+        leg_extension = EquipmentItem.query.filter_by(slug="leg-extension").one()
+        leg_extension.status = "hidden"
+        leg_extension.visibility = "staff_only"
+        leg_extension.available_for_ai_coach = False
         db.session.commit()
         self.login_as("13659")
 
         response = self.client.get("/equipment")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Leg Extension", response.data)
         self.assertNotIn(b"No equipment found", response.data)
-        leg_extension = EquipmentItem.query.filter_by(slug="leg-extension").first()
-        self.assertEqual(leg_extension.status, "active")
-        self.assertEqual(leg_extension.visibility, "members")
+        self.assertNotIn(b"Leg Extension", response.data)
+        self.assertEqual(EquipmentItem.query.filter_by(slug="leg-extension").one().status, "hidden")
+        self.assertEqual(EquipmentItem.query.filter_by(slug="leg-extension").one().visibility, "staff_only")
 
     def test_staff_equipment_page_and_save_work(self):
         self.login_staff("admin")
@@ -3653,6 +3652,9 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Equipment Management", response.data)
         self.assertIn(b"Leg Extension", response.data)
+        self.assertIn(b"Bulk actions", response.data)
+        self.assertIn(b"Clear New arrival for all filtered items", response.data)
+        self.assertIn(b"AI promo image", response.data)
 
         save_response = self.client.post(
             "/staff/equipment/save",
@@ -3670,6 +3672,49 @@ class PortalRouteTests(unittest.TestCase):
         )
         self.assertEqual(save_response.status_code, 200)
         self.assertIsNotNone(EquipmentItem.query.filter_by(slug="test-cable-handle").first())
+
+    def test_staff_equipment_bulk_clear_new_and_archive_respect_member_visibility(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_staff("admin")
+        seed_equipment_library()
+        leg_extension = EquipmentItem.query.filter_by(slug="leg-extension").one()
+        original_image = leg_extension.image_url
+
+        clear_response = self.client.post(
+            "/staff/equipment/bulk",
+            data=self.csrf_form_data(
+                bulk_action="clear_new",
+                bulk_scope="matching",
+                new="1",
+            ),
+            follow_redirects=True,
+        )
+        self.assertEqual(clear_response.status_code, 200)
+        leg_extension = EquipmentItem.query.filter_by(slug="leg-extension").one()
+        self.assertFalse(leg_extension.is_new)
+        self.assertEqual(leg_extension.image_url, original_image)
+
+        seed_equipment_library()
+        self.assertFalse(EquipmentItem.query.filter_by(slug="leg-extension").one().is_new)
+
+        archive_response = self.client.post(
+            "/staff/equipment/bulk",
+            data=self.csrf_form_data(
+                bulk_action="archive",
+                bulk_scope="selected",
+                item_ids=str(leg_extension.id),
+            ),
+            follow_redirects=True,
+        )
+        self.assertEqual(archive_response.status_code, 200)
+        leg_extension = EquipmentItem.query.filter_by(slug="leg-extension").one()
+        self.assertEqual(leg_extension.status, "hidden")
+        self.assertEqual(leg_extension.visibility, "staff_only")
+        self.assertFalse(leg_extension.available_for_ai_coach)
+
+        self.login_as("13659")
+        member_response = self.client.get("/equipment/leg-extension")
+        self.assertEqual(member_response.status_code, 404)
 
     def test_equipment_matches_exercise_and_enters_coach_context(self):
         member = self.add_member(member_id="13659", name="Ron Soechit")

@@ -98,7 +98,7 @@
             <h2 class="text-lg font-semibold text-white">{{ item.name }}</h2>
             <div class="mt-1 text-xs uppercase tracking-wide text-gray-400">{{ equipment_category_label(item.category_key) }}{% if item.subcategory %} · {{ item.subcategory }}{% endif %}</div>
           </div>
-          {% if item.is_new %}
+          {% if equipment_is_new_arrival(item) %}
             <span class="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-1 text-xs font-semibold text-yellow-100">{{ item.promo_label or t('equipment_new_at_dreamz') }}</span>
           {% endif %}
         </div>

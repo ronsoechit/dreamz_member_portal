@@ -2683,6 +2683,25 @@ def equipment_uses_ai_promo_image(item):
     return bool(item and item.image_url and item.image_url.startswith(EQUIPMENT_AI_PROMO_PREFIX))
 
 
+def equipment_has_custom_image(item):
+    return bool(item and item.image_url and not equipment_uses_ai_promo_image(item))
+
+
+def equipment_image_status(item):
+    if equipment_has_custom_image(item):
+        return "custom"
+    if equipment_uses_ai_promo_image(item):
+        return "ai_promo"
+    return "missing"
+
+
+def equipment_is_new_arrival(item, reference_date=None):
+    if not item or not item.is_new:
+        return False
+    reference_date = reference_date or local_datetime(datetime.now(timezone.utc)).date()
+    return not item.new_until or item.new_until >= reference_date
+
+
 def member_visible_equipment_query():
     return EquipmentItem.query.filter(
         EquipmentItem.status.in_(["active", "out_of_service"]),
@@ -2771,6 +2790,10 @@ def seed_equipment_library():
 
 
 def repair_seeded_equipment_visibility_if_empty():
+    # Do not undo deliberate staff/admin hidden/archive decisions. The old repair
+    # path was only intended for an empty catalog after seed/import problems.
+    if EquipmentItem.query.count():
+        return False
     if member_visible_equipment_query().first():
         return False
     if not EQUIPMENT_SEED_PATH.exists():
@@ -2799,39 +2822,80 @@ def repair_seeded_equipment_visibility_if_empty():
     return repaired
 
 
+def equipment_admin_filter_values(source=None):
+    source = source or request.args
+    return {
+        "category": source.get("category", "").strip(),
+        "muscle": source.get("muscle", "").strip(),
+        "status": source.get("status", "").strip(),
+        "visibility": source.get("visibility", "").strip() or source.get("visible", "").strip(),
+        "brand": source.get("brand", "").strip(),
+        "q": source.get("q", "").strip(),
+        "new": source.get("new", "").strip(),
+        "ai": source.get("ai", "").strip(),
+        "image": source.get("image", "").strip(),
+    }
+
+
+def equipment_admin_query(filters=None):
+    filters = filters or equipment_admin_filter_values()
+    query = EquipmentItem.query
+    if filters["category"]:
+        query = query.filter(EquipmentItem.category_key == filters["category"])
+    if filters["status"]:
+        query = query.filter(EquipmentItem.status == filters["status"])
+    if filters["visibility"]:
+        visibility = filters["visibility"]
+        if visibility == "members_public":
+            query = query.filter(EquipmentItem.visibility.in_(["members", "public"]))
+        elif visibility in EQUIPMENT_VISIBILITY_OPTIONS:
+            query = query.filter(EquipmentItem.visibility == visibility)
+    if filters["brand"]:
+        query = query.filter(EquipmentItem.brand == filters["brand"])
+    if filters["muscle"]:
+        query = query.filter(db.or_(
+            EquipmentItem.primary_muscle_groups.like(f"%{filters['muscle']}%"),
+            EquipmentItem.secondary_muscle_groups.like(f"%{filters['muscle']}%"),
+        ))
+    if filters["new"] == "1":
+        query = query.filter(EquipmentItem.is_new.is_(True))
+    elif filters["new"] == "0":
+        query = query.filter(EquipmentItem.is_new.is_(False))
+    if filters["ai"] == "1":
+        query = query.filter(EquipmentItem.available_for_ai_coach.is_(True))
+    elif filters["ai"] == "0":
+        query = query.filter(EquipmentItem.available_for_ai_coach.is_(False))
+    if filters["image"] == "has":
+        query = query.filter(EquipmentItem.image_url.isnot(None), EquipmentItem.image_url != "")
+    elif filters["image"] == "missing":
+        query = query.filter(db.or_(EquipmentItem.image_url.is_(None), EquipmentItem.image_url == ""))
+    elif filters["image"] == "ai_promo":
+        query = query.filter(EquipmentItem.image_url.like(f"{EQUIPMENT_AI_PROMO_PREFIX}%"))
+    elif filters["image"] == "custom":
+        query = query.filter(EquipmentItem.image_url.isnot(None), EquipmentItem.image_url != "")
+        query = query.filter(db.not_(EquipmentItem.image_url.like(f"{EQUIPMENT_AI_PROMO_PREFIX}%")))
+    if filters["q"]:
+        like = f"%{filters['q']}%"
+        query = query.filter(db.or_(
+            EquipmentItem.name.like(like),
+            EquipmentItem.slug.like(like),
+            EquipmentItem.brand.like(like),
+            EquipmentItem.subcategory.like(like),
+            EquipmentItem.exercise_aliases.like(like),
+        ))
+    return query
+
+
+def equipment_current_filter_redirect():
+    filters = equipment_admin_filter_values(request.form)
+    return redirect(url_for("staff_equipment", **{key: value for key, value in filters.items() if value}))
+
+
 def equipment_admin_context():
     ensure_runtime_schema()
     seed_equipment_library()
-    category_filter = request.args.get("category", "").strip()
-    muscle_filter = request.args.get("muscle", "").strip()
-    status_filter = request.args.get("status", "").strip()
-    brand_filter = request.args.get("brand", "").strip()
-    search_query = request.args.get("q", "").strip()
-    new_filter = request.args.get("new", "").strip()
-    visible_filter = request.args.get("visible", "").strip()
-    query = EquipmentItem.query
-    if category_filter:
-        query = query.filter(EquipmentItem.category_key == category_filter)
-    if status_filter:
-        query = query.filter(EquipmentItem.status == status_filter)
-    if brand_filter:
-        query = query.filter(EquipmentItem.brand == brand_filter)
-    if muscle_filter:
-        query = query.filter(db.or_(
-            EquipmentItem.primary_muscle_groups.like(f"%{muscle_filter}%"),
-            EquipmentItem.secondary_muscle_groups.like(f"%{muscle_filter}%"),
-        ))
-    if new_filter == "1":
-        query = query.filter(EquipmentItem.is_new.is_(True))
-    if visible_filter == "members":
-        query = query.filter(EquipmentItem.visibility.in_(["members", "public"]))
-    if search_query:
-        like = f"%{search_query}%"
-        query = query.filter(db.or_(
-            EquipmentItem.name.like(like),
-            EquipmentItem.brand.like(like),
-            EquipmentItem.exercise_aliases.like(like),
-        ))
+    filters = equipment_admin_filter_values()
+    query = equipment_admin_query(filters)
     items = query.order_by(EquipmentItem.sort_order.asc(), EquipmentItem.name.asc()).all()
     categories = EquipmentCategory.query.order_by(EquipmentCategory.sort_order.asc(), EquipmentCategory.name.asc()).all()
     brands = [
@@ -2848,19 +2912,25 @@ def equipment_admin_context():
         "equipment_visibility_options": EQUIPMENT_VISIBILITY_OPTIONS,
         "equipment_muscle_groups": EQUIPMENT_MUSCLE_GROUPS,
         "equipment_brands": brands,
-        "selected_category": category_filter,
-        "selected_muscle": muscle_filter,
-        "selected_status": status_filter,
-        "selected_brand": brand_filter,
-        "selected_new": new_filter,
-        "selected_visible": visible_filter,
-        "equipment_search_query": search_query,
+        "selected_category": filters["category"],
+        "selected_muscle": filters["muscle"],
+        "selected_status": filters["status"],
+        "selected_visibility": filters["visibility"],
+        "selected_brand": filters["brand"],
+        "selected_new": filters["new"],
+        "selected_ai": filters["ai"],
+        "selected_image": filters["image"],
+        "equipment_search_query": filters["q"],
+        "equipment_filter_values": filters,
+        "equipment_edit_item": db.session.get(EquipmentItem, parse_optional_int(request.args.get("edit"))) if request.args.get("edit") else None,
         "equipment_primary_groups": lambda item: json_list(item.primary_muscle_groups),
         "equipment_secondary_groups": lambda item: json_list(item.secondary_muscle_groups),
         "equipment_aliases": lambda item: json_list(item.exercise_aliases),
         "equipment_description": equipment_item_description,
         "equipment_category_label": equipment_category_label,
         "equipment_uses_ai_promo_image": equipment_uses_ai_promo_image,
+        "equipment_image_status": equipment_image_status,
+        "equipment_is_new_arrival": equipment_is_new_arrival,
     }
 
 
@@ -2875,16 +2945,22 @@ def empty_equipment_admin_context():
         "selected_category": request.args.get("category", "").strip(),
         "selected_muscle": request.args.get("muscle", "").strip(),
         "selected_status": request.args.get("status", "").strip(),
+        "selected_visibility": request.args.get("visibility", "").strip(),
         "selected_brand": request.args.get("brand", "").strip(),
         "selected_new": request.args.get("new", "").strip(),
-        "selected_visible": request.args.get("visible", "").strip(),
+        "selected_ai": request.args.get("ai", "").strip(),
+        "selected_image": request.args.get("image", "").strip(),
         "equipment_search_query": request.args.get("q", "").strip(),
+        "equipment_filter_values": equipment_admin_filter_values(),
+        "equipment_edit_item": None,
         "equipment_primary_groups": lambda item: [],
         "equipment_secondary_groups": lambda item: [],
         "equipment_aliases": lambda item: [],
         "equipment_description": equipment_item_description,
         "equipment_category_label": equipment_category_label,
         "equipment_uses_ai_promo_image": equipment_uses_ai_promo_image,
+        "equipment_image_status": equipment_image_status,
+        "equipment_is_new_arrival": equipment_is_new_arrival,
     }
 
 
@@ -3000,6 +3076,7 @@ def equipment_member_context():
         "equipment_gallery": equipment_gallery,
         "equipment_description": equipment_item_description,
         "equipment_category_label": equipment_category_label,
+        "equipment_is_new_arrival": equipment_is_new_arrival,
     }
 
 
@@ -3020,6 +3097,7 @@ def empty_equipment_member_context():
         "equipment_gallery": equipment_gallery,
         "equipment_description": equipment_item_description,
         "equipment_category_label": equipment_category_label,
+        "equipment_is_new_arrival": equipment_is_new_arrival,
     }
 
 
@@ -8639,6 +8717,10 @@ def member_dashboard_context(member, staff_admin_view=False):
         lambda: (
             member_visible_equipment_query()
             .filter(EquipmentItem.is_new.is_(True))
+            .filter(db.or_(
+                EquipmentItem.new_until.is_(None),
+                EquipmentItem.new_until >= local_datetime(datetime.now(timezone.utc)).date(),
+            ))
             .order_by(EquipmentItem.sort_order.asc(), EquipmentItem.name.asc())
             .limit(4)
             .all()
@@ -9342,7 +9424,7 @@ def staff_equipment_save():
         db.session.add(item)
     requested_slug = request.form.get("slug", "").strip() or slugify(name)
     item.name = name
-    item.slug = requested_slug if not item.slug else item.slug
+    item.slug = requested_slug
     item.brand = request.form.get("brand", "").strip() or None
     item.line = request.form.get("line", "").strip() or None
     item.category_key = category_key
@@ -9380,7 +9462,153 @@ def staff_equipment_save():
         db.session.rollback()
         abort(400, translated_text("equipment_slug_exists", current_language()))
     flash(translated_text("equipment_saved", current_language()))
-    return redirect(url_for("staff_equipment"))
+    return equipment_current_filter_redirect()
+
+
+def duplicate_equipment_item(item):
+    base_slug = f"{item.slug}-copy"
+    slug = base_slug
+    counter = 2
+    while EquipmentItem.query.filter_by(slug=slug).first():
+        slug = f"{base_slug}-{counter}"
+        counter += 1
+    clone = EquipmentItem(
+        name=f"{item.name} Copy",
+        slug=slug,
+        brand=item.brand,
+        line=item.line,
+        category_key=item.category_key,
+        subcategory=item.subcategory,
+        primary_muscle_groups=item.primary_muscle_groups,
+        secondary_muscle_groups=item.secondary_muscle_groups,
+        usage_description=item.usage_description,
+        setup_instructions=item.setup_instructions,
+        beginner_tips=item.beginner_tips,
+        common_mistakes=item.common_mistakes,
+        alternatives=item.alternatives,
+        exercise_aliases=item.exercise_aliases,
+        image_url=item.image_url,
+        thumbnail_url=item.thumbnail_url,
+        gallery_images=item.gallery_images,
+        video_url=item.video_url,
+        demo_url=item.demo_url,
+        location_zone=item.location_zone,
+        status="hidden",
+        visibility="staff_only",
+        is_new=False,
+        new_since=None,
+        new_until=None,
+        promo_label=None,
+        available_for_ai_coach=False,
+        sort_order=(item.sort_order or 0) + 1,
+        internal_notes=item.internal_notes,
+    )
+    db.session.add(clone)
+    return clone
+
+
+def equipment_delete_block_reason(item):
+    manifest = load_equipment_image_manifest()
+    if item.slug in manifest:
+        return "manifest"
+    patterns = [item.slug, item.name]
+    for pattern in [value for value in patterns if value]:
+        like = f"%{pattern}%"
+        if CoachWorkoutExerciseLog.query.filter(db.or_(
+            CoachWorkoutExerciseLog.exercise_name.like(like),
+            CoachWorkoutExerciseLog.equipment.like(like),
+        )).first():
+            return "workout"
+        if CoachPlan.query.filter(CoachPlan.prompt_context.like(like)).first():
+            return "coach"
+        if CoachInteraction.query.filter(db.or_(
+            CoachInteraction.message.like(like),
+            CoachInteraction.context_summary.like(like),
+        )).first():
+            return "coach"
+    return None
+
+
+@app.post("/staff/equipment/bulk")
+def staff_equipment_bulk():
+    validate_csrf_token()
+    require_staff_access()
+    ensure_runtime_schema()
+    seed_equipment_library()
+
+    action = request.form.get("bulk_action", "").strip()
+    scope = request.form.get("bulk_scope", "selected").strip()
+    filters = equipment_admin_filter_values(request.form)
+    selected_ids = [
+        item_id for item_id in (parse_optional_int(raw_id) for raw_id in request.form.getlist("item_ids"))
+        if item_id
+    ]
+    if scope == "matching":
+        items = equipment_admin_query(filters).all()
+    else:
+        items = EquipmentItem.query.filter(EquipmentItem.id.in_(selected_ids)).all() if selected_ids else []
+
+    if not items:
+        flash(translated_text("equipment_bulk_none_selected", current_language()), "warning")
+        return equipment_current_filter_redirect()
+
+    changed = 0
+    skipped = 0
+    now = datetime.now()
+    for item in items:
+        if action == "clear_new":
+            item.is_new = False
+            item.new_until = None
+            changed += 1
+        elif action == "mark_new":
+            item.is_new = True
+            item.new_since = item.new_since or bonaire_today()
+            changed += 1
+        elif action in {"status_active", "status_hidden", "status_out_of_service"}:
+            item.status = action.replace("status_", "")
+            if item.status in {"hidden", "out_of_service"}:
+                item.available_for_ai_coach = False
+            changed += 1
+        elif action in {"visibility_public", "visibility_members", "visibility_staff_only"}:
+            item.visibility = action.replace("visibility_", "")
+            changed += 1
+        elif action == "ai_available":
+            item.available_for_ai_coach = True
+            changed += 1
+        elif action == "ai_unavailable":
+            item.available_for_ai_coach = False
+            changed += 1
+        elif action == "clear_promo":
+            item.promo_label = None
+            changed += 1
+        elif action == "set_promo":
+            item.promo_label = request.form.get("bulk_promo_label", "").strip() or item.promo_label
+            changed += 1
+        elif action == "archive":
+            item.status = "hidden"
+            item.visibility = "staff_only"
+            item.available_for_ai_coach = False
+            changed += 1
+        elif action == "duplicate":
+            duplicate_equipment_item(item)
+            changed += 1
+        elif action == "delete":
+            if equipment_delete_block_reason(item):
+                skipped += 1
+                continue
+            db.session.delete(item)
+            changed += 1
+            continue
+        else:
+            flash(translated_text("equipment_bulk_invalid_action", current_language()), "error")
+            return equipment_current_filter_redirect()
+        item.updated_at = now
+
+    db.session.commit()
+    if action == "delete" and skipped:
+        flash(translated_text("equipment_delete_skipped_linked", current_language(), count=skipped), "warning")
+    flash(translated_text("equipment_bulk_updated", current_language(), count=changed), "success")
+    return equipment_current_filter_redirect()
 
 
 @app.get("/equipment")
@@ -9428,6 +9656,7 @@ def member_equipment_detail(slug):
         mistakes_text=equipment_mistakes_guidance(item, language),
         alternatives=json_list(item.alternatives),
         alternatives_fallback=equipment_alternatives_guidance(item, language),
+        equipment_is_new_arrival=equipment_is_new_arrival,
     )
 
 

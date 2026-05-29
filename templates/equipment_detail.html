@@ -36,7 +36,7 @@
       {% if item.brand %}<span class="rounded-full border border-gray-700 bg-gray-950 px-3 py-1 text-gray-200">{{ item.brand }}</span>{% endif %}
       {% if item.line %}<span class="rounded-full border border-gray-700 bg-gray-950 px-3 py-1 text-gray-200">{{ item.line }}</span>{% endif %}
       {% if item.subcategory %}<span class="rounded-full border border-gray-700 bg-gray-950 px-3 py-1 text-gray-200">{{ item.subcategory }}</span>{% endif %}
-      {% if item.is_new %}<span class="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-1 font-semibold text-yellow-100">{{ item.promo_label or t('equipment_new_at_dreamz') }}</span>{% endif %}
+      {% if equipment_is_new_arrival(item) %}<span class="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-1 font-semibold text-yellow-100">{{ item.promo_label or t('equipment_new_at_dreamz') }}</span>{% endif %}
       {% if item.status == 'out_of_service' %}<span class="rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1 font-semibold text-red-100">{{ t('equipment_out_of_service') }}</span>{% endif %}
     </div>
     <p class="mt-4 text-sm leading-6 text-gray-300">{{ description }}</p>
