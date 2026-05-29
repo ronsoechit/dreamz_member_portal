@@ -198,6 +198,19 @@
   </section>
 
   <section class="home-action-grid mb-5 grid gap-3 md:grid-cols-2">
+    <div class="md:col-span-2">
+      <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('quick_to_dreamz') }}</div>
+    </div>
+    <a class="summary-card" href="{{ url_for('member_equipment_library') }}">
+      <span class="summary-label">{{ t('equipment') }}</span>
+      <strong>{{ t('equipment_view_library') }}</strong>
+      <span class="mt-1 block text-sm font-normal leading-5 text-gray-300">{{ t('dashboard_equipment_quick_body') }}</span>
+    </a>
+    <a class="summary-card" href="{{ url_for('member_group_classes') }}">
+      <span class="summary-label">{{ t('group_classes') }}</span>
+      <strong>{{ t('view_group_classes') }}</strong>
+      <span class="mt-1 block text-sm font-normal leading-5 text-gray-300">{{ t('dashboard_group_classes_quick_body') }}</span>
+    </a>
     <a class="summary-card" href="{{ url_for('member_coach') }}">
       <span class="summary-label">{{ t('next_workout') }}</span>
       <strong>{{ coach_next_session.session.focus if coach_complete and coach_next_session else t('coach_dashboard_title') }}</strong>

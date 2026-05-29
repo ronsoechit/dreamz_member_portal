@@ -3301,6 +3301,9 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(nav_order, sorted(nav_order))
         self.assertIn("Today at Dreamz", body)
         self.assertIn("My Coach", body)
+        self.assertIn("Quick to Dreamz", body)
+        self.assertIn('href="/equipment"', body)
+        self.assertIn('href="/group-classes"', body)
         self.assertNotIn("Documents 0", body)
         self.assertNotIn("Password and security", body)
         self.assertNotIn("Submit cancellation request", body)
@@ -3592,6 +3595,8 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn(b"href=\"/equipment?q=benen\"", response.data)
         self.assertIn(b"Ask coach about equipment", response.data)
         self.assertNotIn(b"Ask coach about this machine</a>", response.data)
+        self.assertIn(b'href="/equipment" aria-current="page"', response.data)
+        self.assertIn(b'href="/equipment?q=rug"', response.data)
 
         detail = self.client.get("/equipment/leg-extension")
         self.assertEqual(detail.status_code, 200)
@@ -3610,10 +3615,12 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(dutch_legs.status_code, 200)
         self.assertIn(b"Leg Extension", dutch_legs.data)
         self.assertIn(b"Seated Leg Curl", dutch_legs.data)
+        self.assertIn(b'aria-current="page"', dutch_legs.data)
 
         dutch_back = self.client.get("/equipment?q=rug")
         self.assertEqual(dutch_back.status_code, 200)
         self.assertIn(b"High Row", dutch_back.data)
+        self.assertNotIn(b'new=1&amp;q=rug', dutch_back.data)
 
         overfiltered = self.client.get("/equipment?q=leg&category=cardio")
         self.assertEqual(overfiltered.status_code, 200)

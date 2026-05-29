@@ -50,18 +50,26 @@
   </div>
 </form>
 
+{% set active_quick = 'new' if new_only else ('legs' if equipment_search_query == 'benen' else ('back' if equipment_search_query == 'rug' else ('chest' if equipment_search_query == 'borst' else ('shoulders' if equipment_search_query == 'schouders' else ('cardio' if selected_category == 'cardio' else ('free_weights' if selected_category == 'free_weights' else 'all')))))) %}
 <section class="mb-5 rounded-lg border border-gray-700 bg-gray-900/40 p-3">
   <div class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_quick_filters') }}</div>
-  <div class="mt-3 flex gap-2 overflow-x-auto pb-1">
-    <a href="{{ url_for('member_equipment_library', new=1) }}" class="shrink-0 rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs font-semibold text-yellow-100 hover:border-yellow-300">{{ t('equipment_new_at_dreamz') }}</a>
-    <a href="{{ url_for('member_equipment_library', q='benen') }}" class="shrink-0 rounded-full border border-gray-700 bg-gray-950 px-3 py-2 text-xs font-semibold text-gray-100 hover:border-yellow-300">{{ t('equipment_filter_legs') }}</a>
-    <a href="{{ url_for('member_equipment_library', q='rug') }}" class="shrink-0 rounded-full border border-gray-700 bg-gray-950 px-3 py-2 text-xs font-semibold text-gray-100 hover:border-yellow-300">{{ t('equipment_filter_back') }}</a>
-    <a href="{{ url_for('member_equipment_library', q='borst') }}" class="shrink-0 rounded-full border border-gray-700 bg-gray-950 px-3 py-2 text-xs font-semibold text-gray-100 hover:border-yellow-300">{{ t('equipment_filter_chest') }}</a>
-    <a href="{{ url_for('member_equipment_library', q='schouders') }}" class="shrink-0 rounded-full border border-gray-700 bg-gray-950 px-3 py-2 text-xs font-semibold text-gray-100 hover:border-yellow-300">{{ t('equipment_filter_shoulders') }}</a>
-    <a href="{{ url_for('member_equipment_library', category='cardio') }}" class="shrink-0 rounded-full border border-gray-700 bg-gray-950 px-3 py-2 text-xs font-semibold text-gray-100 hover:border-yellow-300">{{ t('equipment_category_cardio') }}</a>
-    <a href="{{ url_for('member_equipment_library', category='free_weights') }}" class="shrink-0 rounded-full border border-gray-700 bg-gray-950 px-3 py-2 text-xs font-semibold text-gray-100 hover:border-yellow-300">{{ t('equipment_category_free_weights') }}</a>
+  <div class="equipment-quick-filters mt-3 flex gap-2 overflow-x-auto pb-1">
+    <a href="{{ url_for('member_equipment_library') }}" aria-current="{{ 'page' if active_quick == 'all' else 'false' }}" class="equipment-filter-chip shrink-0 rounded-full border px-3 py-2 text-xs font-semibold {% if active_quick == 'all' %}border-yellow-500/50 bg-yellow-500 text-black{% else %}border-gray-700 bg-gray-950 text-gray-100 hover:border-yellow-300{% endif %}">{{ t('equipment_filter_all') }}</a>
+    <a href="{{ url_for('member_equipment_library', new=1) }}" aria-current="{{ 'page' if active_quick == 'new' else 'false' }}" class="equipment-filter-chip shrink-0 rounded-full border px-3 py-2 text-xs font-semibold {% if active_quick == 'new' %}border-yellow-500/50 bg-yellow-500 text-black{% else %}border-gray-700 bg-gray-950 text-gray-100 hover:border-yellow-300{% endif %}">{{ t('equipment_new_at_dreamz') }}</a>
+    <a href="{{ url_for('member_equipment_library', q='benen') }}" aria-current="{{ 'page' if active_quick == 'legs' else 'false' }}" class="equipment-filter-chip shrink-0 rounded-full border px-3 py-2 text-xs font-semibold {% if active_quick == 'legs' %}border-yellow-500/50 bg-yellow-500 text-black{% else %}border-gray-700 bg-gray-950 text-gray-100 hover:border-yellow-300{% endif %}">{{ t('equipment_filter_legs') }}</a>
+    <a href="{{ url_for('member_equipment_library', q='rug') }}" aria-current="{{ 'page' if active_quick == 'back' else 'false' }}" class="equipment-filter-chip shrink-0 rounded-full border px-3 py-2 text-xs font-semibold {% if active_quick == 'back' %}border-yellow-500/50 bg-yellow-500 text-black{% else %}border-gray-700 bg-gray-950 text-gray-100 hover:border-yellow-300{% endif %}">{{ t('equipment_filter_back') }}</a>
+    <a href="{{ url_for('member_equipment_library', q='borst') }}" aria-current="{{ 'page' if active_quick == 'chest' else 'false' }}" class="equipment-filter-chip shrink-0 rounded-full border px-3 py-2 text-xs font-semibold {% if active_quick == 'chest' %}border-yellow-500/50 bg-yellow-500 text-black{% else %}border-gray-700 bg-gray-950 text-gray-100 hover:border-yellow-300{% endif %}">{{ t('equipment_filter_chest') }}</a>
+    <a href="{{ url_for('member_equipment_library', q='schouders') }}" aria-current="{{ 'page' if active_quick == 'shoulders' else 'false' }}" class="equipment-filter-chip shrink-0 rounded-full border px-3 py-2 text-xs font-semibold {% if active_quick == 'shoulders' %}border-yellow-500/50 bg-yellow-500 text-black{% else %}border-gray-700 bg-gray-950 text-gray-100 hover:border-yellow-300{% endif %}">{{ t('equipment_filter_shoulders') }}</a>
+    <a href="{{ url_for('member_equipment_library', category='cardio') }}" aria-current="{{ 'page' if active_quick == 'cardio' else 'false' }}" class="equipment-filter-chip shrink-0 rounded-full border px-3 py-2 text-xs font-semibold {% if active_quick == 'cardio' %}border-yellow-500/50 bg-yellow-500 text-black{% else %}border-gray-700 bg-gray-950 text-gray-100 hover:border-yellow-300{% endif %}">{{ t('equipment_category_cardio') }}</a>
+    <a href="{{ url_for('member_equipment_library', category='free_weights') }}" aria-current="{{ 'page' if active_quick == 'free_weights' else 'false' }}" class="equipment-filter-chip shrink-0 rounded-full border px-3 py-2 text-xs font-semibold {% if active_quick == 'free_weights' %}border-yellow-500/50 bg-yellow-500 text-black{% else %}border-gray-700 bg-gray-950 text-gray-100 hover:border-yellow-300{% endif %}">{{ t('equipment_category_free_weights') }}</a>
   </div>
 </section>
+<script>
+  (() => {
+    const activeChip = document.querySelector(".equipment-quick-filters [aria-current='page']");
+    if (activeChip) activeChip.scrollIntoView({ inline: "center", block: "nearest" });
+  })();
+</script>
 
 {% if equipment_relaxed_results %}
   <section class="mb-5 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4 text-sm leading-6 text-yellow-50">

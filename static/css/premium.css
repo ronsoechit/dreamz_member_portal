@@ -655,6 +655,8 @@ tbody tr:hover {
   width: min(26rem, calc(100vw - 2rem));
   max-height: min(42rem, calc(100vh - 7rem));
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
   border: 1px solid rgba(250, 204, 21, 0.30);
   border-radius: 24px;
   background:
@@ -662,6 +664,10 @@ tbody tr:hover {
     rgba(8, 14, 27, 0.97);
   box-shadow: 0 30px 90px rgba(0, 0, 0, 0.58), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   backdrop-filter: blur(18px);
+}
+
+.dreamz-coach-panel[hidden] {
+  display: none;
 }
 
 .dreamz-coach-panel-header {
@@ -690,6 +696,8 @@ tbody tr:hover {
 .dreamz-coach-thread {
   display: flex;
   max-height: 18rem;
+  min-height: 0;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 0.65rem;
   overflow-y: auto;
@@ -824,15 +832,19 @@ tbody tr:hover {
 }
 
 .dreamz-coach-prompts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
   gap: 0.45rem;
+  overflow-x: auto;
+  padding-bottom: 0.1rem;
+  scrollbar-width: thin;
 }
 
 .dreamz-coach-prompts button {
+  flex: 0 0 auto;
   min-height: 2.55rem;
+  max-width: 13rem;
   border: 1px solid rgba(250, 204, 21, 0.25);
-  border-radius: 12px;
+  border-radius: 999px;
   padding: 0.55rem 0.65rem;
   background: rgba(250, 204, 21, 0.09);
   color: #fef3c7;
@@ -857,6 +869,7 @@ tbody tr:hover {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.6rem;
   padding: 0 1rem 1rem;
+  flex: 0 0 auto;
 }
 
 .dreamz-coach-input-row textarea {
@@ -883,6 +896,19 @@ tbody tr:hover {
   border-color: rgba(248, 113, 113, 0.42);
   background: rgba(127, 29, 29, 0.36);
   color: #fecaca;
+}
+
+.equipment-quick-filters {
+  margin-left: -0.15rem;
+  margin-right: -0.15rem;
+  padding-left: 0.15rem;
+  padding-right: 0.15rem;
+  scrollbar-width: thin;
+}
+
+.equipment-filter-chip {
+  white-space: nowrap;
+  scroll-margin-inline: 0.75rem;
 }
 
 .account-stack {
@@ -1238,12 +1264,12 @@ span.rounded,
 
   .dreamz-coach-widget {
     right: 0.9rem;
-    bottom: calc(6.1rem + env(safe-area-inset-bottom));
+    bottom: calc(4.6rem + env(safe-area-inset-bottom));
   }
 
   .dreamz-coach-fab {
-    min-height: 3rem;
-    padding: 0.48rem;
+    min-height: 2.75rem;
+    padding: 0.42rem;
   }
 
   .dreamz-coach-fab-label {
@@ -1257,19 +1283,40 @@ span.rounded,
 
   .dreamz-coach-panel {
     position: fixed;
-    right: 0.75rem;
-    bottom: calc(5.85rem + env(safe-area-inset-bottom));
-    left: 0.75rem;
+    inset: calc(0.75rem + env(safe-area-inset-top)) 0.65rem calc(0.75rem + env(safe-area-inset-bottom));
     width: auto;
-    max-height: min(38rem, calc(100vh - 7rem));
+    max-height: none;
+    border-radius: 22px;
   }
 
   .dreamz-coach-thread {
-    max-height: min(16rem, 36vh);
+    max-height: none;
+    padding: 0.75rem;
   }
 
   .dreamz-coach-prompts {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .dreamz-coach-prompts button {
+    max-width: 11rem;
+    white-space: normal;
+  }
+
+  .dreamz-coach-input-row {
     grid-template-columns: minmax(0, 1fr);
+    gap: 0.45rem;
+    padding: 0 0.75rem 0.75rem;
+  }
+
+  .dreamz-coach-input-row textarea {
+    min-height: 2.75rem;
+    max-height: 7rem;
+  }
+
+  .dreamz-coach-input-row button {
+    min-height: 2.75rem;
   }
 
   .portal-main > div.grid,
