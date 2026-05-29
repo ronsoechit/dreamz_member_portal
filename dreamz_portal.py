@@ -2720,6 +2720,35 @@ def seed_equipment_library():
     db.session.commit()
 
 
+def repair_seeded_equipment_visibility_if_empty():
+    if member_visible_equipment_query().first():
+        return False
+    if not EQUIPMENT_SEED_PATH.exists():
+        return False
+    try:
+        seed_data = json.loads(EQUIPMENT_SEED_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        app.logger.exception("Equipment seed file could not be read while repairing visibility.")
+        return False
+    seed_items = seed_data.get("items", []) if isinstance(seed_data, dict) else seed_data
+    if not isinstance(seed_items, list):
+        return False
+    seed_slugs = [equipment_seed_defaults(raw_item)["slug"] for raw_item in seed_items if isinstance(raw_item, dict)]
+    if not seed_slugs:
+        return False
+    repaired = False
+    for item in EquipmentItem.query.filter(EquipmentItem.slug.in_(seed_slugs)).all():
+        if item.status not in {"active", "out_of_service"}:
+            item.status = "active"
+            repaired = True
+        if item.visibility not in {"members", "public"}:
+            item.visibility = "members"
+            repaired = True
+    if repaired:
+        db.session.commit()
+    return repaired
+
+
 def equipment_admin_context():
     ensure_runtime_schema()
     seed_equipment_library()
@@ -2867,6 +2896,7 @@ def matching_equipment_for_exercise(exercise_name, equipment_name=None):
 def equipment_member_context():
     ensure_runtime_schema()
     seed_equipment_library()
+    repair_seeded_equipment_visibility_if_empty()
     category_filter = request.args.get("category", "").strip()
     muscle_filter = request.args.get("muscle", "").strip()
     search_query = request.args.get("q", "").strip()

@@ -3609,6 +3609,25 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn(b"Leg Extension", overfiltered.data)
         self.assertIn(b"Clear filters", overfiltered.data)
 
+    def test_member_equipment_repairs_seeded_items_when_catalog_is_not_visible(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        seed_equipment_library()
+        EquipmentItem.query.update({
+            EquipmentItem.status: "hidden",
+            EquipmentItem.visibility: "staff_only",
+        })
+        db.session.commit()
+        self.login_as("13659")
+
+        response = self.client.get("/equipment")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Leg Extension", response.data)
+        self.assertNotIn(b"No equipment found", response.data)
+        leg_extension = EquipmentItem.query.filter_by(slug="leg-extension").first()
+        self.assertEqual(leg_extension.status, "active")
+        self.assertEqual(leg_extension.visibility, "members")
+
     def test_staff_equipment_page_and_save_work(self):
         self.login_staff("admin")
         response = self.client.get("/staff/equipment")
