@@ -3572,6 +3572,13 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("/static/equipment/ai-promo/leg-extension-standard.png", leg_extension.gallery_images)
         self.assertIn("lat pulldown", high_row.exercise_aliases)
 
+    def test_docker_context_keeps_equipment_seed_files(self):
+        dockerignore = Path(".dockerignore").read_text(encoding="utf-8")
+
+        self.assertIn("data/*", dockerignore)
+        self.assertIn("!data/equipment_seed.json", dockerignore)
+        self.assertIn("!data/equipment_image_manifest.json", dockerignore)
+
     def test_member_equipment_library_and_detail_show_seeded_items(self):
         self.add_member(member_id="13659", name="Ron Soechit")
         self.login_as("13659")

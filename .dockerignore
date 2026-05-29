@@ -9,7 +9,9 @@ __pycache__
 !.env.example
 
 instance
-data
+data/*
+!data/equipment_seed.json
+!data/equipment_image_manifest.json
 backup
 Dreamz Formulieren
 nieuwe exports
