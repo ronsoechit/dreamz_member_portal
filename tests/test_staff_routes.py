@@ -803,6 +803,12 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn('action="/staff/login"', body)
         self.assertNotIn("FEP Manager", body)
 
+    def test_staff_home_trailing_slash_redirects(self):
+        response = self.client.get("/staff/")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/staff")
+
     def test_staff_home_shows_member_portal_and_fep_choices(self):
         with self.client.session_transaction() as sess:
             sess["staff_role"] = "admin"

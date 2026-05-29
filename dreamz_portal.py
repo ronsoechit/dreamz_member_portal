@@ -8752,6 +8752,11 @@ def staff_home():
     )
 
 
+@app.get("/staff/")
+def staff_home_slash():
+    return redirect(url_for("staff_home"))
+
+
 @app.post("/api/sync/members")
 def api_sync_members():
     require_sync_access()
