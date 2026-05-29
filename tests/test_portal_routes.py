@@ -487,6 +487,8 @@ class PortalRouteTests(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("Coach profile 100% complete", body)
         self.assertIn("Edit", body)
+        self.assertIn("Equipment Library", body)
+        self.assertIn('href="/equipment"', body)
         self.assertNotIn("Update coach profile</button>", body)
 
     def test_dedicated_nutrition_page_opens_personalized_meal_plan(self):
