@@ -112,6 +112,10 @@ app.config["COACH_UPLOAD_ROOT"] = os.getenv(
     "COACH_UPLOAD_ROOT",
     os.path.join(app.instance_path, "coach_uploads"),
 )
+app.config["EQUIPMENT_UPLOAD_ROOT"] = os.getenv(
+    "EQUIPMENT_UPLOAD_ROOT",
+    os.path.join(app.instance_path, "equipment_uploads"),
+)
 app.config["COACH_FORCE_LOCAL_UPLOADS"] = os.getenv("COACH_FORCE_LOCAL_UPLOADS", "").lower() in ("1", "true", "yes")
 db = SQLAlchemy(app)
 
@@ -837,6 +841,54 @@ class ScheduleChangeNotification(db.Model):
     plan = db.relationship("MemberClassPlan")
 
 
+class EquipmentCategory(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String, unique=True, nullable=False, index=True)
+    name = db.Column(db.String, nullable=False)
+    description = db.Column(db.Text)
+    sort_order = db.Column(db.Integer, default=0, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+
+class EquipmentItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String, nullable=False, index=True)
+    slug = db.Column(db.String, unique=True, nullable=False, index=True)
+    brand = db.Column(db.String)
+    line = db.Column(db.String)
+    category_key = db.Column(db.String, db.ForeignKey("equipment_category.key"), nullable=False, index=True)
+    subcategory = db.Column(db.String, index=True)
+    primary_muscle_groups = db.Column(db.Text)
+    secondary_muscle_groups = db.Column(db.Text)
+    usage_description = db.Column(db.Text)
+    setup_instructions = db.Column(db.Text)
+    beginner_tips = db.Column(db.Text)
+    common_mistakes = db.Column(db.Text)
+    alternatives = db.Column(db.Text)
+    exercise_aliases = db.Column(db.Text)
+    image_url = db.Column(db.String)
+    thumbnail_url = db.Column(db.String)
+    gallery_images = db.Column(db.Text)
+    video_url = db.Column(db.String)
+    demo_url = db.Column(db.String)
+    location_zone = db.Column(db.String)
+    status = db.Column(db.String, default="active", nullable=False, index=True)
+    visibility = db.Column(db.String, default="members", nullable=False, index=True)
+    is_new = db.Column(db.Boolean, default=False, nullable=False, index=True)
+    new_since = db.Column(db.Date)
+    new_until = db.Column(db.Date)
+    promo_label = db.Column(db.String)
+    available_for_ai_coach = db.Column(db.Boolean, default=True, nullable=False, index=True)
+    sort_order = db.Column(db.Integer, default=0, nullable=False, index=True)
+    internal_notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    category = db.relationship("EquipmentCategory", primaryjoin="EquipmentItem.category_key == EquipmentCategory.key")
+
+
 class PricingCategory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     key = db.Column(db.String, unique=True, nullable=False, index=True)
@@ -944,6 +996,38 @@ FEATURE_ACCESS_LEVELS = [
     "internal_test",
     "premium_future",
 ]
+EQUIPMENT_STATUSES = ["active", "out_of_service", "hidden"]
+EQUIPMENT_VISIBILITY_OPTIONS = ["public", "members", "staff_only"]
+EQUIPMENT_MUSCLE_GROUPS = [
+    "Chest",
+    "Back",
+    "Lats",
+    "Upper back",
+    "Shoulders",
+    "Biceps",
+    "Triceps",
+    "Quadriceps",
+    "Hamstrings",
+    "Glutes",
+    "Calves",
+    "Core",
+    "Full body",
+    "Cardio",
+    "Mobility",
+]
+EQUIPMENT_CATEGORIES = [
+    ("strength_machines", "Strength Machines", 10),
+    ("plate_loaded", "Plate Loaded", 20),
+    ("cardio", "Cardio", 30),
+    ("free_weights", "Free Weights", 40),
+    ("functional_training", "Functional Training", 50),
+    ("group_classes", "Group Classes", 60),
+    ("boxing_dojo", "Boxing / Dojo", 70),
+    ("core", "Core", 80),
+    ("benches_racks", "Benches & Racks", 90),
+    ("accessories", "Accessories", 100),
+]
+EQUIPMENT_SEED_PATH = Path(__file__).resolve().parent / "data" / "equipment_seed.json"
 LEGAL_DOCUMENT_TYPES = [
     "membership_application_form",
     "general_terms",
@@ -1871,6 +1955,39 @@ def backfill_runtime_schema_defaults():
     db.session.execute(text(
         "UPDATE pricing_item SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL"
     ))
+    db.session.execute(text(
+        f"UPDATE equipment_category SET is_active = {true_value} WHERE is_active IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE equipment_category SET sort_order = 0 WHERE sort_order IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE equipment_category SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE equipment_category SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE equipment_item SET status = 'active' WHERE status IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE equipment_item SET visibility = 'members' WHERE visibility IS NULL"
+    ))
+    db.session.execute(text(
+        f"UPDATE equipment_item SET is_new = {sql_bool(False)} WHERE is_new IS NULL"
+    ))
+    db.session.execute(text(
+        f"UPDATE equipment_item SET available_for_ai_coach = {true_value} WHERE available_for_ai_coach IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE equipment_item SET sort_order = 0 WHERE sort_order IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE equipment_item SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE equipment_item SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL"
+    ))
     db.session.commit()
 
 
@@ -1927,6 +2044,7 @@ def ensure_runtime_schema():
     seed_default_staff_users()
     seed_group_class_schedule()
     seed_pricing_catalog()
+    seed_equipment_library()
     seed_feature_access_rules()
     seed_legal_documents()
     app.config["_RUNTIME_SCHEMA_READY"] = True
@@ -2339,6 +2457,369 @@ def pricing_items_by_category(items):
     for item in items:
         grouped.setdefault(item.category_key, []).append(item)
     return grouped
+
+
+def slugify(value):
+    text = re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+    return text or secrets.token_hex(4)
+
+
+def json_list(values):
+    if values is None:
+        return []
+    if isinstance(values, str):
+        text = values.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        except (TypeError, ValueError):
+            pass
+        return [line.strip() for line in re.split(r"[\n,]", text) if line.strip()]
+    if isinstance(values, (list, tuple, set)):
+        return [str(item).strip() for item in values if str(item).strip()]
+    return []
+
+
+def json_list_text(values):
+    return json.dumps(json_list(values))
+
+
+def localized_json_text(value, language=None):
+    language = normalize_language(language or (current_language() if has_request_context() else DEFAULT_LANGUAGE))
+    if not value:
+        return ""
+    if isinstance(value, dict):
+        return value.get(language) or value.get(DEFAULT_LANGUAGE) or next(iter(value.values()), "")
+    try:
+        parsed = json.loads(value)
+        if isinstance(parsed, dict):
+            return parsed.get(language) or parsed.get(DEFAULT_LANGUAGE) or next(iter(parsed.values()), "")
+    except (TypeError, ValueError):
+        pass
+    return str(value)
+
+
+def equipment_category_label(category_key, language=None):
+    key = f"equipment_category_{category_key}"
+    label = translated_text(key, language or current_language())
+    return label if label != key else (category_key or "").replace("_", " ").title()
+
+
+def equipment_item_description(item, language=None):
+    return localized_json_text(item.usage_description, language) or translated_text("equipment_no_description", language or current_language())
+
+
+def equipment_item_aliases(item):
+    aliases = json_list(item.exercise_aliases)
+    aliases.extend([item.name or "", item.slug or ""])
+    return [alias.lower() for alias in aliases if alias]
+
+
+def equipment_gallery(item):
+    gallery = json_list(item.gallery_images)
+    if item.image_url and item.image_url not in gallery:
+        gallery.insert(0, item.image_url)
+    return gallery
+
+
+def member_visible_equipment_query():
+    return EquipmentItem.query.filter(
+        EquipmentItem.status.in_(["active", "out_of_service"]),
+        EquipmentItem.visibility.in_(["members", "public"]),
+    )
+
+
+def equipment_seed_defaults(item):
+    slug = item.get("slug") or slugify(item.get("name"))
+    return {
+        "name": item.get("name", slug.replace("-", " ").title()),
+        "slug": slug,
+        "brand": item.get("brand") or "Dreamz",
+        "line": item.get("line"),
+        "category_key": item.get("category_key") or "strength_machines",
+        "subcategory": item.get("subcategory"),
+        "primary_muscle_groups": json_list_text(item.get("primary_muscle_groups")),
+        "secondary_muscle_groups": json_list_text(item.get("secondary_muscle_groups")),
+        "usage_description": json.dumps(item.get("usage_description") or {}),
+        "setup_instructions": item.get("setup_instructions"),
+        "beginner_tips": item.get("beginner_tips"),
+        "common_mistakes": item.get("common_mistakes"),
+        "alternatives": json_list_text(item.get("alternatives")),
+        "exercise_aliases": json_list_text(item.get("exercise_aliases") or [item.get("name", "")]),
+        "image_url": item.get("image_url"),
+        "thumbnail_url": item.get("thumbnail_url"),
+        "gallery_images": json_list_text(item.get("gallery_images")),
+        "video_url": item.get("video_url"),
+        "demo_url": item.get("demo_url"),
+        "location_zone": item.get("location_zone"),
+        "status": item.get("status") or "active",
+        "visibility": item.get("visibility") or "members",
+        "is_new": bool(item.get("is_new", False)),
+        "new_since": parse_optional_date(item.get("new_since")),
+        "new_until": parse_optional_date(item.get("new_until")),
+        "promo_label": item.get("promo_label"),
+        "available_for_ai_coach": bool(item.get("available_for_ai_coach", True)),
+        "sort_order": int(item.get("sort_order") or 0),
+        "internal_notes": item.get("internal_notes"),
+    }
+
+
+def seed_equipment_library():
+    for key, name, sort_order in EQUIPMENT_CATEGORIES:
+        category = EquipmentCategory.query.filter_by(key=key).first()
+        if not category:
+            category = EquipmentCategory(key=key, name=name, sort_order=sort_order)
+            db.session.add(category)
+        else:
+            category.name = category.name or name
+            category.sort_order = category.sort_order if category.sort_order is not None else sort_order
+
+    seed_items = []
+    if EQUIPMENT_SEED_PATH.exists():
+        try:
+            seed_items = json.loads(EQUIPMENT_SEED_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            app.logger.exception("Equipment seed file could not be read.")
+            seed_items = []
+    if isinstance(seed_items, dict):
+        seed_items = seed_items.get("items", [])
+    if not isinstance(seed_items, list):
+        seed_items = []
+
+    for raw_item in seed_items:
+        defaults = equipment_seed_defaults(raw_item)
+        item = EquipmentItem.query.filter_by(slug=defaults["slug"]).first()
+        if not item:
+            item = EquipmentItem(**defaults)
+            db.session.add(item)
+            continue
+        # Keep admin-edited descriptive fields intact; only backfill missing operational defaults.
+        for field, value in defaults.items():
+            if field in {"name", "slug"}:
+                continue
+            current = getattr(item, field)
+            if current in (None, "", "[]", "{}"):
+                setattr(item, field, value)
+        item.updated_at = item.updated_at or datetime.now()
+    db.session.commit()
+
+
+def equipment_admin_context():
+    ensure_runtime_schema()
+    seed_equipment_library()
+    category_filter = request.args.get("category", "").strip()
+    muscle_filter = request.args.get("muscle", "").strip()
+    status_filter = request.args.get("status", "").strip()
+    brand_filter = request.args.get("brand", "").strip()
+    search_query = request.args.get("q", "").strip()
+    new_filter = request.args.get("new", "").strip()
+    visible_filter = request.args.get("visible", "").strip()
+    query = EquipmentItem.query
+    if category_filter:
+        query = query.filter(EquipmentItem.category_key == category_filter)
+    if status_filter:
+        query = query.filter(EquipmentItem.status == status_filter)
+    if brand_filter:
+        query = query.filter(EquipmentItem.brand == brand_filter)
+    if muscle_filter:
+        query = query.filter(db.or_(
+            EquipmentItem.primary_muscle_groups.like(f"%{muscle_filter}%"),
+            EquipmentItem.secondary_muscle_groups.like(f"%{muscle_filter}%"),
+        ))
+    if new_filter == "1":
+        query = query.filter(EquipmentItem.is_new.is_(True))
+    if visible_filter == "members":
+        query = query.filter(EquipmentItem.visibility.in_(["members", "public"]))
+    if search_query:
+        like = f"%{search_query}%"
+        query = query.filter(db.or_(
+            EquipmentItem.name.like(like),
+            EquipmentItem.brand.like(like),
+            EquipmentItem.exercise_aliases.like(like),
+        ))
+    items = query.order_by(EquipmentItem.sort_order.asc(), EquipmentItem.name.asc()).all()
+    categories = EquipmentCategory.query.order_by(EquipmentCategory.sort_order.asc(), EquipmentCategory.name.asc()).all()
+    brands = [
+        row[0] for row in db.session.query(EquipmentItem.brand)
+        .filter(EquipmentItem.brand.isnot(None), EquipmentItem.brand != "")
+        .distinct()
+        .order_by(EquipmentItem.brand.asc())
+        .all()
+    ]
+    return {
+        "equipment_items": items,
+        "equipment_categories": categories,
+        "equipment_statuses": EQUIPMENT_STATUSES,
+        "equipment_visibility_options": EQUIPMENT_VISIBILITY_OPTIONS,
+        "equipment_muscle_groups": EQUIPMENT_MUSCLE_GROUPS,
+        "equipment_brands": brands,
+        "selected_category": category_filter,
+        "selected_muscle": muscle_filter,
+        "selected_status": status_filter,
+        "selected_brand": brand_filter,
+        "selected_new": new_filter,
+        "selected_visible": visible_filter,
+        "equipment_search_query": search_query,
+        "equipment_primary_groups": lambda item: json_list(item.primary_muscle_groups),
+        "equipment_secondary_groups": lambda item: json_list(item.secondary_muscle_groups),
+        "equipment_aliases": lambda item: json_list(item.exercise_aliases),
+        "equipment_description": equipment_item_description,
+        "equipment_category_label": equipment_category_label,
+    }
+
+
+def empty_equipment_admin_context():
+    return {
+        "equipment_items": [],
+        "equipment_categories": [],
+        "equipment_statuses": EQUIPMENT_STATUSES,
+        "equipment_visibility_options": EQUIPMENT_VISIBILITY_OPTIONS,
+        "equipment_muscle_groups": EQUIPMENT_MUSCLE_GROUPS,
+        "equipment_brands": [],
+        "selected_category": request.args.get("category", "").strip(),
+        "selected_muscle": request.args.get("muscle", "").strip(),
+        "selected_status": request.args.get("status", "").strip(),
+        "selected_brand": request.args.get("brand", "").strip(),
+        "selected_new": request.args.get("new", "").strip(),
+        "selected_visible": request.args.get("visible", "").strip(),
+        "equipment_search_query": request.args.get("q", "").strip(),
+        "equipment_primary_groups": lambda item: [],
+        "equipment_secondary_groups": lambda item: [],
+        "equipment_aliases": lambda item: [],
+        "equipment_description": equipment_item_description,
+        "equipment_category_label": equipment_category_label,
+    }
+
+
+def equipment_context_for_ai(member=None, focus_text=None, limit=18):
+    def query_items():
+        query = EquipmentItem.query.filter(
+            EquipmentItem.available_for_ai_coach.is_(True),
+            EquipmentItem.status == "active",
+            EquipmentItem.visibility.in_(["members", "public"]),
+        )
+        focus = (focus_text or "").lower()
+        if focus:
+            terms = [term for term in re.split(r"[^a-z0-9]+", focus) if len(term) > 2]
+            filters = []
+            for term in terms[:5]:
+                like = f"%{term}%"
+                filters.extend([
+                    EquipmentItem.name.like(like),
+                    EquipmentItem.exercise_aliases.like(like),
+                    EquipmentItem.primary_muscle_groups.like(like),
+                    EquipmentItem.secondary_muscle_groups.like(like),
+                    EquipmentItem.subcategory.like(like),
+                ])
+            if filters:
+                query = query.filter(db.or_(*filters))
+        return query.order_by(EquipmentItem.is_new.desc(), EquipmentItem.sort_order.asc(), EquipmentItem.name.asc()).limit(limit).all()
+
+    items = portal_context_value("equipment_context", [], query_items)
+    if not items:
+        return "equipment_library=unavailable"
+    parts = []
+    for item in items:
+        muscles = ", ".join(json_list(item.primary_muscle_groups)[:3]) or "unknown"
+        aliases = ", ".join(json_list(item.exercise_aliases)[:4]) or item.name
+        parts.append(
+            f"{item.name} category={item.category_key} muscles={muscles} aliases={aliases} status={item.status}"
+        )
+    return "equipment_library=" + "; ".join(parts)
+
+
+def matching_equipment_for_exercise(exercise_name, equipment_name=None):
+    haystack = f"{exercise_name or ''} {equipment_name or ''}".lower()
+    if not haystack.strip():
+        return None
+    items = portal_context_value(
+        "matching_equipment",
+        [],
+        lambda: EquipmentItem.query.filter(
+            EquipmentItem.status == "active",
+            EquipmentItem.visibility.in_(["members", "public"]),
+        ).order_by(EquipmentItem.is_new.desc(), EquipmentItem.sort_order.asc()).all(),
+    )
+    for item in items:
+        if any(alias and alias in haystack for alias in equipment_item_aliases(item)):
+            return item
+    return None
+
+
+def equipment_member_context():
+    ensure_runtime_schema()
+    seed_equipment_library()
+    category_filter = request.args.get("category", "").strip()
+    muscle_filter = request.args.get("muscle", "").strip()
+    search_query = request.args.get("q", "").strip()
+    new_only = request.args.get("new", "").strip() == "1"
+
+    query = member_visible_equipment_query()
+    if category_filter:
+        query = query.filter(EquipmentItem.category_key == category_filter)
+    if muscle_filter:
+        query = query.filter(db.or_(
+            EquipmentItem.primary_muscle_groups.like(f"%{muscle_filter}%"),
+            EquipmentItem.secondary_muscle_groups.like(f"%{muscle_filter}%"),
+        ))
+    if new_only:
+        query = query.filter(EquipmentItem.is_new.is_(True))
+    if search_query:
+        like = f"%{search_query}%"
+        query = query.filter(db.or_(
+            EquipmentItem.name.like(like),
+            EquipmentItem.brand.like(like),
+            EquipmentItem.subcategory.like(like),
+            EquipmentItem.exercise_aliases.like(like),
+            EquipmentItem.primary_muscle_groups.like(like),
+            EquipmentItem.secondary_muscle_groups.like(like),
+        ))
+
+    categories = EquipmentCategory.query.filter_by(is_active=True).order_by(
+        EquipmentCategory.sort_order.asc(),
+        EquipmentCategory.name.asc(),
+    ).all()
+    items = query.order_by(
+        EquipmentItem.is_new.desc(),
+        EquipmentItem.sort_order.asc(),
+        EquipmentItem.name.asc(),
+    ).all()
+    return {
+        "equipment_items": items,
+        "equipment_categories": categories,
+        "equipment_muscle_groups": EQUIPMENT_MUSCLE_GROUPS,
+        "selected_category": category_filter,
+        "selected_muscle": muscle_filter,
+        "equipment_search_query": search_query,
+        "new_only": new_only,
+        "equipment_primary_groups": lambda item: json_list(item.primary_muscle_groups),
+        "equipment_secondary_groups": lambda item: json_list(item.secondary_muscle_groups),
+        "equipment_aliases": lambda item: json_list(item.exercise_aliases),
+        "equipment_gallery": equipment_gallery,
+        "equipment_description": equipment_item_description,
+        "equipment_category_label": equipment_category_label,
+    }
+
+
+def empty_equipment_member_context():
+    return {
+        "equipment_items": [],
+        "equipment_categories": [],
+        "equipment_muscle_groups": EQUIPMENT_MUSCLE_GROUPS,
+        "selected_category": request.args.get("category", "").strip(),
+        "selected_muscle": request.args.get("muscle", "").strip(),
+        "equipment_search_query": request.args.get("q", "").strip(),
+        "new_only": request.args.get("new", "").strip() == "1",
+        "equipment_primary_groups": lambda item: [],
+        "equipment_secondary_groups": lambda item: [],
+        "equipment_aliases": lambda item: [],
+        "equipment_gallery": equipment_gallery,
+        "equipment_description": equipment_item_description,
+        "equipment_category_label": equipment_category_label,
+    }
 
 
 def public_pricing_context():
@@ -5854,6 +6335,11 @@ def portal_member_context_summary(member, profile, language=None):
             if item.member_eligible and item.category_key != "external_trainer_b2b"
         ][:14],
     )
+    equipment_context = portal_context_value(
+        "member_equipment_library",
+        "equipment_library=unavailable",
+        lambda: equipment_context_for_ai(member, limit=22),
+    )
     meal_plan = portal_context_value(
         "nutrition_meal_plan",
         None,
@@ -5962,6 +6448,7 @@ def portal_member_context_summary(member, profile, language=None):
         f"membership_applications={application_text}; "
         "pricing_catalog="
         f"{pricing_text}; "
+        f"{equipment_context}; "
         "nutrition="
         f"targets_calories={targets.get('calories', 'unknown')}, targets_protein={targets.get('protein', 'unknown')}, "
         f"targets_carbs={targets.get('carbs', 'unknown')}, targets_fat={targets.get('fat', 'unknown')}, "
@@ -5969,7 +6456,7 @@ def portal_member_context_summary(member, profile, language=None):
         "training_and_progress="
         f"next_session={next_session_text}; recent_workouts={' | '.join(recent_workouts) or 'none'}; progress={progress_text}; "
         "member_routes="
-        "/dashboard, /coach, /nutrition, /progress, /group-classes, /account, /account/membership, /account/billing, /account/agreements, /account/documents, /pricing"
+        "/dashboard, /coach, /nutrition, /progress, /group-classes, /equipment, /account, /account/membership, /account/billing, /account/agreements, /account/documents, /pricing"
     )
 
 
@@ -6118,6 +6605,48 @@ def is_pricing_question(message):
     return any(term in text for term in terms)
 
 
+def is_equipment_question(message):
+    text = (message or "").lower()
+    terms = (
+        "apparaat", "apparaten", "machine", "machines", "equipment", "toestel",
+        "leg extension", "leg curl", "glute", "high row", "lat pulldown",
+        "cardio", "dumbbell", "barbell", "kettlebell", "cable", "bench",
+        "equipo", "maquina", "maquinas", "aparato", "aparatnan",
+    )
+    return any(term in text for term in terms)
+
+
+def coach_equipment_direct_reply(member, user_message, language=None):
+    language = language or current_language()
+    text = (user_message or "").lower()
+
+    def matching_items():
+        query = member_visible_equipment_query().filter(EquipmentItem.available_for_ai_coach.is_(True))
+        items = query.order_by(EquipmentItem.is_new.desc(), EquipmentItem.sort_order.asc(), EquipmentItem.name.asc()).all()
+        specific = []
+        for item in items:
+            search_values = [item.name.lower(), item.category_key.lower(), (item.subcategory or "").lower()]
+            search_values.extend(alias.lower() for alias in equipment_item_aliases(item))
+            search_values.extend(group.lower() for group in json_list(item.primary_muscle_groups) + json_list(item.secondary_muscle_groups))
+            if any(value and value in text for value in search_values):
+                specific.append(item)
+        return specific or items[:8]
+
+    items = portal_context_value("direct_equipment_items", [], matching_items)
+    if not items:
+        return translated_text("coach_portal_equipment_none", language)
+    lines = [translated_text("coach_portal_equipment_summary", language), ""]
+    for item in items[:8]:
+        muscles = ", ".join(json_list(item.primary_muscle_groups)[:3]) or translated_text("not_available", language)
+        status = translated_text(f"equipment_status_{item.status}", language)
+        lines.append(
+            f"- {item.name}: {equipment_category_label(item.category_key, language)}; "
+            f"{translated_text('equipment_primary_muscles', language).lower()}: {muscles}; {status}."
+        )
+    lines.extend(["", translated_text("coach_portal_equipment_open_library", language)])
+    return "\n".join(lines)
+
+
 def coach_portal_direct_reply(member, profile, user_message, language=None):
     language = language or current_language()
     if not member or not user_message:
@@ -6168,6 +6697,8 @@ def coach_portal_direct_reply(member, profile, user_message, language=None):
             )
             lines.extend(["", translated_text("coach_portal_pricing_open_catalog", language)])
             return "\n".join(lines)
+    if is_equipment_question(user_message):
+        return coach_equipment_direct_reply(member, user_message, language)
     return None
 
 
@@ -6209,6 +6740,7 @@ def generate_coach_reply(member, profile, user_message=None, workout_logs=None, 
         "Reply in the member's selected language. Give direct, practical coaching that uses the profile, recent workouts and current plan. "
         "Be specific about next training actions, weights/reps progression, food choices, recovery and what to log next. "
         "For account, membership, pricing, agreements, documents, cancellation, gym balance or payment questions, use the portal context first. Gym purchase balances are paid at the front desk; do not say Pay now unless online_payment_available=yes is explicitly present. "
+        "The portal context can include Dreamz equipment_library with real available machines and aliases. Prefer Dreamz equipment when creating workout advice, demo guidance or alternatives, and avoid out_of_service equipment. If the member asks which machines are available, answer from the equipment_library and point them to /equipment. "
         "Do not say you are an AI. Do not refer routine questions to Dreamz staff when the portal context already answers them. "
         "For serious red flags such as chest pain, fainting, severe injury, severe dizziness or medical emergencies, tell the member to stop and seek qualified medical help. "
         "Never mention pregnancy, prenatal training, pregnancy_status, pregnancy weight, or prenatal nutrition unless biological_sex=female and pregnancy_status=pregnant. "
@@ -7889,6 +8421,17 @@ def member_dashboard_context(member, staff_admin_view=False):
         {"current": [], "earlier": []},
         lambda: member_today_group_class_sections(member.member_id),
     ) if not staff_admin_view else {"current": [], "earlier": []}
+    new_equipment_items = optional_dashboard_value(
+        "new_equipment_items",
+        [],
+        lambda: (
+            member_visible_equipment_query()
+            .filter(EquipmentItem.is_new.is_(True))
+            .order_by(EquipmentItem.sort_order.asc(), EquipmentItem.name.asc())
+            .limit(4)
+            .all()
+        ),
+    ) if not staff_admin_view else []
     documents = optional_dashboard_value(
         "member_documents",
         [],
@@ -7940,6 +8483,7 @@ def member_dashboard_context(member, staff_admin_view=False):
         "coach_data_total": coach_counts.get("total", 0),
         "today_group_classes": today_group_class_sections["current"],
         "today_earlier_group_classes": today_group_class_sections["earlier"],
+        "new_equipment_items": new_equipment_items,
     }
 
 
@@ -8520,6 +9064,152 @@ def staff_group_class_publish():
     db.session.commit()
     flash(translated_text("group_class_schedule_published", current_language()))
     return redirect(url_for("staff_group_classes"))
+
+
+def save_equipment_upload(file_storage):
+    if not file_storage or not file_storage.filename:
+        return None
+    filename = secure_filename(file_storage.filename)
+    if not filename:
+        return None
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
+        abort(400, translated_text("equipment_invalid_image", current_language()))
+    os.makedirs(app.config["EQUIPMENT_UPLOAD_ROOT"], exist_ok=True)
+    stored_name = f"{datetime.now().strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(4)}{ext}"
+    file_storage.save(os.path.join(app.config["EQUIPMENT_UPLOAD_ROOT"], stored_name))
+    return url_for("equipment_uploaded_image", filename=stored_name)
+
+
+@app.get("/equipment-image/<path:filename>")
+def equipment_uploaded_image(filename):
+    if not session.get("member_id") and not current_staff_role():
+        abort(404)
+    return send_from_directory(app.config["EQUIPMENT_UPLOAD_ROOT"], filename)
+
+
+@app.get("/staff/equipment")
+def staff_equipment():
+    staff_role = require_staff_access()
+    staff_warning = None
+    try:
+        context = equipment_admin_context()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Equipment admin data unavailable while rendering staff equipment.")
+        staff_warning = staff_data_warning("staff_equipment_nav")
+        context = empty_equipment_admin_context()
+    return render_template(
+        "staff_equipment.html",
+        staff_role=staff_role,
+        staff_page_warning=staff_warning,
+        **context,
+    )
+
+
+@app.post("/staff/equipment/save")
+def staff_equipment_save():
+    validate_csrf_token()
+    require_staff_access()
+    ensure_runtime_schema()
+    seed_equipment_library()
+
+    name = request.form.get("name", "").strip()
+    category_key = request.form.get("category_key", "").strip()
+    if not name or not EquipmentCategory.query.filter_by(key=category_key).first():
+        abort(400, translated_text("equipment_required_fields", current_language()))
+    item_id = parse_optional_int(request.form.get("item_id"))
+    item = db.session.get(EquipmentItem, item_id) if item_id else None
+    if not item:
+        item = EquipmentItem()
+        db.session.add(item)
+    requested_slug = request.form.get("slug", "").strip() or slugify(name)
+    item.name = name
+    item.slug = requested_slug if not item.slug else item.slug
+    item.brand = request.form.get("brand", "").strip() or None
+    item.line = request.form.get("line", "").strip() or None
+    item.category_key = category_key
+    item.subcategory = request.form.get("subcategory", "").strip() or None
+    item.primary_muscle_groups = json_list_text(request.form.getlist("primary_muscle_groups") or request.form.get("primary_muscle_groups"))
+    item.secondary_muscle_groups = json_list_text(request.form.getlist("secondary_muscle_groups") or request.form.get("secondary_muscle_groups"))
+    item.usage_description = json.dumps({current_language(): request.form.get("usage_description", "").strip()}) if request.form.get("usage_description", "").strip() else item.usage_description
+    item.setup_instructions = request.form.get("setup_instructions", "").strip() or None
+    item.beginner_tips = request.form.get("beginner_tips", "").strip() or None
+    item.common_mistakes = request.form.get("common_mistakes", "").strip() or None
+    item.alternatives = json_list_text(request.form.get("alternatives"))
+    item.exercise_aliases = json_list_text(request.form.get("exercise_aliases"))
+    upload_url = save_equipment_upload(request.files.get("image_file"))
+    item.image_url = upload_url or request.form.get("image_url", "").strip() or item.image_url
+    item.thumbnail_url = item.thumbnail_url or item.image_url
+    item.gallery_images = json_list_text(request.form.get("gallery_images"))
+    item.video_url = request.form.get("video_url", "").strip() or None
+    item.demo_url = request.form.get("demo_url", "").strip() or None
+    item.location_zone = request.form.get("location_zone", "").strip() or None
+    status = request.form.get("status", "active").strip()
+    item.status = status if status in EQUIPMENT_STATUSES else "active"
+    visibility = request.form.get("visibility", "members").strip()
+    item.visibility = visibility if visibility in EQUIPMENT_VISIBILITY_OPTIONS else "members"
+    item.is_new = request.form.get("is_new") == "1"
+    item.new_since = parse_optional_date(request.form.get("new_since"))
+    item.new_until = parse_optional_date(request.form.get("new_until"))
+    item.promo_label = request.form.get("promo_label", "").strip() or None
+    item.available_for_ai_coach = request.form.get("available_for_ai_coach") == "1"
+    item.sort_order = parse_optional_int(request.form.get("sort_order")) or 0
+    item.internal_notes = request.form.get("internal_notes", "").strip() or None
+    item.updated_at = datetime.now()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        abort(400, translated_text("equipment_slug_exists", current_language()))
+    flash(translated_text("equipment_saved", current_language()))
+    return redirect(url_for("staff_equipment"))
+
+
+@app.get("/equipment")
+def member_equipment_library():
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    staff_warning = None
+    try:
+        context = equipment_member_context()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Equipment library unavailable while rendering member equipment.")
+        staff_warning = translated_text("equipment_empty", current_language())
+        context = empty_equipment_member_context()
+    return render_template(
+        "equipment.html",
+        member=member,
+        staff_page_warning=staff_warning,
+        **context,
+    )
+
+
+@app.get("/equipment/<slug>")
+def member_equipment_detail(slug):
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    ensure_runtime_schema()
+    seed_equipment_library()
+    item = member_visible_equipment_query().filter_by(slug=slug).first_or_404()
+    return render_template(
+        "equipment_detail.html",
+        member=member,
+        item=item,
+        primary_groups=json_list(item.primary_muscle_groups),
+        secondary_groups=json_list(item.secondary_muscle_groups),
+        aliases=equipment_item_aliases(item),
+        gallery=equipment_gallery(item),
+        description=equipment_item_description(item),
+        category_label=equipment_category_label(item.category_key),
+        setup_text=localized_json_text(item.setup_instructions),
+        tips_text=localized_json_text(item.beginner_tips),
+        mistakes_text=localized_json_text(item.common_mistakes),
+        alternatives=json_list(item.alternatives),
+    )
 
 
 @app.get("/staff/pricing-products")
@@ -9815,6 +10505,7 @@ def member_coach():
         coach_next_session=coach_next_session_context(profile, member.member_id),
         focus_field=request.args.get("field", "").strip(),
         return_to=request.args.get("return_to", "").strip(),
+        matching_equipment_for_exercise=matching_equipment_for_exercise,
     )
 
 

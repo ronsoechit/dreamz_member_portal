@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% block title %}{{ t('staff_equipment_title') }} | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<section class="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+  <div>
+    <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('staff_equipment_label') }}</div>
+    <h1 class="text-2xl font-semibold text-white">{{ t('staff_equipment_title') }}</h1>
+    <p class="mt-1 max-w-3xl text-sm leading-6 text-gray-400">{{ t('staff_equipment_intro') }}</p>
+  </div>
+</section>
+
+<form method="get" class="mb-5 grid gap-3 rounded-lg border border-gray-700 bg-gray-800/40 p-4 lg:grid-cols-[1fr_auto_auto_auto_auto_auto]">
+  <label class="block">
+    <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_search') }}</span>
+    <input name="q" value="{{ equipment_search_query }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+  </label>
+  <label class="block">
+    <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_category') }}</span>
+    <select name="category" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+      <option value="">{{ t('equipment_all_categories') }}</option>
+      {% for category in equipment_categories %}
+        <option value="{{ category.key }}" {% if selected_category == category.key %}selected{% endif %}>{{ equipment_category_label(category.key) }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="block">
+    <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_muscle_groups') }}</span>
+    <select name="muscle" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+      <option value="">{{ t('equipment_all_muscles') }}</option>
+      {% for muscle in equipment_muscle_groups %}
+        <option value="{{ muscle }}" {% if selected_muscle == muscle %}selected{% endif %}>{{ muscle }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="block">
+    <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_status') }}</span>
+    <select name="status" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+      <option value="">{{ t('equipment_all_statuses') }}</option>
+      {% for status in equipment_statuses %}
+        <option value="{{ status }}" {% if selected_status == status %}selected{% endif %}>{{ t('equipment_status_' ~ status) }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="flex items-end gap-2 rounded border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200">
+    <input type="checkbox" name="new" value="1" class="h-4 w-4 accent-yellow-500" {% if new_only %}checked{% endif %}>
+    {{ t('equipment_new_arrival') }}
+  </label>
+  <button class="rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black hover:bg-yellow-400">{{ t('apply') }}</button>
+</form>
+
+<section class="mb-6 rounded-lg border border-yellow-500/20 bg-gray-800/50 p-5">
+  <h2 class="text-lg font-semibold text-white">{{ t('equipment_add_item') }}</h2>
+  <form method="post" action="{{ url_for('staff_equipment_save') }}" enctype="multipart/form-data" class="mt-4 grid gap-3 lg:grid-cols-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label class="block lg:col-span-2">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_name') }}</span>
+      <input name="name" required class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_category') }}</span>
+      <select name="category_key" required class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+        {% for category in equipment_categories %}
+          <option value="{{ category.key }}">{{ equipment_category_label(category.key) }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_status') }}</span>
+      <select name="status" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+        {% for status in equipment_statuses %}
+          <option value="{{ status }}">{{ t('equipment_status_' ~ status) }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_brand') }}</span>
+      <input name="brand" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_subcategory') }}</span>
+      <input name="subcategory" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+    </label>
+    <label class="block lg:col-span-2">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_primary_muscles') }}</span>
+      <input name="primary_muscle_groups" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white" placeholder="Chest, Back">
+    </label>
+    <label class="block lg:col-span-2">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_aliases') }}</span>
+      <input name="exercise_aliases" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+    </label>
+    <label class="block lg:col-span-2">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_image_url') }}</span>
+      <input name="image_url" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+    </label>
+    <label class="block">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_upload_image') }}</span>
+      <input name="image_file" type="file" accept=".jpg,.jpeg,.png,.webp" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200">
+    </label>
+    <label class="flex items-center gap-2 self-end rounded border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200">
+      <input type="checkbox" name="is_new" value="1" class="h-4 w-4 accent-yellow-500">
+      {{ t('equipment_new_arrival') }}
+    </label>
+    <label class="block lg:col-span-4">
+      <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_how_to_use') }}</span>
+      <textarea name="usage_description" rows="2" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white"></textarea>
+    </label>
+    <label class="flex items-center gap-2 rounded border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200">
+      <input type="checkbox" name="available_for_ai_coach" value="1" checked class="h-4 w-4 accent-yellow-500">
+      {{ t('equipment_available_for_ai') }}
+    </label>
+    <button class="rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black hover:bg-yellow-400 lg:col-span-3">{{ t('save') }}</button>
+  </form>
+</section>
+
+<section class="rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+  <div class="mb-4 flex items-center justify-between gap-3">
+    <h2 class="text-lg font-semibold text-white">{{ t('equipment_catalog_items') }}</h2>
+    <span class="rounded-full border border-gray-700 bg-gray-950 px-3 py-1 text-xs text-gray-300">{{ equipment_items|length }}</span>
+  </div>
+  {% if equipment_items %}
+    <div class="space-y-4">
+      {% for item in equipment_items %}
+        <details class="rounded border border-gray-700 bg-gray-900/60 p-4" {% if loop.first %}open{% endif %}>
+          <summary class="cursor-pointer list-none">
+            <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div>
+                <div class="font-semibold text-white">{{ item.name }}</div>
+                <div class="mt-1 text-xs text-gray-400">{{ equipment_category_label(item.category_key) }}{% if item.subcategory %} · {{ item.subcategory }}{% endif %}</div>
+              </div>
+              <div class="flex flex-wrap gap-2 text-xs">
+                <span class="rounded-full border border-gray-700 bg-gray-950 px-2 py-1 text-gray-200">{{ t('equipment_status_' ~ item.status) }}</span>
+                <span class="rounded-full border border-gray-700 bg-gray-950 px-2 py-1 text-gray-200">{{ t('equipment_visibility_' ~ item.visibility) }}</span>
+                {% if item.is_new %}<span class="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-2 py-1 font-semibold text-yellow-100">{{ t('equipment_new_arrival') }}</span>{% endif %}
+              </div>
+            </div>
+          </summary>
+          <form method="post" action="{{ url_for('staff_equipment_save') }}" enctype="multipart/form-data" class="mt-4 grid gap-3 lg:grid-cols-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="item_id" value="{{ item.id }}">
+            <label class="block lg:col-span-2">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_name') }}</span>
+              <input name="name" value="{{ item.name }}" required class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+            </label>
+            <label class="block">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_category') }}</span>
+              <select name="category_key" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+                {% for category in equipment_categories %}
+                  <option value="{{ category.key }}" {% if item.category_key == category.key %}selected{% endif %}>{{ equipment_category_label(category.key) }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="block">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_status') }}</span>
+              <select name="status" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+                {% for status in equipment_statuses %}
+                  <option value="{{ status }}" {% if item.status == status %}selected{% endif %}>{{ t('equipment_status_' ~ status) }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="block">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_brand') }}</span>
+              <input name="brand" value="{{ item.brand or '' }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+            </label>
+            <label class="block">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_line') }}</span>
+              <input name="line" value="{{ item.line or '' }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+            </label>
+            <label class="block">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_subcategory') }}</span>
+              <input name="subcategory" value="{{ item.subcategory or '' }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+            </label>
+            <label class="block">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_sort_order') }}</span>
+              <input name="sort_order" value="{{ item.sort_order or 0 }}" inputmode="numeric" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+            </label>
+            <label class="block lg:col-span-2">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_primary_muscles') }}</span>
+              <input name="primary_muscle_groups" value="{{ equipment_primary_groups(item)|join(', ') }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+            </label>
+            <label class="block lg:col-span-2">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_secondary_muscles') }}</span>
+              <input name="secondary_muscle_groups" value="{{ equipment_secondary_groups(item)|join(', ') }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+            </label>
+            <label class="block lg:col-span-2">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_aliases') }}</span>
+              <input name="exercise_aliases" value="{{ equipment_aliases(item)|join(', ') }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+            </label>
+            <label class="block">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_visibility') }}</span>
+              <select name="visibility" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+                {% for visibility in equipment_visibility_options %}
+                  <option value="{{ visibility }}" {% if item.visibility == visibility %}selected{% endif %}>{{ t('equipment_visibility_' ~ visibility) }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="block">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_promo_label') }}</span>
+              <input name="promo_label" value="{{ item.promo_label or '' }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+            </label>
+            <label class="block lg:col-span-2">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_image_url') }}</span>
+              <input name="image_url" value="{{ item.image_url or '' }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+            </label>
+            <label class="block">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_upload_image') }}</span>
+              <input name="image_file" type="file" accept=".jpg,.jpeg,.png,.webp" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200">
+            </label>
+            <label class="block">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_demo_url') }}</span>
+              <input name="demo_url" value="{{ item.demo_url or '' }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+            </label>
+            <label class="block lg:col-span-4">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_how_to_use') }}</span>
+              <textarea name="usage_description" rows="2" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">{{ equipment_description(item) }}</textarea>
+            </label>
+            <label class="block lg:col-span-2">
+              <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_internal_notes') }}</span>
+              <textarea name="internal_notes" rows="2" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">{{ item.internal_notes or '' }}</textarea>
+            </label>
+            <div class="grid gap-2 text-sm text-gray-200">
+              <label class="flex items-center gap-2 rounded border border-gray-700 bg-gray-950 px-3 py-2">
+                <input type="checkbox" name="is_new" value="1" class="h-4 w-4 accent-yellow-500" {% if item.is_new %}checked{% endif %}>
+                {{ t('equipment_new_arrival') }}
+              </label>
+              <label class="flex items-center gap-2 rounded border border-gray-700 bg-gray-950 px-3 py-2">
+                <input type="checkbox" name="available_for_ai_coach" value="1" class="h-4 w-4 accent-yellow-500" {% if item.available_for_ai_coach %}checked{% endif %}>
+                {{ t('equipment_available_for_ai') }}
+              </label>
+            </div>
+            <button class="rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black hover:bg-yellow-400">{{ t('save') }}</button>
+          </form>
+        </details>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="rounded border border-gray-700 bg-gray-950/50 p-5 text-sm text-gray-300">{{ t('equipment_empty') }}</div>
+  {% endif %}
+</section>
+{% endblock %}

@@ -22,7 +22,7 @@ os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
 from translations import LANGUAGES, TRANSLATIONS  # noqa: E402
-from dreamz_portal import AppSetting, AgreementCategory, CancellationConfirmation, CancellationRequest, CancellationWindow, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, DigitalSignatureAuditTrail, DigitalSignatureRecord, EmailLog, FeatureAccessRule, GroupClassOccurrence, GroupClassSchedule, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, MealLog, Member, MemberAgreementAcceptance, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, MemberSignedDocument, MembershipApplication, MembershipApplicationAuditEvent, MembershipApplicationDocument, MembershipApplicationStatus, MembershipApplicationStep, PricingCategory, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, SignedPdfRecord, app, cancellation_message, coach_context_summary, coach_plan_for_member, coach_profile_completion, coach_today_group_class_reply, db, is_group_class_schedule_question, member_access_profile, member_account_notification_count, next_date_for_group_class, pricing_item_access_tags, pricing_visibility_list, seed_feature_access_rules, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
+from dreamz_portal import AppSetting, AgreementCategory, CancellationConfirmation, CancellationRequest, CancellationWindow, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, DigitalSignatureAuditTrail, DigitalSignatureRecord, EmailLog, EquipmentCategory, EquipmentItem, FeatureAccessRule, GroupClassOccurrence, GroupClassSchedule, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, MealLog, Member, MemberAgreementAcceptance, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, MemberSignedDocument, MembershipApplication, MembershipApplicationAuditEvent, MembershipApplicationDocument, MembershipApplicationStatus, MembershipApplicationStep, PricingCategory, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, SignedPdfRecord, app, cancellation_message, coach_context_summary, coach_equipment_direct_reply, coach_plan_for_member, coach_profile_completion, coach_today_group_class_reply, db, equipment_context_for_ai, is_group_class_schedule_question, matching_equipment_for_exercise, member_access_profile, member_account_notification_count, next_date_for_group_class, pricing_item_access_tags, pricing_visibility_list, seed_equipment_library, seed_feature_access_rules, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
 
 
 class FakeS3Body:
@@ -40,11 +40,14 @@ class PortalRouteTests(unittest.TestCase):
         self.original_document_cache_root = app.config.get("DOCUMENT_CACHE_ROOT")
         self.original_photos_root = app.config.get("GYM_ASSISTANT_PHOTOS_ROOT")
         self.original_coach_upload_root = app.config.get("COACH_UPLOAD_ROOT")
+        self.original_equipment_upload_root = app.config.get("EQUIPMENT_UPLOAD_ROOT")
         self.original_coach_force_local_uploads = app.config.get("COACH_FORCE_LOCAL_UPLOADS")
         self.original_coach_ai_mode = app.config.get("COACH_AI_MODE")
         self.original_openai_api_key = app.config.get("OPENAI_API_KEY")
         self.coach_upload_dir = tempfile.TemporaryDirectory()
+        self.equipment_upload_dir = tempfile.TemporaryDirectory()
         app.config["COACH_UPLOAD_ROOT"] = self.coach_upload_dir.name
+        app.config["EQUIPMENT_UPLOAD_ROOT"] = self.equipment_upload_dir.name
         app.config["COACH_FORCE_LOCAL_UPLOADS"] = True
         app.config["COACH_AI_MODE"] = "fallback"
         app.config["OPENAI_API_KEY"] = ""
@@ -62,10 +65,12 @@ class PortalRouteTests(unittest.TestCase):
         app.config["DOCUMENT_CACHE_ROOT"] = self.original_document_cache_root
         app.config["GYM_ASSISTANT_PHOTOS_ROOT"] = self.original_photos_root
         app.config["COACH_UPLOAD_ROOT"] = self.original_coach_upload_root
+        app.config["EQUIPMENT_UPLOAD_ROOT"] = self.original_equipment_upload_root
         app.config["COACH_FORCE_LOCAL_UPLOADS"] = self.original_coach_force_local_uploads
         app.config["COACH_AI_MODE"] = self.original_coach_ai_mode
         app.config["OPENAI_API_KEY"] = self.original_openai_api_key
         self.coach_upload_dir.cleanup()
+        self.equipment_upload_dir.cleanup()
 
     def add_member(self, member_id="1206", **overrides):
         data = {
@@ -3548,6 +3553,75 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("cardio_load=high", record.prompt_context)
         self.assertIn("attended_group_classes_this_week", record.prompt_context)
         self.assertNotIn("pregnancy_safety_level", record.prompt_context)
+
+    def test_equipment_seed_creates_new_machines_and_inventory(self):
+        seed_equipment_library()
+
+        self.assertGreaterEqual(EquipmentCategory.query.count(), 10)
+        self.assertGreaterEqual(EquipmentItem.query.count(), 60)
+        leg_extension = EquipmentItem.query.filter_by(slug="leg-extension").one()
+        high_row = EquipmentItem.query.filter_by(slug="plate-loaded-high-row-lat-pulldown").one()
+
+        self.assertTrue(leg_extension.is_new)
+        self.assertEqual(leg_extension.visibility, "members")
+        self.assertTrue(leg_extension.available_for_ai_coach)
+        self.assertIn("Quadriceps", leg_extension.primary_muscle_groups)
+        self.assertIn("lat pulldown", high_row.exercise_aliases)
+
+    def test_member_equipment_library_and_detail_show_seeded_items(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.login_as("13659")
+
+        response = self.client.get("/equipment")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Equipment Library", response.data)
+        self.assertIn(b"Leg Extension", response.data)
+        self.assertIn(b"New at Dreamz", response.data)
+
+        detail = self.client.get("/equipment/leg-extension")
+        self.assertEqual(detail.status_code, 200)
+        self.assertIn(b"quadriceps/front thighs", detail.data)
+        self.assertIn(b"No image available yet", detail.data)
+
+    def test_staff_equipment_page_and_save_work(self):
+        self.login_staff("admin")
+        response = self.client.get("/staff/equipment")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Equipment Management", response.data)
+        self.assertIn(b"Leg Extension", response.data)
+
+        save_response = self.client.post(
+            "/staff/equipment/save",
+            data=self.csrf_form_data(
+                name="Test Cable Handle",
+                category_key="accessories",
+                status="active",
+                visibility="members",
+                brand="Dreamz",
+                primary_muscle_groups="Full body",
+                exercise_aliases="cable handle",
+                available_for_ai_coach="1",
+            ),
+            follow_redirects=True,
+        )
+        self.assertEqual(save_response.status_code, 200)
+        self.assertIsNotNone(EquipmentItem.query.filter_by(slug="test-cable-handle").first())
+
+    def test_equipment_matches_exercise_and_enters_coach_context(self):
+        member = self.add_member(member_id="13659", name="Ron Soechit")
+        seed_equipment_library()
+
+        linked = matching_equipment_for_exercise("Leg extension", "Machine")
+        self.assertIsNotNone(linked)
+        self.assertEqual(linked.slug, "leg-extension")
+
+        context = equipment_context_for_ai(member, focus_text="legs")
+        self.assertIn("Leg Extension", context)
+        self.assertIn("equipment_library=", context)
+
+        reply = coach_equipment_direct_reply(member, "Welke leg extension apparaten zijn er?", "nl")
+        self.assertIn("Leg Extension", reply)
+        self.assertIn("Apparatenbibliotheek", reply)
 
 
 if __name__ == "__main__":
