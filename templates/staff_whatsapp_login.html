@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}{{ t('staff_whatsapp_login_title') }} | Dreamz Fitness{% endblock %}
+
+{% macro status_badge(value) -%}
+  {% set ok = value == 'configured' or value == 'success' %}
+  <span class="rounded-full px-3 py-1 text-xs font-semibold {% if ok %}bg-green-500/15 text-green-200{% else %}bg-yellow-500/15 text-yellow-200{% endif %}">
+    {{ value|replace('_', ' ')|title }}
+  </span>
+{%- endmacro %}
+
+{% block content %}
+<div class="mb-6">
+  <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('admin_dashboard') }}</div>
+  <h1 class="text-2xl font-semibold text-white">{{ t('staff_whatsapp_login_title') }}</h1>
+  <p class="mt-1 max-w-3xl text-sm leading-6 text-gray-400">{{ t('staff_whatsapp_login_status_intro') }}</p>
+</div>
+
+<section class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+  <div class="rounded border border-gray-700 bg-gray-800/50 p-4">
+    <div class="text-sm text-gray-400">{{ t('whatsapp_feature_flag') }}</div>
+    <div class="mt-2">{{ status_badge('enabled' if whatsapp_enabled else 'disabled') }}</div>
+  </div>
+  <div class="rounded border border-gray-700 bg-gray-800/50 p-4">
+    <div class="text-sm text-gray-400">{{ t('whatsapp_meta_app_status') }}</div>
+    <div class="mt-2">{{ status_badge(meta_app_status) }}</div>
+  </div>
+  <div class="rounded border border-gray-700 bg-gray-800/50 p-4">
+    <div class="text-sm text-gray-400">{{ t('whatsapp_webhook_status') }}</div>
+    <div class="mt-2">{{ status_badge(webhook_status) }}</div>
+  </div>
+  <div class="rounded border border-gray-700 bg-gray-800/50 p-4">
+    <div class="text-sm text-gray-400">{{ t('whatsapp_phone_number_status') }}</div>
+    <div class="mt-2">{{ status_badge(phone_number_status) }}</div>
+  </div>
+</section>
+
+<section class="mt-5 grid gap-4 md:grid-cols-4">
+  <div class="rounded border border-gray-700 bg-gray-800/50 p-4">
+    <div class="text-sm text-gray-400">{{ t('whatsapp_otp_requests') }}</div>
+    <div class="mt-2 text-2xl font-semibold text-yellow-400">{{ otp_requests_24h }}</div>
+  </div>
+  <div class="rounded border border-gray-700 bg-gray-800/50 p-4">
+    <div class="text-sm text-gray-400">{{ t('whatsapp_otp_pending') }}</div>
+    <div class="mt-2 text-2xl font-semibold text-yellow-400">{{ otp_pending }}</div>
+  </div>
+  <div class="rounded border border-gray-700 bg-gray-800/50 p-4">
+    <div class="text-sm text-gray-400">{{ t('whatsapp_login_success') }}</div>
+    <div class="mt-2 text-2xl font-semibold text-green-300">{{ login_success_24h }}</div>
+  </div>
+  <div class="rounded border border-gray-700 bg-gray-800/50 p-4">
+    <div class="text-sm text-gray-400">{{ t('whatsapp_login_failures') }}</div>
+    <div class="mt-2 text-2xl font-semibold text-red-200">{{ login_failed_24h }}</div>
+  </div>
+</section>
+
+<section class="mt-6 rounded border border-gray-700 bg-gray-800/50 p-5">
+  <h2 class="text-lg font-semibold text-yellow-300">{{ t('whatsapp_webhook_urls') }}</h2>
+  <dl class="mt-4 grid gap-3 text-sm">
+    <div class="rounded border border-gray-700 bg-gray-900/50 p-3">
+      <dt class="font-semibold text-gray-300">GET</dt>
+      <dd class="mt-1 font-mono text-gray-100">{{ url_for('whatsapp_webhook_verify', _external=True) }}</dd>
+    </div>
+    <div class="rounded border border-gray-700 bg-gray-900/50 p-3">
+      <dt class="font-semibold text-gray-300">POST</dt>
+      <dd class="mt-1 font-mono text-gray-100">{{ url_for('whatsapp_webhook_receive', _external=True) }}</dd>
+    </div>
+  </dl>
+</section>
+
+<section class="mt-6 rounded border border-gray-700 bg-gray-800/50 p-5">
+  <h2 class="text-lg font-semibold text-yellow-300">{{ t('whatsapp_recent_events') }}</h2>
+  <div class="mt-4 overflow-x-auto">
+    <table class="min-w-full text-left text-sm">
+      <thead class="text-xs uppercase text-gray-400">
+        <tr>
+          <th class="p-2">{{ t('date') }}</th>
+          <th class="p-2">{{ t('status') }}</th>
+          <th class="p-2">{{ t('whatsapp_event') }}</th>
+          <th class="p-2">{{ t('member_id') }}</th>
+          <th class="p-2">{{ t('mobile') }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for event in recent_audit_events %}
+          <tr class="border-t border-gray-800">
+            <td class="p-2 text-gray-300">{{ event.created_at|format_date('%d/%m/%Y %H:%M') }}</td>
+            <td class="p-2">{{ status_badge(event.status) }}</td>
+            <td class="p-2 text-white">{{ event.event_type|replace('_', ' ')|title }}</td>
+            <td class="p-2 text-gray-300">{{ event.member_id or '-' }}</td>
+            <td class="p-2 text-gray-300">{{ event.phone_e164 or '-' }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="p-4 text-center text-gray-400">{{ t('no_records_found') }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

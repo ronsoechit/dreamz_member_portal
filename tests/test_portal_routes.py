@@ -23,6 +23,8 @@ os.environ["SECRET_KEY"] = "test-secret"
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
 from translations import LANGUAGES, TRANSLATIONS  # noqa: E402
 from dreamz_portal import AppSetting, AgreementCategory, CancellationConfirmation, CancellationRequest, CancellationWindow, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, DigitalSignatureAuditTrail, DigitalSignatureRecord, EmailLog, EquipmentCategory, EquipmentItem, FeatureAccessRule, GroupClassOccurrence, GroupClassSchedule, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, MealLog, Member, MemberAgreementAcceptance, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, MemberSignedDocument, MembershipApplication, MembershipApplicationAuditEvent, MembershipApplicationDocument, MembershipApplicationStatus, MembershipApplicationStep, PricingCategory, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, SignedPdfRecord, app, cancellation_message, coach_context_summary, coach_equipment_direct_reply, coach_plan_for_member, coach_profile_completion, coach_today_group_class_reply, db, equipment_context_for_ai, is_group_class_schedule_question, matching_equipment_for_exercise, member_access_profile, member_account_notification_count, next_date_for_group_class, pricing_item_access_tags, pricing_visibility_list, seed_equipment_library, seed_feature_access_rules, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
+from dreamz_portal import WhatsAppAuditLog, WhatsAppLoginOtp, WhatsAppTokenRecord  # noqa: E402
+from whatsapp_auth import normalize_phone_number, phone_digits  # noqa: E402
 
 
 class FakeS3Body:
@@ -44,6 +46,20 @@ class PortalRouteTests(unittest.TestCase):
         self.original_coach_force_local_uploads = app.config.get("COACH_FORCE_LOCAL_UPLOADS")
         self.original_coach_ai_mode = app.config.get("COACH_AI_MODE")
         self.original_openai_api_key = app.config.get("OPENAI_API_KEY")
+        self.original_whatsapp_config = {
+            key: app.config.get(key)
+            for key in [
+                "WHATSAPP_LOGIN_ENABLED",
+                "WHATSAPP_META_APP_ID",
+                "WHATSAPP_BUSINESS_ACCOUNT_ID",
+                "WHATSAPP_PHONE_NUMBER_ID",
+                "WHATSAPP_PRODUCTION_PHONE_NUMBER",
+                "WHATSAPP_CLOUD_API_TOKEN",
+                "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+                "WHATSAPP_OTP_TEMPLATE_NAME",
+                "WHATSAPP_OTP_SECRET",
+            ]
+        }
         self.coach_upload_dir = tempfile.TemporaryDirectory()
         self.equipment_upload_dir = tempfile.TemporaryDirectory()
         app.config["COACH_UPLOAD_ROOT"] = self.coach_upload_dir.name
@@ -69,6 +85,8 @@ class PortalRouteTests(unittest.TestCase):
         app.config["COACH_FORCE_LOCAL_UPLOADS"] = self.original_coach_force_local_uploads
         app.config["COACH_AI_MODE"] = self.original_coach_ai_mode
         app.config["OPENAI_API_KEY"] = self.original_openai_api_key
+        for key, value in self.original_whatsapp_config.items():
+            app.config[key] = value
         self.coach_upload_dir.cleanup()
         self.equipment_upload_dir.cleanup()
 
@@ -146,6 +164,101 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("login-language", body)
         self.assertNotIn("language-switcher", body)
         self.assertNotIn("Birthdate", body)
+        self.assertNotIn("Continue with WhatsApp", body)
+
+    def test_whatsapp_login_is_hidden_and_disabled_by_default(self):
+        self.client.get("/language?lang=en&next=/login")
+
+        response = self.client.get("/login")
+        self.assertNotIn("Continue with WhatsApp", response.get_data(as_text=True))
+        self.assertEqual(self.client.get("/login/whatsapp").status_code, 404)
+
+    def test_whatsapp_phone_normalization_uses_bonaire_default(self):
+        self.assertEqual(normalize_phone_number("701 2345"), "+5997012345")
+        self.assertEqual(normalize_phone_number("+599 701 2345"), "+5997012345")
+        self.assertEqual(phone_digits("+599 701 2345"), "5997012345")
+
+    def test_whatsapp_login_flow_creates_normal_member_session_when_enabled(self):
+        app.config["WHATSAPP_LOGIN_ENABLED"] = "true"
+        app.config["WHATSAPP_OTP_SECRET"] = "test-whatsapp-secret"
+        self.add_member(member_id="1206", mobile="+599 701 2345", email="member@example.com")
+        response = self.client.get("/language?lang=en&next=/login")
+        self.assertEqual(response.status_code, 302)
+
+        response = self.client.get("/login")
+        body = response.get_data(as_text=True)
+        self.assertIn("Continue with WhatsApp", body)
+
+        response = self.client.get("/login/whatsapp")
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        token = re.search(r'name="csrf_token" value="([^"]+)"', body).group(1)
+
+        response = self.client.post(
+            "/login/whatsapp",
+            data={"phone": "7012345", "remember_device": "1", "csrf_token": token},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login/whatsapp/verify", response.headers["Location"])
+        otp_record = WhatsAppLoginOtp.query.one()
+        self.assertEqual(otp_record.member_id, "1206")
+        self.assertEqual(otp_record.phone_e164, "+5997012345")
+        with self.client.session_transaction() as sess:
+            dev_code = sess["dev_whatsapp_otp"]
+            sess["_csrf_token"] = "test-csrf-token"
+
+        response = self.client.post(
+            "/login/whatsapp/verify",
+            data={"code": dev_code, "csrf_token": "test-csrf-token"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/dashboard?id=1206", response.headers["Location"])
+        self.assertEqual(WhatsAppLoginOtp.query.one().status, "verified")
+        self.assertEqual(WhatsAppAuditLog.query.filter_by(event_type="login_verified", status="success").count(), 1)
+        with self.client.session_transaction() as sess:
+            self.assertEqual(sess["member_id"], "1206")
+            self.assertTrue(sess["member_password_verified"])
+
+    def test_whatsapp_login_unknown_phone_shows_frontdesk_message(self):
+        app.config["WHATSAPP_LOGIN_ENABLED"] = "true"
+        self.client.get("/language?lang=en&next=/login/whatsapp")
+        response = self.client.get("/login/whatsapp")
+        token = re.search(r'name="csrf_token" value="([^"]+)"', response.get_data(as_text=True)).group(1)
+
+        response = self.client.post(
+            "/login/whatsapp",
+            data={"phone": "+5997000000", "csrf_token": token},
+            follow_redirects=True,
+        )
+
+        body = response.get_data(as_text=True)
+        self.assertIn("Please contact the front desk", body)
+        self.assertEqual(WhatsAppAuditLog.query.filter_by(event_type="member_not_found").count(), 1)
+
+    def test_whatsapp_webhook_verify_uses_meta_challenge(self):
+        app.config["WHATSAPP_WEBHOOK_VERIFY_TOKEN"] = "verify-me"
+
+        response = self.client.get("/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=verify-me&hub.challenge=abc123")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_data(as_text=True), "abc123")
+
+    def test_staff_whatsapp_status_page_opens(self):
+        app.config["WHATSAPP_META_APP_ID"] = "meta-app"
+        app.config["WHATSAPP_BUSINESS_ACCOUNT_ID"] = "business"
+        app.config["WHATSAPP_PHONE_NUMBER_ID"] = "phone-id"
+        app.config["WHATSAPP_PRODUCTION_PHONE_NUMBER"] = "+5997000000"
+        app.config["WHATSAPP_CLOUD_API_TOKEN"] = "cloud-token"
+        app.config["WHATSAPP_WEBHOOK_VERIFY_TOKEN"] = "verify-token"
+        self.login_staff("admin")
+
+        response = self.client.get("/staff/whatsapp-login")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("WhatsApp Login Status", body)
+        self.assertIn("/webhooks/whatsapp", body)
+        self.assertGreaterEqual(WhatsAppTokenRecord.query.count(), 2)
 
     def test_translation_catalog_has_exact_four_language_key_parity(self):
         self.assertEqual(set(LANGUAGES), {"en", "nl", "pap", "es"})

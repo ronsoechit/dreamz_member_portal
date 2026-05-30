@@ -122,6 +122,21 @@
         <span class="h-px flex-1 bg-gray-800"></span>
       </div>
 
+      {% if whatsapp_login_enabled %}
+        <a
+          href="{{ url_for('whatsapp_login') }}"
+          class="mb-4 flex w-full items-center justify-center rounded border border-green-500/60 px-4 py-2 font-semibold text-green-100 transition hover:bg-green-500/10"
+        >
+          {{ t('continue_with_whatsapp') }}
+        </a>
+
+        <div class="my-5 flex items-center gap-3 text-xs uppercase tracking-wide text-gray-500">
+          <span class="h-px flex-1 bg-gray-800"></span>
+          <span>{{ t('continue_with_email') }}</span>
+          <span class="h-px flex-1 bg-gray-800"></span>
+        </div>
+      {% endif %}
+
       <form method="POST" data-loading-form class="rounded border border-gray-700/80 bg-gray-800/40 p-4">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="step" value="email">

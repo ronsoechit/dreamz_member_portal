@@ -37,6 +37,19 @@ from translations import (
     translate,
 )
 from storage_backend import is_s3_uri, open_s3_object, parse_s3_uri, s3_bucket_name, s3_client, s3_download_name, s3_object_exists, upload_bytes_to_s3
+from whatsapp_auth import (
+    OTP_MAX_ATTEMPTS,
+    OTP_TTL_MINUTES,
+    WhatsAppCloudApiClient,
+    generate_otp_code,
+    normalize_phone_number,
+    otp_expires_at,
+    otp_hash,
+    phone_digits,
+    token_fingerprint,
+    verify_otp_code,
+    whatsapp_login_enabled,
+)
 
 import csv
 import secrets
@@ -88,6 +101,21 @@ app.config["EMAIL_DELIVERY_MODE"] = os.getenv("EMAIL_DELIVERY_MODE", "log")
 app.config["MEMBER_LOGIN_CODE_TTL_MINUTES"] = int(os.getenv("MEMBER_LOGIN_CODE_TTL_MINUTES", "15"))
 app.config["MEMBER_SESSION_DAYS"] = int(os.getenv("MEMBER_SESSION_DAYS", "90"))
 app.config["MEMBER_PASSWORD_MIN_LENGTH"] = int(os.getenv("MEMBER_PASSWORD_MIN_LENGTH", "8"))
+app.config["WHATSAPP_LOGIN_ENABLED"] = os.getenv("WHATSAPP_LOGIN_ENABLED", "false")
+app.config["WHATSAPP_META_APP_ID"] = os.getenv("WHATSAPP_META_APP_ID", "")
+app.config["WHATSAPP_BUSINESS_ACCOUNT_ID"] = os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID", "")
+app.config["WHATSAPP_PHONE_NUMBER_ID"] = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
+app.config["WHATSAPP_PRODUCTION_PHONE_NUMBER"] = os.getenv("WHATSAPP_PRODUCTION_PHONE_NUMBER", "")
+app.config["WHATSAPP_CLOUD_API_TOKEN"] = os.getenv("WHATSAPP_CLOUD_API_TOKEN", "")
+app.config["WHATSAPP_WEBHOOK_VERIFY_TOKEN"] = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "")
+app.config["WHATSAPP_OTP_TEMPLATE_NAME"] = os.getenv("WHATSAPP_OTP_TEMPLATE_NAME", "")
+app.config["WHATSAPP_OTP_TEMPLATE_LANGUAGE"] = os.getenv("WHATSAPP_OTP_TEMPLATE_LANGUAGE", "en_US")
+app.config["WHATSAPP_API_VERSION"] = os.getenv("WHATSAPP_API_VERSION", "v19.0")
+app.config["WHATSAPP_DEFAULT_COUNTRY_CODE"] = os.getenv("WHATSAPP_DEFAULT_COUNTRY_CODE", "599")
+app.config["WHATSAPP_OTP_SECRET"] = os.getenv("WHATSAPP_OTP_SECRET") or app.secret_key
+app.config["WHATSAPP_OTP_TTL_MINUTES"] = int(os.getenv("WHATSAPP_OTP_TTL_MINUTES", str(OTP_TTL_MINUTES)))
+app.config["WHATSAPP_OTP_MAX_ATTEMPTS"] = int(os.getenv("WHATSAPP_OTP_MAX_ATTEMPTS", str(OTP_MAX_ATTEMPTS)))
+app.config["WHATSAPP_REMEMBER_DAYS"] = int(os.getenv("WHATSAPP_REMEMBER_DAYS", "90"))
 app.config["DIRECT_DEBIT_DAY"] = int(os.getenv("DIRECT_DEBIT_DAY", "28"))
 app.config["SESSION_COOKIE_NAME"] = "dreamz_member_portal_session"
 app.config["SESSION_COOKIE_HTTPONLY"] = True
@@ -603,6 +631,51 @@ class MemberLoginCode(db.Model):
     expires_at = db.Column(db.DateTime, nullable=False)
     used_at = db.Column(db.DateTime)
     attempts = db.Column(db.Integer, default=0, nullable=False)
+
+
+class WhatsAppLoginOtp(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.String, nullable=False, index=True)
+    phone_e164 = db.Column(db.String, nullable=False, index=True)
+    normalized_phone = db.Column(db.String, nullable=False, index=True)
+    otp_hash = db.Column(db.String, nullable=False)
+    language = db.Column(db.String, default=DEFAULT_LANGUAGE, nullable=False)
+    remember_device = db.Column(db.Boolean, default=True, nullable=False)
+    attempts = db.Column(db.Integer, default=0, nullable=False)
+    max_attempts = db.Column(db.Integer, default=OTP_MAX_ATTEMPTS, nullable=False)
+    status = db.Column(db.String, default="pending", nullable=False, index=True)
+    provider_status = db.Column(db.String)
+    provider_message_id = db.Column(db.String)
+    request_ip = db.Column(db.String)
+    user_agent = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    consumed_at = db.Column(db.DateTime)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+
+class WhatsAppTokenRecord(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    provider = db.Column(db.String, default="meta", nullable=False, index=True)
+    token_name = db.Column(db.String, nullable=False, index=True)
+    token_hash = db.Column(db.String, nullable=False)
+    status = db.Column(db.String, default="configured", nullable=False, index=True)
+    expires_at = db.Column(db.DateTime)
+    last_verified_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+
+class WhatsAppAuditLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    event_type = db.Column(db.String, nullable=False, index=True)
+    status = db.Column(db.String, nullable=False, index=True)
+    member_id = db.Column(db.String, index=True)
+    phone_e164 = db.Column(db.String, index=True)
+    ip_address = db.Column(db.String)
+    user_agent = db.Column(db.Text)
+    metadata_json = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
 
 
 class CoachProfile(db.Model):
@@ -7378,6 +7451,134 @@ def recent_member_login_code_request(email, now=None):
     )
 
 
+def whatsapp_feature_enabled():
+    return whatsapp_login_enabled(app.config)
+
+
+def whatsapp_client():
+    return WhatsAppCloudApiClient(
+        access_token=app.config.get("WHATSAPP_CLOUD_API_TOKEN", ""),
+        phone_number_id=app.config.get("WHATSAPP_PHONE_NUMBER_ID", ""),
+        api_version=app.config.get("WHATSAPP_API_VERSION", "v19.0"),
+        template_name=app.config.get("WHATSAPP_OTP_TEMPLATE_NAME", ""),
+        template_language=app.config.get("WHATSAPP_OTP_TEMPLATE_LANGUAGE", "en_US"),
+    )
+
+
+def log_whatsapp_auth_event(event_type, status, member=None, phone_e164="", metadata=None):
+    record = WhatsAppAuditLog(
+        event_type=event_type,
+        status=status,
+        member_id=member.member_id if member else None,
+        phone_e164=phone_e164 or None,
+        ip_address=request.headers.get("X-Forwarded-For", request.remote_addr) if has_request_context() else None,
+        user_agent=request.headers.get("User-Agent") if has_request_context() else None,
+        metadata_json=json.dumps(metadata or {}, default=str),
+    )
+    db.session.add(record)
+    return record
+
+
+def member_phone_candidates(member):
+    return [member.mobile, member.phone]
+
+
+def member_by_whatsapp_phone(raw_phone):
+    normalized = normalize_phone_number(raw_phone, app.config.get("WHATSAPP_DEFAULT_COUNTRY_CODE", "599"))
+    digits = phone_digits(normalized)
+    if not digits:
+        return None, ""
+    for member in Member.query.all():
+        for candidate in member_phone_candidates(member):
+            candidate_normalized = normalize_phone_number(candidate, app.config.get("WHATSAPP_DEFAULT_COUNTRY_CODE", "599"))
+            if phone_digits(candidate_normalized) == digits:
+                return member, normalized
+    return None, normalized
+
+
+def create_whatsapp_login_otp(member, phone_e164, remember_device=True):
+    now = datetime.now()
+    WhatsAppLoginOtp.query.filter_by(member_id=member.member_id, status="pending").update({
+        "status": "superseded",
+        "updated_at": now,
+    })
+    code = generate_otp_code()
+    otp_record = WhatsAppLoginOtp(
+        member_id=member.member_id,
+        phone_e164=phone_e164,
+        normalized_phone=phone_digits(phone_e164),
+        otp_hash=otp_hash(code, app.config["WHATSAPP_OTP_SECRET"]),
+        language=current_language(),
+        remember_device=bool(remember_device),
+        max_attempts=app.config["WHATSAPP_OTP_MAX_ATTEMPTS"],
+        request_ip=request.headers.get("X-Forwarded-For", request.remote_addr),
+        user_agent=request.headers.get("User-Agent"),
+        expires_at=otp_expires_at(now, app.config["WHATSAPP_OTP_TTL_MINUTES"]),
+    )
+    db.session.add(otp_record)
+    db.session.flush()
+    result = whatsapp_client().send_otp(phone_e164, code, language=current_language())
+    otp_record.provider_status = result.status
+    otp_record.provider_message_id = result.provider_message_id or None
+    log_whatsapp_auth_event(
+        "otp_requested",
+        result.status if result.status != "sent" else "success",
+        member=member,
+        phone_e164=phone_e164,
+        metadata={"otp_id": otp_record.id, "provider_error": result.error},
+    )
+    db.session.commit()
+    return otp_record, code if result.status == "not_configured" and app.config.get("TESTING") else None
+
+
+def latest_whatsapp_login_otp(otp_id):
+    if not otp_id:
+        return None
+    return WhatsAppLoginOtp.query.filter_by(id=otp_id, status="pending").first()
+
+
+def sync_whatsapp_token_metadata():
+    token_values = {
+        "cloud_api_token": app.config.get("WHATSAPP_CLOUD_API_TOKEN", ""),
+        "webhook_verify_token": app.config.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN", ""),
+    }
+    for name, raw_token in token_values.items():
+        if not raw_token:
+            continue
+        fingerprint = token_fingerprint(raw_token)
+        record = WhatsAppTokenRecord.query.filter_by(provider="meta", token_name=name).first()
+        if not record:
+            record = WhatsAppTokenRecord(provider="meta", token_name=name, token_hash=fingerprint)
+            db.session.add(record)
+        record.token_hash = fingerprint
+        record.status = "configured"
+        record.updated_at = datetime.now()
+
+
+def whatsapp_login_status_context():
+    sync_whatsapp_token_metadata()
+    db.session.commit()
+    now = datetime.now()
+    last_24h = now - timedelta(hours=24)
+    otp_query = WhatsAppLoginOtp.query.filter(WhatsAppLoginOtp.created_at >= last_24h)
+    audit_query = WhatsAppAuditLog.query.filter(WhatsAppAuditLog.created_at >= last_24h)
+    return {
+        "whatsapp_enabled": whatsapp_feature_enabled(),
+        "meta_app_status": "configured" if app.config.get("WHATSAPP_META_APP_ID") else "missing",
+        "webhook_status": "configured" if app.config.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN") else "missing",
+        "phone_number_status": "configured" if app.config.get("WHATSAPP_PHONE_NUMBER_ID") and app.config.get("WHATSAPP_PRODUCTION_PHONE_NUMBER") else "missing",
+        "business_account_status": "configured" if app.config.get("WHATSAPP_BUSINESS_ACCOUNT_ID") else "missing",
+        "otp_requests_24h": otp_query.count(),
+        "otp_pending": WhatsAppLoginOtp.query.filter_by(status="pending").count(),
+        "login_success_24h": audit_query.filter_by(event_type="login_verified", status="success").count(),
+        "login_failed_24h": audit_query.filter(
+            WhatsAppAuditLog.event_type.in_(["otp_failed", "member_not_found", "login_expired"])
+        ).count(),
+        "recent_audit_events": WhatsAppAuditLog.query.order_by(WhatsAppAuditLog.created_at.desc()).limit(20).all(),
+        "token_records": WhatsAppTokenRecord.query.order_by(WhatsAppTokenRecord.updated_at.desc()).all(),
+    }
+
+
 def is_staff_admin():
     return current_staff_role() == "admin"
 
@@ -7824,6 +8025,7 @@ def require_language_selection_for_entry():
     if request.endpoint in {
         "choose_language",
         "set_language",
+        "whatsapp_webhook_verify",
         "static",
         "web_manifest",
         "service_worker",
@@ -7860,6 +8062,7 @@ def inject_csrf_token():
         "current_member_id": member_id,
         "current_staff_role": current_staff_role(),
         "current_staff_username": current_staff_username(),
+        "whatsapp_login_enabled": whatsapp_feature_enabled(),
         "account_notification_count": member_account_notification_count(member_id) if member_id and not is_staff_user() else 0,
         "floating_coach_interactions": floating_coach_recent_interactions(member_id) if member_id and not is_staff_user() else [],
         "floating_coach_threads": floating_coach_recent_threads(member_id) if member_id and not is_staff_user() else [],
@@ -8837,6 +9040,13 @@ def staff_home():
 @app.get("/staff/")
 def staff_home_slash():
     return redirect(url_for("staff_home"))
+
+
+@app.get("/staff/whatsapp-login")
+def staff_whatsapp_login_status():
+    require_staff_access()
+    ensure_runtime_schema()
+    return render_template("staff_whatsapp_login.html", **whatsapp_login_status_context())
 
 
 @app.post("/api/sync/members")
@@ -11313,6 +11523,114 @@ def login():
             dev_code=session.get("dev_login_code"),
         )
     return render_template("login.html", step="email")
+
+
+@app.route("/login/whatsapp", methods=["GET", "POST"])
+def whatsapp_login():
+    if not whatsapp_feature_enabled():
+        abort(404)
+    ensure_runtime_schema()
+    if not language_choice_from_request():
+        next_url = request.full_path if request.query_string else request.path
+        return redirect(url_for("choose_language", next=safe_local_next_url(next_url)))
+
+    if request.method == "POST":
+        validate_csrf_token()
+        phone = request.form.get("phone", "")
+        remember_device = request.form.get("remember_device") == "1"
+        member, phone_e164 = member_by_whatsapp_phone(phone)
+        if not member:
+            log_whatsapp_auth_event("member_not_found", "failed", phone_e164=phone_e164)
+            db.session.commit()
+            flash(translated_text("whatsapp_member_not_found", current_language()), "error")
+            return redirect(url_for("whatsapp_login"))
+
+        otp_record, dev_code = create_whatsapp_login_otp(member, phone_e164, remember_device=remember_device)
+        session["pending_whatsapp_otp_id"] = otp_record.id
+        if dev_code:
+            session["dev_whatsapp_otp"] = dev_code
+        else:
+            session.pop("dev_whatsapp_otp", None)
+        flash(translated_text("whatsapp_otp_sent", current_language()), "success")
+        return redirect(url_for("whatsapp_verify"))
+
+    return render_template("whatsapp_login.html")
+
+
+@app.route("/login/whatsapp/verify", methods=["GET", "POST"])
+def whatsapp_verify():
+    if not whatsapp_feature_enabled():
+        abort(404)
+    ensure_runtime_schema()
+    otp_record = latest_whatsapp_login_otp(session.get("pending_whatsapp_otp_id"))
+    if not otp_record:
+        flash(translated_text("whatsapp_request_new_code", current_language()), "error")
+        return redirect(url_for("whatsapp_login"))
+
+    if request.method == "POST":
+        validate_csrf_token()
+        supplied_code = request.form.get("code", "").strip()
+        now = datetime.now()
+        otp_record.attempts += 1
+        otp_record.updated_at = now
+        if otp_record.expires_at < now or otp_record.attempts > otp_record.max_attempts:
+            otp_record.status = "expired"
+            log_whatsapp_auth_event("login_expired", "failed", phone_e164=otp_record.phone_e164, metadata={"otp_id": otp_record.id})
+            db.session.commit()
+            session.pop("pending_whatsapp_otp_id", None)
+            session.pop("dev_whatsapp_otp", None)
+            flash(translated_text("whatsapp_code_expired", current_language()), "error")
+            return redirect(url_for("whatsapp_login"))
+
+        if verify_otp_code(supplied_code, otp_record.otp_hash, app.config["WHATSAPP_OTP_SECRET"]):
+            member = Member.query.filter_by(member_id=otp_record.member_id).first()
+            if not member:
+                otp_record.status = "failed"
+                log_whatsapp_auth_event("login_member_missing", "failed", phone_e164=otp_record.phone_e164, metadata={"otp_id": otp_record.id})
+                db.session.commit()
+                flash(translated_text("login_not_verified", current_language()), "error")
+                return redirect(url_for("whatsapp_login"))
+            otp_record.status = "verified"
+            otp_record.consumed_at = now
+            log_whatsapp_auth_event("login_verified", "success", member=member, phone_e164=otp_record.phone_e164, metadata={"otp_id": otp_record.id})
+            db.session.commit()
+            session.pop("pending_whatsapp_otp_id", None)
+            session.pop("dev_whatsapp_otp", None)
+            start_member_session(member, password_verified=True)
+            session.permanent = bool(otp_record.remember_device)
+            return redirect(url_for("dashboard", id=member.member_id))
+
+        log_whatsapp_auth_event("otp_failed", "failed", phone_e164=otp_record.phone_e164, metadata={"otp_id": otp_record.id, "attempts": otp_record.attempts})
+        db.session.commit()
+        flash(translated_text("whatsapp_invalid_code", current_language()), "error")
+        return redirect(url_for("whatsapp_verify"))
+
+    return render_template("whatsapp_verify.html", dev_code=session.get("dev_whatsapp_otp"))
+
+
+@app.get("/webhooks/whatsapp")
+def whatsapp_webhook_verify():
+    ensure_runtime_schema()
+    verify_token = app.config.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "")
+    mode = request.args.get("hub.mode")
+    supplied_token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+    if mode == "subscribe" and verify_token and supplied_token == verify_token:
+        log_whatsapp_auth_event("webhook_verified", "success")
+        db.session.commit()
+        return Response(challenge or "", mimetype="text/plain")
+    log_whatsapp_auth_event("webhook_verify_failed", "failed")
+    db.session.commit()
+    abort(403)
+
+
+@app.post("/webhooks/whatsapp")
+def whatsapp_webhook_receive():
+    ensure_runtime_schema()
+    payload = request.get_json(silent=True) or {}
+    log_whatsapp_auth_event("webhook_received", "success", metadata={"payload": payload})
+    db.session.commit()
+    return jsonify({"status": "received"})
 
 
 @app.route("/set-password", methods=["GET", "POST"])
