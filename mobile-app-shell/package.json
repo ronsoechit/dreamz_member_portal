@@ -9,6 +9,8 @@
     "add:android": "cap add android",
     "add:ios": "cap add ios",
     "sync": "cap sync",
+    "android:debug": "node scripts/run-android-gradle.mjs :app:assembleDebug",
+    "android:bundle": "node scripts/run-android-gradle.mjs :app:bundleRelease",
     "open:android": "cap open android",
     "open:ios": "cap open ios"
   },

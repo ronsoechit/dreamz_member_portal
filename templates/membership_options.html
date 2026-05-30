@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_ui_macros.html" as ui with context %}
 {% block title %}{{ t('member_pricing_title') }} | Dreamz Fitness{% endblock %}
 
 {% macro member_option_card(item) %}
@@ -33,22 +34,24 @@
 {% endmacro %}
 
 {% block content %}
-<section class="mb-6 flex flex-col gap-4 rounded-lg border border-yellow-500/30 bg-gray-900/70 p-6 sm:flex-row sm:items-center sm:justify-between">
+<section class="dreamz-card-highlight mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
   <div>
     <div class="text-xs font-semibold uppercase tracking-wide text-yellow-400">{{ t('member_pricing_label') }}</div>
     <h2 class="mt-1 text-2xl font-semibold text-white">{{ t('member_pricing_title') }}</h2>
     <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-300">{{ t('member_pricing_intro') }}</p>
   </div>
-  <a class="rounded border border-gray-700 bg-gray-950 px-4 py-3 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('public_pricing') }}">{{ t('view_full_pricing') }}</a>
+  {{ ui.button(t('view_full_pricing'), url_for('public_pricing'), 'secondary') }}
 </section>
 
 <section class="mb-6 grid gap-4 lg:grid-cols-3">
-  <article class="rounded-lg border border-gray-700 bg-gray-800/50 p-5">
+  <article class="dreamz-card">
     <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('current_membership') }}</div>
-    <h3 class="mt-1 text-xl font-semibold text-white">{{ current_membership.plan_type }}</h3>
+    {% set current_plan_label = ui.display_label(current_membership.plan_type)|trim %}
+    {% set current_contract_label = ui.display_label(current_membership.contract_type)|trim %}
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ current_plan_label or t('not_available') }}</h3>
     <dl class="mt-4 grid gap-y-2 text-sm" style="grid-template-columns: 9rem minmax(0, 1fr);">
       <dt class="font-semibold text-gray-300">{{ t('contract_type') }}:</dt>
-      <dd>{{ current_membership.contract_type }}</dd>
+      <dd>{{ current_contract_label or t('not_available') }}</dd>
       <dt class="font-semibold text-gray-300">{{ t('billing_amount') }}:</dt>
       <dd>${{ '%.2f'|format(current_membership.billing_amount) }}</dd>
       <dt class="font-semibold text-gray-300">{{ t('next_membership_payment') }}:</dt>
@@ -59,7 +62,7 @@
       <dd>{{ current_membership.renewal_status }}</dd>
     </dl>
   </article>
-  <article class="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-5 lg:col-span-2">
+  <article class="dreamz-card-highlight lg:col-span-2">
     <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('contact_front_desk') }}</div>
     <h3 class="mt-1 text-xl font-semibold text-white">{{ t('frontdesk_membership_notice_title') }}</h3>
     <p class="mt-2 text-sm leading-6 text-yellow-50">{{ t('frontdesk_membership_notice') }}</p>

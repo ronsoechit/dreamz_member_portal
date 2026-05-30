@@ -24,7 +24,7 @@ from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
 from translations import LANGUAGES, TRANSLATIONS  # noqa: E402
 from dreamz_portal import AppSetting, AgreementCategory, CancellationConfirmation, CancellationRequest, CancellationWindow, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, DigitalSignatureAuditTrail, DigitalSignatureRecord, EmailLog, EquipmentCategory, EquipmentItem, FeatureAccessRule, GroupClassOccurrence, GroupClassSchedule, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, MealLog, Member, MemberAgreementAcceptance, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, MemberSignedDocument, MembershipApplication, MembershipApplicationAuditEvent, MembershipApplicationDocument, MembershipApplicationStatus, MembershipApplicationStep, PricingCategory, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, SignedPdfRecord, app, cancellation_message, coach_context_summary, coach_equipment_direct_reply, coach_plan_for_member, coach_profile_completion, coach_today_group_class_reply, db, equipment_context_for_ai, is_group_class_schedule_question, matching_equipment_for_exercise, member_access_profile, member_account_notification_count, next_date_for_group_class, pricing_item_access_tags, pricing_visibility_list, seed_equipment_library, seed_feature_access_rules, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
 from dreamz_portal import WhatsAppAuditLog, WhatsAppLoginOtp, WhatsAppTokenRecord  # noqa: E402
-from whatsapp_auth import normalize_phone_number, phone_digits  # noqa: E402
+from whatsapp_auth import WhatsAppSendResult, normalize_phone_number, phone_digits  # noqa: E402
 
 
 class FakeS3Body:
@@ -194,22 +194,29 @@ class PortalRouteTests(unittest.TestCase):
         body = response.get_data(as_text=True)
         token = re.search(r'name="csrf_token" value="([^"]+)"', body).group(1)
 
-        response = self.client.post(
-            "/login/whatsapp",
-            data={"phone": "7012345", "remember_device": "1", "csrf_token": token},
-        )
+        class FakeWhatsAppClient:
+            def send_otp(self, phone_e164, code, language="en"):
+                return WhatsAppSendResult(status="sent", provider_message_id="wamid.test")
+
+        with patch("dreamz_portal.generate_otp_code", return_value="123456"), patch("dreamz_portal.whatsapp_client", return_value=FakeWhatsAppClient()):
+            response = self.client.post(
+                "/login/whatsapp",
+                data={"phone": "7012345", "remember_device": "1", "csrf_token": token},
+            )
         self.assertEqual(response.status_code, 302)
         self.assertIn("/login/whatsapp/verify", response.headers["Location"])
         otp_record = WhatsAppLoginOtp.query.one()
         self.assertEqual(otp_record.member_id, "1206")
         self.assertEqual(otp_record.phone_e164, "+5997012345")
+        self.assertEqual(otp_record.provider_status, "sent")
+        self.assertEqual(otp_record.provider_message_id, "wamid.test")
         with self.client.session_transaction() as sess:
-            dev_code = sess["dev_whatsapp_otp"]
+            self.assertNotIn("dev_whatsapp_otp", sess)
             sess["_csrf_token"] = "test-csrf-token"
 
         response = self.client.post(
             "/login/whatsapp/verify",
-            data={"code": dev_code, "csrf_token": "test-csrf-token"},
+            data={"code": "123456", "csrf_token": "test-csrf-token"},
         )
         self.assertEqual(response.status_code, 302)
         self.assertIn("/dashboard?id=1206", response.headers["Location"])
@@ -218,6 +225,33 @@ class PortalRouteTests(unittest.TestCase):
         with self.client.session_transaction() as sess:
             self.assertEqual(sess["member_id"], "1206")
             self.assertTrue(sess["member_password_verified"])
+
+    def test_whatsapp_login_does_not_show_success_when_send_is_not_configured(self):
+        app.config["WHATSAPP_LOGIN_ENABLED"] = "true"
+        app.config["WHATSAPP_CLOUD_API_TOKEN"] = ""
+        app.config["WHATSAPP_OTP_TEMPLATE_NAME"] = ""
+        self.add_member(member_id="1206", mobile="+599 701 2345", email="member@example.com")
+        self.client.get("/language?lang=en&next=/login/whatsapp")
+        response = self.client.get("/login/whatsapp")
+        token = re.search(r'name="csrf_token" value="([^"]+)"', response.get_data(as_text=True)).group(1)
+
+        with self.assertLogs("dreamz_portal", level="ERROR") as logs:
+            response = self.client.post(
+                "/login/whatsapp",
+                data={"phone": "+5997012345", "remember_device": "1", "csrf_token": token},
+                follow_redirects=True,
+            )
+
+        body = response.get_data(as_text=True)
+        self.assertIn("WhatsApp login is temporarily unavailable", body)
+        self.assertNotIn("We sent a WhatsApp login code", body)
+        self.assertNotIn("Verify WhatsApp code", body)
+        self.assertIn("WHATSAPP_CLOUD_API_TOKEN", "\n".join(logs.output))
+        otp_record = WhatsAppLoginOtp.query.one()
+        self.assertEqual(otp_record.status, "send_failed")
+        self.assertEqual(otp_record.provider_status, "not_configured")
+        with self.client.session_transaction() as sess:
+            self.assertNotIn("pending_whatsapp_otp_id", sess)
 
     def test_whatsapp_login_unknown_phone_shows_frontdesk_message(self):
         app.config["WHATSAPP_LOGIN_ENABLED"] = "true"
@@ -560,7 +594,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("/coach?tab=training&amp;session=1", body)
         self.assertIn("Membership status", body)
         self.assertIn("Current membership", body)
-        self.assertIn("contract Dreamz 6 months", body)
+        self.assertIn("Dreamz 6 months", body)
         self.assertNotIn("View membership options", body)
         self.assertIn("Current term ends", body)
         self.assertIn("Open gym balance", body)
@@ -2751,7 +2785,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
         self.assertIn("Membership &amp; Options", body)
-        self.assertIn("contract Dreamz 6 months", body)
+        self.assertIn("Dreamz 6 months", body)
         self.assertIn("No contract / 1 month", body)
         self.assertIn("6 months contract - MCB Direct Debit", body)
         self.assertIn("Add-on Group PT 5x a week", body)
@@ -3702,14 +3736,21 @@ class PortalRouteTests(unittest.TestCase):
         response = self.client.get("/equipment")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Equipment Library", response.data)
-        self.assertIn(b"Leg Extension", response.data)
-        self.assertIn(b"New at Dreamz", response.data)
+        self.assertIn(b"Search Dreamz equipment", response.data)
+        self.assertIn(b"Equipment from my training plan", response.data)
+        self.assertNotIn(b"Leg Extension</h2>", response.data)
         self.assertIn(b"Quick filters", response.data)
         self.assertIn(b"href=\"/equipment?q=benen\"", response.data)
+        self.assertIn(b"href=\"/equipment?mode=training\"", response.data)
         self.assertIn(b"Ask coach about equipment", response.data)
         self.assertNotIn(b"Ask coach about this machine</a>", response.data)
         self.assertIn(b'href="/equipment" aria-current="page"', response.data)
         self.assertIn(b'href="/equipment?q=rug"', response.data)
+
+        new_items = self.client.get("/equipment?new=1")
+        self.assertEqual(new_items.status_code, 200)
+        self.assertIn(b"Leg Extension", new_items.data)
+        self.assertIn(b"New at Dreamz", new_items.data)
 
         detail = self.client.get("/equipment/leg-extension")
         self.assertEqual(detail.status_code, 200)
@@ -3719,6 +3760,41 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn(b"Ask coach about this machine", detail.data)
         self.assertIn(b"Start light", detail.data)
         self.assertNotIn(b"Details can be added by the Dreamz staff team", detail.data)
+
+    def test_member_equipment_can_show_training_plan_items_only(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        seed_equipment_library()
+        db.session.add(CoachPlan(
+            member_id="13659",
+            language="en",
+            plan_version=COACH_PLAN_SCHEMA_VERSION,
+            plan_json=json.dumps([
+                {
+                    "title": "Training",
+                    "sessions": [
+                        {
+                            "number": 1,
+                            "focus": "legs",
+                            "minutes": 45,
+                            "exercises": [
+                                {"name": "Leg extension", "equipment": "Machine"},
+                                {"name": "Lat pulldown", "equipment": "Machine"},
+                            ],
+                        }
+                    ],
+                }
+            ]),
+        ))
+        db.session.commit()
+        self.login_as("13659")
+
+        response = self.client.get("/equipment?mode=training")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Showing equipment linked to your current training plan.", response.data)
+        self.assertIn(b"Leg Extension", response.data)
+        self.assertIn(b"High Row", response.data)
+        self.assertNotIn(b"Commercial Treadmill", response.data)
 
     def test_member_equipment_search_is_forgiving_and_relaxes_overfiltered_results(self):
         self.add_member(member_id="13659", name="Ron Soechit")

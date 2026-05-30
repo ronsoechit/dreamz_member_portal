@@ -1,8 +1,10 @@
+{% import "_ui_macros.html" as ui with context %}
 {% macro field_rows(rows) %}
   <dl class="grid gap-y-2 text-sm" style="grid-template-columns: 10.5rem minmax(0, 1fr);">
     {% for label, value in rows %}
+      {% set display_value = ui.display_label(value)|trim %}
       <dt class="pr-4 font-semibold text-gray-200">{{ label }}:</dt>
-      <dd class="min-w-0 break-words text-white">{{ value if value is not none else t('not_available') }}</dd>
+      <dd class="min-w-0 break-words text-white">{{ display_value if display_value else t('not_available') }}</dd>
     {% endfor %}
   </dl>
 {% endmacro %}
@@ -10,7 +12,7 @@
 {% macro section_tile(key, title, body, href, meta=None) %}
   <a
     href="{{ href }}"
-    class="account-section-tile rounded-lg border border-gray-700 bg-gray-800/40 p-5 transition hover:border-yellow-400/60 hover:bg-gray-800/70 {% if account_section == key %}account-target-highlight border-yellow-500/70{% endif %}"
+    class="account-section-tile dreamz-card-soft dreamz-interactive {% if account_section == key %}account-target-highlight border-yellow-500/70{% endif %}"
   >
     <div class="flex items-start justify-between gap-3">
       <div>
@@ -18,7 +20,7 @@
         <p class="mt-2 text-sm leading-6 text-gray-300">{{ body }}</p>
       </div>
       {% if meta %}
-        <span class="shrink-0 rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-1 text-xs font-semibold text-yellow-100">{{ meta }}</span>
+        <span class="dreamz-badge shrink-0">{{ meta }}</span>
       {% endif %}
     </div>
   </a>
@@ -33,7 +35,7 @@
 {% endset %}
 {% set detail_mode = staff_admin_view or account_section %}
 
-<section class="mb-5 rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+<section class="dreamz-card mb-5">
   <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
     <div>
       <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('account_summary') }}</div>
@@ -41,11 +43,13 @@
       <div class="mt-3 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <span class="block text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('current_membership') }}</span>
-          <span class="text-gray-100">{{ member.plan_type or t('not_available') }}</span>
+          {% set member_plan_label = ui.display_label(member.plan_type)|trim %}
+          <span class="text-gray-100">{{ member_plan_label or t('not_available') }}</span>
         </div>
         <div>
           <span class="block text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('contract_type') }}</span>
-          <span class="text-gray-100">{{ member.contract_type or t('not_available') }}</span>
+          {% set member_contract_label = ui.display_label(member.contract_type)|trim %}
+          <span class="text-gray-100">{{ member_contract_label or t('not_available') }}</span>
         </div>
         <div>
           <span class="block text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('open_gym_balance') }}</span>
@@ -58,21 +62,19 @@
       </div>
     </div>
     {% if not staff_admin_view %}
-      <a class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400" href="{{ url_for('member_account_membership') }}">
-        {{ t('view_membership_options') }}
-      </a>
+      {{ ui.button(t('view_membership_options'), url_for('member_account_membership'), 'secondary') }}
     {% endif %}
   </div>
 </section>
 
 {% if not staff_admin_view and gym_balance > 0 %}
-  <section class="mb-5 rounded-lg border border-yellow-500/35 bg-yellow-500/10 p-4 text-sm leading-6 text-yellow-50">
+  <section class="dreamz-card-highlight mb-5 text-sm leading-6 text-yellow-50">
     <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div>
         <div class="font-semibold text-yellow-200">{{ t('important_notices') }}</div>
         <p class="mt-1">{{ t('gym_balance_open_notice')|replace('{amount}', '$%.2f'|format(gym_balance)) }}</p>
       </div>
-      <a href="{{ url_for('member_account_billing') }}" class="inline-flex items-center justify-center rounded bg-yellow-500 px-4 py-2 font-semibold text-black">{{ t('view_balance') }}</a>
+      {{ ui.button(t('view_balance'), url_for('member_account_billing'), 'primary') }}
     </div>
   </section>
 {% endif %}
@@ -80,7 +82,7 @@
 <section class="mb-6">
   <div class="mb-3 text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('main_account_sections') }}</div>
   <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-    {{ section_tile('membership-options', t('membership_options_section'), t('member_pricing_account_intro'), url_for('member_account_membership'), member.contract_type) }}
+    {{ section_tile('membership-options', t('membership_options_section'), t('member_pricing_account_intro'), url_for('member_account_membership'), member_contract_label or t('not_available')) }}
     {{ section_tile('billing', t('billing_gym_balance'), t('billing_gym_balance_intro'), url_for('member_account_billing'), '$%.2f'|format(gym_balance) if gym_balance > 0 else None) }}
     {{ section_tile('agreements', t('member_agreements_title'), t('member_agreements_account_intro'), url_for('member_agreements')) }}
     {{ section_tile('documents', t('documents'), t('documents_empty') if not document_groups else t('view'), url_for('member_account_documents'), document_groups|length if document_groups else None) }}
@@ -113,8 +115,8 @@
           </div>
           {% if not staff_admin_view %}
             <div class="mt-5 flex flex-wrap gap-3">
-              <a class="inline-flex rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black" href="{{ url_for('member_account_membership') }}">{{ t('view_membership_options') }}</a>
-              <a class="inline-flex rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200" href="{{ url_for('public_pricing') }}">{{ t('view_full_pricing') }}</a>
+              {{ ui.button(t('view_membership_options'), url_for('member_account_membership'), 'primary') }}
+              {{ ui.button(t('view_full_pricing'), url_for('public_pricing'), 'secondary') }}
             </div>
           {% endif %}
         </div>
@@ -244,7 +246,7 @@
           <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('security') }}</div>
           <h3 class="mt-1 text-xl font-semibold text-white">{{ t('password_security') }}</h3>
           <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('password_security_intro') }}</p>
-          <a class="mt-4 inline-flex rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black" href="{{ url_for('set_member_password') }}">{{ t('change_password') }}</a>
+          {{ ui.button(t('change_password'), url_for('set_member_password'), 'primary', 'mt-4') }}
         </div>
       </section>
     {% endif %}

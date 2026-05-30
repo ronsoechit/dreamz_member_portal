@@ -56,6 +56,24 @@ npm.cmd run sync
 npm.cmd run open:android
 ```
 
+The Android project is now part of the app shell because it contains native member-only route protection and Dreamz branding assets. After changing `.env` or Capacitor config, run:
+
+```powershell
+npm.cmd run sync
+```
+
+To build a local debug APK:
+
+```powershell
+npm.cmd run android:debug
+```
+
+To build a release bundle for Google Play after signing is configured:
+
+```powershell
+npm.cmd run android:bundle
+```
+
 iPhone/iOS requires macOS with Xcode:
 
 ```bash
@@ -68,3 +86,24 @@ npm run open:ios
 ## Update flow
 
 Most portal UI/content changes do not require a new app-store release because the app loads the live web portal. Native-only changes, app icon/splash changes, push notifications, biometric login or stricter native navigation controls do require rebuilding and releasing the app.
+
+## Android native guard
+
+`android/app/src/main/java/com/dreamzfitness/member/MainActivity.java` enforces the member-only shell decision:
+
+- `dreamzfitness.app` member routes stay inside the app.
+- `/staff`, `/staff/*`, `/admin` and `/admin/*` are redirected to member login.
+- Unknown same-domain routes are redirected to member login until explicitly allowed.
+- Non-Dreamz domains are delegated to Android as external links.
+
+If the portal adds a new member route that must be available inside the app, add it to both `mobile-navigation-policy.json` and the Android guard before publishing.
+
+## Android app links
+
+The Android manifest includes an HTTPS app-link intent filter for `dreamzfitness.app`. For verified app links in production, the portal must serve a matching `/.well-known/assetlinks.json` file for the final release signing certificate.
+
+## Android release signing
+
+Do not commit release keys or passwords.
+
+When ready for Google Play, create `android/keystore.properties` from `android/keystore.properties.example` and point it to the release keystore. The Gradle release config reads that local file when present. Without it, debug builds keep working, but release app bundles are unsigned and not Play-ready.

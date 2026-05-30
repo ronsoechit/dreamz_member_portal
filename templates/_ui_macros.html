@@ -1,0 +1,59 @@
+{% macro button(label, href=None, variant='primary', extra_classes='', attrs='') %}
+  {% set class_name = 'dreamz-button-' ~ variant %}
+  {% if href %}
+    <a href="{{ href }}" class="{{ class_name }} {{ extra_classes }}" {{ attrs|safe }}>{{ label }}</a>
+  {% else %}
+    <button type="button" class="{{ class_name }} {{ extra_classes }}" {{ attrs|safe }}>{{ label }}</button>
+  {% endif %}
+{% endmacro %}
+
+{% macro badge(label, variant='default', extra_classes='') %}
+  {% set class_name = 'dreamz-badge' %}
+  {% if variant in ['success', 'warning', 'danger'] %}
+    {% set class_name = class_name ~ '-' ~ variant %}
+  {% endif %}
+  <span class="{{ class_name }} {{ extra_classes }}">{{ label }}</span>
+{% endmacro %}
+
+{% macro display_label(value) %}
+  {% set text = value|string if value is not none and value != '' else '' %}
+  {% set key = text|trim|lower %}
+  {% if not text %}
+  {% elif key in ['6-months', '6 months', '6 month', '6 maanden', '6 maanden contract', '6 months contract'] %}
+    {{ t('display_contract_6_months') }}
+  {% elif key in ['12-months', '12 months', '12 month', '12 maanden', '12 maanden contract', '12 months contract'] %}
+    {{ t('display_contract_12_months') }}
+  {% elif key in ['no-contract', 'no contract', 'no-contract member'] %}
+    {{ t('display_contract_no_contract') }}
+  {% elif key in ['contract dreamz 6 months', 'dreamz 6 months contract', 'dreamz 6 month contract', 'dreamz 6 months', 'dreamz 6-months'] %}
+    {{ t('display_plan_dreamz_6_months') }}
+  {% elif key in ['contract dreamz 12 months', 'dreamz 12 months contract', 'dreamz 12 month contract', 'dreamz 12 months', 'dreamz 12-months'] %}
+    {{ t('display_plan_dreamz_12_months') }}
+  {% else %}
+    {{ text }}
+  {% endif %}
+{% endmacro %}
+
+{% macro section_title(label, heading=None, body=None, heading_level='h3') %}
+  <div class="dreamz-section-title">{{ label }}</div>
+  {% if heading %}
+    <{{ heading_level }} class="mt-1 text-xl font-semibold text-white">{{ heading }}</{{ heading_level }}>
+  {% endif %}
+  {% if body %}
+    <p class="mt-2 text-sm leading-6 text-gray-300">{{ body }}</p>
+  {% endif %}
+{% endmacro %}
+
+{% macro card_start(variant='default', extra_classes='') %}
+  {% set class_name = 'dreamz-card' %}
+  {% if variant == 'soft' %}
+    {% set class_name = 'dreamz-card-soft' %}
+  {% elif variant == 'highlight' %}
+    {% set class_name = 'dreamz-card-highlight' %}
+  {% endif %}
+  <section class="{{ class_name }} {{ extra_classes }}">
+{% endmacro %}
+
+{% macro card_end() %}
+  </section>
+{% endmacro %}

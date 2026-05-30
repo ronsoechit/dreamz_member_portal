@@ -59,17 +59,17 @@
   </div>
   <div class="flex flex-wrap items-center gap-2 lg:justify-end">
     {% if coach_complete %}
-      <a href="#coach-plan" data-open-coach-view="sessions" class="rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400">
+      <a href="#coach-plan" data-open-coach-view="sessions" class="dreamz-button-primary">
         {{ t('coach_start_session') if next_session_startable else t('coach_review_guidance') }}
       </a>
-      <a href="{{ url_for('member_coach', view='chat') }}" data-open-dreamz-coach data-no-loading="true" class="rounded border border-gray-700 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">
+      <a href="{{ url_for('member_coach', view='chat') }}" data-open-dreamz-coach data-no-loading="true" class="dreamz-button-secondary">
         {{ t('ask_coach') }}
       </a>
       <button type="button" class="rounded-full border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs font-semibold text-green-100 transition hover:border-green-300/60 hover:bg-green-500/15" data-edit-coach>
         {{ t('coach_profile_100_complete') }} &middot; <span class="text-yellow-200">{{ t('edit') }}</span>
       </button>
     {% else %}
-      <button type="button" class="rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400" data-edit-coach>
+      <button type="button" class="dreamz-button-primary" data-edit-coach>
         {{ t('coach_profile_complete_cta') }}
       </button>
     {% endif %}
@@ -88,7 +88,7 @@
         <input type="hidden" name="return_to" value="coach">
         <label class="sr-only" for="coach-birthdate">{{ t('add_date_of_birth') }}</label>
         <input id="coach-birthdate" name="birthdate" type="date" required class="rounded border border-gray-700 bg-gray-900 p-3 text-sm text-white">
-        <button type="submit" class="rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black hover:bg-yellow-400">{{ t('add_date_of_birth') }}</button>
+        <button type="submit" class="dreamz-button-primary">{{ t('add_date_of_birth') }}</button>
       </form>
     </div>
   </section>
@@ -114,11 +114,11 @@
         {% endif %}
       </div>
       {% if next_session_startable %}
-        <a href="#coach-plan" data-open-coach-view="sessions" class="inline-flex items-center justify-center rounded bg-yellow-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400">
+        <a href="#coach-plan" data-open-coach-view="sessions" class="dreamz-button-primary">
           {{ t('coach_start_session') }}
         </a>
       {% else %}
-        <a href="{{ url_for('member_coach', view='chat') }}" data-open-dreamz-coach data-no-loading="true" class="inline-flex items-center justify-center rounded bg-yellow-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400">
+        <a href="{{ url_for('member_coach', view='chat') }}" data-open-dreamz-coach data-no-loading="true" class="dreamz-button-primary">
           {{ t('ask_coach') }}
         </a>
       {% endif %}
@@ -417,10 +417,10 @@
         <p class="mt-2 text-sm leading-6 text-green-50/90">{{ t('coach_plan_focus_intro') }}</p>
       </div>
     </div>
-    <div class="coach-tabs mt-4 grid grid-cols-3 gap-2" role="tablist" aria-label="{{ t('coach_plan_focus_title') }}">
-      <button type="button" data-coach-view="training" class="rounded border border-yellow-400 bg-yellow-500 px-3 py-3 text-sm font-semibold text-black transition">{{ t('coach_tab_week') }}</button>
-      <button type="button" data-coach-view="sessions" class="rounded border border-gray-700 bg-gray-950 px-3 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">{{ t('coach_tab_sessions') }}</button>
-      <button type="button" data-coach-view="history" class="rounded border border-gray-700 bg-gray-950 px-3 py-3 text-sm font-semibold text-yellow-200 transition hover:border-yellow-400">{{ t('coach_tab_history') }}</button>
+    <div class="coach-tabs dreamz-tabs mt-4 grid grid-cols-3" role="tablist" aria-label="{{ t('coach_plan_focus_title') }}">
+      <button type="button" data-coach-view="training" class="dreamz-tab dreamz-tab-active bg-yellow-500">{{ t('coach_tab_week') }}</button>
+      <button type="button" data-coach-view="sessions" class="dreamz-tab bg-gray-950">{{ t('coach_tab_sessions') }}</button>
+      <button type="button" data-coach-view="history" class="dreamz-tab bg-gray-950">{{ t('coach_tab_history') }}</button>
     </div>
     {% if personal_plan %}
       {% set training_section = personal_plan[0] %}
@@ -1120,6 +1120,7 @@
         button.classList.toggle("border-yellow-400", active);
         button.classList.toggle("bg-yellow-500", active);
         button.classList.toggle("text-black", active);
+        button.classList.toggle("dreamz-tab-active", active);
         button.classList.toggle("border-gray-700", !active);
         button.classList.toggle("bg-gray-950", !active);
         button.classList.toggle("text-yellow-200", !active);
@@ -1230,6 +1231,7 @@
           tab.classList.toggle("border-yellow-400", active);
           tab.classList.toggle("bg-yellow-500", active);
           tab.classList.toggle("text-black", active);
+          tab.classList.toggle("dreamz-tab-active", active);
           tab.classList.toggle("border-gray-700", !active);
           tab.classList.toggle("bg-gray-900", !active);
           tab.classList.toggle("text-yellow-200", !active);

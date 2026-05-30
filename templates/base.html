@@ -13,7 +13,7 @@
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
   <link href="{{ url_for('static', filename='css/premium.css') }}" rel="stylesheet">
 </head>
-<body class="app-body {% if current_staff_role %}staff-app-body{% endif %} bg-gray-900 text-white min-h-screen flex flex-col">
+<body class="app-body {% if current_staff_role %}staff-app-body{% endif %} {% if request.endpoint in ['member_group_classes', 'member_group_class_preferences_save', 'member_group_class_plan_add', 'member_group_class_plan_remove', 'member_group_class_attendance_save', 'member_equipment_library', 'member_equipment_detail'] %}hide-floating-coach-mobile{% endif %} bg-gray-900 text-white min-h-screen flex flex-col">
 
   <header class="app-header {% if current_staff_role %}staff-header{% endif %} bg-gray-800 shadow-md">
     <div class="container mx-auto flex flex-col gap-4 px-5 py-4">
@@ -132,7 +132,7 @@
               <span class="account-nav-label member-nav-text">{{ t('account') }}</span>
               {% if account_notification_count %}
                 <span
-                  class="account-notification-badge absolute -right-1 -top-1 inline-flex items-center justify-center rounded-full bg-red-500 text-white"
+                  class="account-notification-badge"
                   style="position:absolute;right:-0.28rem;top:-0.28rem;min-width:1.05rem;height:1.05rem;border-radius:999px;background:#ef4444;color:#fff;font-size:0.62rem;font-weight:900;line-height:1;z-index:5;box-shadow:0 0 0 2px rgba(5,8,22,0.96),0 8px 18px rgba(239,68,68,0.35);"
                   aria-hidden="true"
                 >{{ account_notification_count }}</span>
@@ -167,8 +167,8 @@
           <p class="mt-2 text-xs leading-5 text-green-100" data-pwa-status hidden>{{ t('pwa_install_processing') }}</p>
         </div>
         <div class="flex shrink-0 flex-col gap-2 sm:flex-row">
-          <button type="button" class="rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black" data-pwa-install-button hidden>{{ t('pwa_install_button') }}</button>
-          <button type="button" class="rounded border border-gray-700 bg-gray-800 px-4 py-2 text-sm font-semibold text-white" data-pwa-install-close>{{ t('pwa_install_later') }}</button>
+          <button type="button" class="dreamz-button-primary" data-pwa-install-button hidden>{{ t('pwa_install_button') }}</button>
+          <button type="button" class="dreamz-button-ghost" data-pwa-install-close>{{ t('pwa_install_later') }}</button>
         </div>
       </section>
     {% endif %}

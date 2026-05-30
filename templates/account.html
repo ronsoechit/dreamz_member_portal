@@ -1,30 +1,33 @@
 {% extends "base.html" %}
+{% import "_ui_macros.html" as ui with context %}
 {% block title %}{{ t('account_title') }} | Dreamz Fitness{% endblock %}
 
 {% macro account_tile(title, body, href, meta=None) %}
-  <a href="{{ href }}" class="rounded-lg border border-gray-700 bg-gray-800/40 p-4 transition hover:border-yellow-400/60 hover:bg-gray-800/70">
+  <a href="{{ href }}" class="dreamz-card-soft dreamz-interactive p-4">
     <div class="flex items-start justify-between gap-3">
       <div class="min-w-0">
         <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ title }}</div>
         <p class="mt-2 text-sm leading-6 text-gray-300">{{ body }}</p>
       </div>
       {% if meta %}
-        <span class="shrink-0 rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-1 text-xs font-semibold text-yellow-100">{{ meta }}</span>
+        <span class="dreamz-badge shrink-0">{{ meta }}</span>
       {% endif %}
     </div>
   </a>
 {% endmacro %}
 
 {% block content %}
-<section class="mb-4 rounded-lg border border-yellow-500/25 bg-gray-900/70 p-4">
+<section class="dreamz-card-highlight mb-4">
+  {% set member_plan_label = ui.display_label(member.plan_type)|trim %}
+  {% set member_contract_label = ui.display_label(member.contract_type)|trim %}
   <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
     <div>
       <div class="text-xs font-semibold uppercase tracking-wide text-yellow-400">{{ t('account_title') }}</div>
       <h2 class="mt-1 text-2xl font-semibold text-white">{{ display_name }}</h2>
-      <p class="mt-1 text-sm text-gray-300">{{ member.plan_type or t('not_available') }} - {{ member.contract_type or t('not_available') }}</p>
+      <p class="mt-1 text-sm text-gray-300">{{ member_plan_label or t('not_available') }} - {{ member_contract_label or t('not_available') }}</p>
     </div>
     {% if gym_balance > 0 %}
-      <span class="inline-flex w-fit rounded-full border border-red-400/40 bg-red-500/15 px-3 py-1 text-xs font-semibold text-red-100">
+      <span class="dreamz-badge-danger w-fit">
         {{ t('account_notifications')|replace('{count}', '1') }}
       </span>
     {% endif %}
@@ -32,28 +35,28 @@
 </section>
 
 {% if gym_balance > 0 %}
-  <section class="mb-4 rounded-lg border border-yellow-500/35 bg-yellow-500/10 p-4">
+  <section class="dreamz-card-highlight mb-4">
     <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('important_notices') }}</div>
     <div class="mt-3 grid gap-3">
       {% if gym_balance > 0 %}
         <div class="flex flex-col gap-3 rounded border border-yellow-500/20 bg-gray-950/40 p-3 sm:flex-row sm:items-center sm:justify-between">
           <p class="text-sm leading-6 text-yellow-50">{{ t('gym_balance_open_notice')|replace('{amount}', '$%.2f'|format(gym_balance)) }}</p>
-          <a href="{{ url_for('member_account_billing') }}" class="inline-flex items-center justify-center rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black">{{ t('view_balance') }}</a>
+          {{ ui.button(t('view_balance'), url_for('member_account_billing'), 'primary') }}
         </div>
       {% endif %}
     </div>
   </section>
 {% endif %}
 
-<section class="mb-4 rounded-lg border border-gray-700 bg-gray-800/40 p-4">
+<section class="dreamz-card mb-4">
   <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
     <div>
       <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('membership') }}</div>
-      <h3 class="mt-1 text-xl font-semibold text-white">{{ member.plan_type or t('current_membership') }}</h3>
+      <h3 class="mt-1 text-xl font-semibold text-white">{{ member_plan_label or t('current_membership') }}</h3>
       <dl class="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <dt class="text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('contract_type') }}</dt>
-          <dd class="mt-1 text-gray-100">{{ member.contract_type or t('not_available') }}</dd>
+          <dd class="mt-1 text-gray-100">{{ member_contract_label or t('not_available') }}</dd>
         </div>
         <div>
           <dt class="text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('current_term_ends') }}</dt>
@@ -65,14 +68,14 @@
         </div>
       </dl>
     </div>
-    <a href="{{ url_for('member_account_membership') }}" class="inline-flex items-center justify-center rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black">{{ t('view_membership') }}</a>
+    {{ ui.button(t('view_membership'), url_for('member_account_membership'), 'primary') }}
   </div>
 </section>
 
 <section>
   <div class="mb-3 text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('main_account_sections') }}</div>
   <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-    {{ account_tile(t('membership_options_section'), t('member_pricing_account_intro'), url_for('member_account_membership'), member.contract_type) }}
+    {{ account_tile(t('membership_options_section'), t('member_pricing_account_intro'), url_for('member_account_membership'), member_contract_label or t('not_available')) }}
     {{ account_tile(t('billing_gym_balance'), t('billing_gym_balance_intro'), url_for('member_account_billing'), '$%.2f'|format(gym_balance) if gym_balance > 0 else None) }}
     {{ account_tile(t('member_agreements_title'), t('member_agreements_account_intro'), url_for('member_agreements')) }}
     {{ account_tile(t('documents'), t('documents_empty') if not document_groups else t('view_signed_documents'), url_for('member_account_documents'), document_groups|length if document_groups else None) }}

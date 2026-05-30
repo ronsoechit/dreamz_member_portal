@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Dreamz Fitness</string>
+    <string name="title_activity_main">Dreamz Fitness</string>
+    <string name="package_name">com.dreamzfitness.member</string>
+    <string name="custom_url_scheme">com.dreamzfitness.member</string>
+</resources>

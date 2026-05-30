@@ -1,28 +1,42 @@
 {% extends "base.html" %}
+{% import "_ui_macros.html" as ui with context %}
 {% block title %}{{ t('equipment_library') }} | Dreamz Fitness{% endblock %}
 
 {% block content %}
-<section class="mb-6 rounded-lg border border-yellow-500/20 bg-gray-800/50 p-5">
+<section class="dreamz-card-highlight dreamz-mobile-dense mb-6">
   <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
     <div>
       <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('equipment') }}</div>
       <h1 class="mt-1 text-2xl font-semibold text-white">{{ t('equipment_library') }}</h1>
       <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-300">{{ t('equipment_intro') }}</p>
     </div>
-    <a href="{{ url_for('member_coach', view='chat') }}" data-open-dreamz-coach data-no-loading="true" data-coach-prompt="{{ t('equipment_ask_coach_general') }}" class="inline-flex items-center justify-center rounded border border-yellow-500/40 bg-yellow-500/10 px-4 py-3 text-sm font-semibold text-yellow-100 hover:bg-yellow-500 hover:text-black">
+    <a href="{{ url_for('member_coach', view='chat') }}" data-open-dreamz-coach data-no-loading="true" data-coach-prompt="{{ t('equipment_ask_coach_general') }}" class="dreamz-button-secondary">
       {{ t('equipment_ask_coach_general') }}
     </a>
   </div>
 </section>
 
-<form method="get" class="mb-4 grid gap-3 rounded-lg border border-gray-700 bg-gray-800/40 p-4 md:grid-cols-[1fr_auto_auto_auto_auto]">
+<section class="mb-4 grid gap-3 md:grid-cols-2">
+  <a href="{{ url_for('member_equipment_library', mode='training') }}" class="dreamz-card-highlight dreamz-interactive">
+    <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('equipment_my_training_plan') }}</div>
+    <h2 class="mt-1 text-lg font-semibold text-white">{{ t('equipment_my_training_plan_title') }}</h2>
+    <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('equipment_my_training_plan_body') }}</p>
+  </a>
+  <div class="dreamz-card-soft">
+    <div class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_find_machine') }}</div>
+    <h2 class="mt-1 text-lg font-semibold text-white">{{ t('equipment_search_start_title') }}</h2>
+    <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('equipment_search_start_body') }}</p>
+  </div>
+</section>
+
+<form method="get" class="dreamz-card dreamz-mobile-dense mb-4 grid gap-3 md:grid-cols-[1fr_auto_auto_auto_auto]">
   <label class="block">
-    <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_search') }}</span>
-    <input name="q" value="{{ equipment_search_query }}" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white" placeholder="{{ t('equipment_search') }}">
+    <span class="dreamz-field-label">{{ t('equipment_search') }}</span>
+    <input name="q" value="{{ equipment_search_query }}" class="dreamz-field mt-1" placeholder="{{ t('equipment_search') }}">
   </label>
   <label class="block">
-    <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_category') }}</span>
-    <select name="category" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+    <span class="dreamz-field-label">{{ t('equipment_category') }}</span>
+    <select name="category" class="dreamz-select mt-1">
       <option value="">{{ t('equipment_all_categories') }}</option>
       {% for category in equipment_categories %}
         <option value="{{ category.key }}" {% if selected_category == category.key %}selected{% endif %}>{{ equipment_category_label(category.key) }}</option>
@@ -30,31 +44,32 @@
     </select>
   </label>
   <label class="block">
-    <span class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_muscle_groups') }}</span>
-    <select name="muscle" class="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-3 py-2 text-white">
+    <span class="dreamz-field-label">{{ t('equipment_muscle_groups') }}</span>
+    <select name="muscle" class="dreamz-select mt-1">
       <option value="">{{ t('equipment_all_muscles') }}</option>
       {% for muscle in equipment_muscle_groups %}
         <option value="{{ muscle }}" {% if selected_muscle == muscle %}selected{% endif %}>{{ muscle }}</option>
       {% endfor %}
     </select>
   </label>
-  <label class="flex items-end gap-2 rounded border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200">
-    <input type="checkbox" name="new" value="1" class="h-4 w-4 accent-yellow-500" {% if new_only %}checked{% endif %}>
+  <label class="dreamz-check self-end">
+    <input type="checkbox" name="new" value="1" {% if new_only %}checked{% endif %}>
     {{ t('equipment_new_at_dreamz') }}
   </label>
   <div class="flex flex-wrap items-end gap-2">
-    <button class="rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black hover:bg-yellow-400">{{ t('apply') }}</button>
+    <button class="dreamz-button-primary">{{ t('apply') }}</button>
     {% if equipment_filters_active %}
-      <a href="{{ url_for('member_equipment_library') }}" class="rounded border border-gray-700 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-100 hover:border-yellow-400">{{ t('equipment_clear_filters') }}</a>
+      {{ ui.button(t('equipment_clear_filters'), url_for('member_equipment_library'), 'ghost') }}
     {% endif %}
   </div>
 </form>
 
-{% set active_quick = 'new' if new_only else ('legs' if equipment_search_query == 'benen' else ('back' if equipment_search_query == 'rug' else ('chest' if equipment_search_query == 'borst' else ('shoulders' if equipment_search_query == 'schouders' else ('cardio' if selected_category == 'cardio' else ('free_weights' if selected_category == 'free_weights' else 'all')))))) %}
-<section class="mb-5 rounded-lg border border-gray-700 bg-gray-900/40 p-3">
-  <div class="text-xs font-semibold uppercase tracking-wide text-gray-400">{{ t('equipment_quick_filters') }}</div>
+{% set active_quick = 'training' if training_plan_only else ('new' if new_only else ('legs' if equipment_search_query == 'benen' else ('back' if equipment_search_query == 'rug' else ('chest' if equipment_search_query == 'borst' else ('shoulders' if equipment_search_query == 'schouders' else ('cardio' if selected_category == 'cardio' else ('free_weights' if selected_category == 'free_weights' else 'all'))))))) %}
+<section class="dreamz-card-soft dreamz-mobile-dense mb-5">
+  <div class="dreamz-field-label">{{ t('equipment_quick_filters') }}</div>
   <div class="equipment-quick-filters mt-3 flex gap-2 overflow-x-auto pb-1">
-    <a href="{{ url_for('member_equipment_library') }}" aria-current="{{ 'page' if active_quick == 'all' else 'false' }}" class="equipment-filter-chip shrink-0 rounded-full border px-3 py-2 text-xs font-semibold {% if active_quick == 'all' %}border-yellow-500/50 bg-yellow-500 text-black{% else %}border-gray-700 bg-gray-950 text-gray-100 hover:border-yellow-300{% endif %}">{{ t('equipment_filter_all') }}</a>
+    <a href="{{ url_for('member_equipment_library') }}" aria-current="{{ 'page' if active_quick == 'all' else 'false' }}" class="equipment-filter-chip shrink-0 rounded-full border px-3 py-2 text-xs font-semibold {% if active_quick == 'all' %}border-yellow-500/50 bg-yellow-500 text-black{% else %}border-gray-700 bg-gray-950 text-gray-100 hover:border-yellow-300{% endif %}">{{ t('equipment_clear_filters') }}</a>
+    <a href="{{ url_for('member_equipment_library', mode='training') }}" aria-current="{{ 'page' if active_quick == 'training' else 'false' }}" class="equipment-filter-chip shrink-0 rounded-full border px-3 py-2 text-xs font-semibold {% if active_quick == 'training' %}border-yellow-500/50 bg-yellow-500 text-black{% else %}border-gray-700 bg-gray-950 text-gray-100 hover:border-yellow-300{% endif %}">{{ t('equipment_my_training_plan') }}</a>
     <a href="{{ url_for('member_equipment_library', new=1) }}" aria-current="{{ 'page' if active_quick == 'new' else 'false' }}" class="equipment-filter-chip shrink-0 rounded-full border px-3 py-2 text-xs font-semibold {% if active_quick == 'new' %}border-yellow-500/50 bg-yellow-500 text-black{% else %}border-gray-700 bg-gray-950 text-gray-100 hover:border-yellow-300{% endif %}">{{ t('equipment_new_at_dreamz') }}</a>
     <a href="{{ url_for('member_equipment_library', q='benen') }}" aria-current="{{ 'page' if active_quick == 'legs' else 'false' }}" class="equipment-filter-chip shrink-0 rounded-full border px-3 py-2 text-xs font-semibold {% if active_quick == 'legs' %}border-yellow-500/50 bg-yellow-500 text-black{% else %}border-gray-700 bg-gray-950 text-gray-100 hover:border-yellow-300{% endif %}">{{ t('equipment_filter_legs') }}</a>
     <a href="{{ url_for('member_equipment_library', q='rug') }}" aria-current="{{ 'page' if active_quick == 'back' else 'false' }}" class="equipment-filter-chip shrink-0 rounded-full border px-3 py-2 text-xs font-semibold {% if active_quick == 'back' %}border-yellow-500/50 bg-yellow-500 text-black{% else %}border-gray-700 bg-gray-950 text-gray-100 hover:border-yellow-300{% endif %}">{{ t('equipment_filter_back') }}</a>
@@ -72,15 +87,20 @@
 </script>
 
 {% if equipment_relaxed_results %}
-  <section class="mb-5 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4 text-sm leading-6 text-yellow-50">
+  <section class="dreamz-card-highlight mb-5 text-sm leading-6 text-yellow-50">
     {{ t('equipment_relaxed_results') }}
   </section>
 {% endif %}
 
 {% if equipment_items %}
+  {% if training_plan_only %}
+    <section class="dreamz-card-highlight mb-5 text-sm leading-6 text-yellow-50">
+      {{ t('equipment_training_plan_results') }}
+    </section>
+  {% endif %}
   <section class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
     {% for item in equipment_items %}
-      <article class="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
+      <article class="dreamz-card dreamz-mobile-dense">
         <div class="aspect-video overflow-hidden rounded border border-gray-700 bg-gray-950/70">
           {% if item.thumbnail_url or item.image_url %}
             <img src="{{ item.thumbnail_url or item.image_url }}" alt="{{ item.name }}" class="h-full w-full object-cover">
@@ -99,28 +119,37 @@
             <div class="mt-1 text-xs uppercase tracking-wide text-gray-400">{{ equipment_category_label(item.category_key) }}{% if item.subcategory %} · {{ item.subcategory }}{% endif %}</div>
           </div>
           {% if equipment_is_new_arrival(item) %}
-            <span class="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-1 text-xs font-semibold text-yellow-100">{{ item.promo_label or t('equipment_new_at_dreamz') }}</span>
+            {{ ui.badge(item.promo_label or t('equipment_new_at_dreamz'), 'warning', 'shrink-0') }}
           {% endif %}
         </div>
         <p class="mt-3 text-sm leading-6 text-gray-300">{{ equipment_description(item) }}</p>
         <div class="mt-3 flex flex-wrap gap-2">
           {% for muscle in equipment_primary_groups(item)[:4] %}
-            <span class="rounded-full border border-green-500/20 bg-green-500/10 px-2 py-1 text-xs font-semibold text-green-100">{{ muscle }}</span>
+            {{ ui.badge(muscle, 'success') }}
           {% endfor %}
           {% if item.status == 'out_of_service' %}
-            <span class="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-1 text-xs font-semibold text-red-100">{{ t('equipment_out_of_service') }}</span>
+            {{ ui.badge(t('equipment_out_of_service'), 'danger') }}
           {% endif %}
         </div>
-        <a href="{{ url_for('member_equipment_detail', slug=item.slug) }}" class="mt-4 inline-flex rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black hover:bg-yellow-400">{{ t('equipment_view_details') }}</a>
+        {{ ui.button(t('equipment_view_details'), url_for('member_equipment_detail', slug=item.slug), 'primary', 'mt-4') }}
       </article>
     {% endfor %}
   </section>
+{% elif not equipment_filters_active %}
+  <section class="dreamz-card text-sm text-gray-300">
+    <h2 class="text-lg font-semibold text-white">{{ t('equipment_search_start_title') }}</h2>
+    <p class="mt-2">{{ t('equipment_search_start_body') }}</p>
+    <div class="mt-4 flex flex-wrap gap-2">
+      {{ ui.button(t('equipment_my_training_plan'), url_for('member_equipment_library', mode='training'), 'primary') }}
+      {{ ui.button(t('equipment_new_at_dreamz'), url_for('member_equipment_library', new=1), 'secondary') }}
+    </div>
+  </section>
 {% else %}
-  <section class="rounded-lg border border-gray-700 bg-gray-800/40 p-6 text-sm text-gray-300">
+  <section class="dreamz-card text-sm text-gray-300">
     <h2 class="text-lg font-semibold text-white">{{ t('equipment_no_items') }}</h2>
-    <p class="mt-2">{{ t('equipment_empty') }}</p>
+    <p class="mt-2">{{ t('equipment_no_training_items') if training_plan_only else t('equipment_empty') }}</p>
     {% if equipment_filters_active %}
-      <a href="{{ url_for('member_equipment_library') }}" class="mt-4 inline-flex rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black hover:bg-yellow-400">{{ t('equipment_clear_filters') }}</a>
+      {{ ui.button(t('equipment_clear_filters'), url_for('member_equipment_library'), 'primary', 'mt-4') }}
     {% endif %}
   </section>
 {% endif %}

@@ -96,7 +96,11 @@ These paths are blocked inside the app shell:
 - `/admin/*`
 - any non-Dreamz domain unless explicitly allowed
 
-The native projects must implement runtime navigation interception before app-store testing. Until Android/iOS projects exist, `npm run check` enforces that `DREAMZ_PORTAL_URL` starts on an allowed member route and that `DREAMZ_ALLOW_NAVIGATION` does not use wildcards, schemes or paths.
+Android now implements runtime navigation interception in `android/app/src/main/java/com/dreamzfitness/member/MainActivity.java`. iOS must receive equivalent interception before iPhone app-store testing.
+
+`npm run check` enforces that `DREAMZ_PORTAL_URL` starts on an allowed member route and that `DREAMZ_ALLOW_NAVIGATION` does not use wildcards, schemes or paths.
+
+Verified Android app links require a matching `/.well-known/assetlinks.json` file on the portal domain for the final release signing certificate. That file belongs to the portal/deployment side, not the shell.
 
 ## 7. Next Steps
 

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_ui_macros.html" as ui with context %}
 {% block title %}
   {% if account_page == 'membership' %}{{ t('membership_options_section') }}
   {% elif account_page == 'billing' %}{{ t('billing_gym_balance') }}
@@ -12,8 +13,9 @@
 {% macro field_rows(rows) %}
   <dl class="grid gap-y-3 text-sm" style="grid-template-columns: 11rem minmax(0, 1fr);">
     {% for label, value in rows %}
+      {% set display_value = ui.display_label(value)|trim %}
       <dt class="pr-4 font-semibold text-gray-300">{{ label }}:</dt>
-      <dd class="min-w-0 break-words text-white">{{ value if value is not none and value != '' else t('not_available') }}</dd>
+      <dd class="min-w-0 break-words text-white">{{ display_value if display_value else t('not_available') }}</dd>
     {% endfor %}
   </dl>
 {% endmacro %}
@@ -43,7 +45,8 @@
 {% endmacro %}
 
 {% block content %}
-<section class="mb-4 flex flex-col gap-3 rounded-lg border border-yellow-500/25 bg-gray-900/70 p-4 sm:flex-row sm:items-center sm:justify-between">
+<section class="dreamz-card-highlight mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+  {% set member_plan_label = ui.display_label(member.plan_type)|trim %}
   <div>
     <a class="text-xs font-semibold uppercase tracking-wide text-yellow-300 hover:text-yellow-200" href="{{ url_for('member_account') }}">{{ t('account_title') }}</a>
     <h2 class="mt-1 text-2xl font-semibold text-white">
@@ -55,15 +58,15 @@
       {% elif account_page == 'security' %}{{ t('password_security') }}
       {% endif %}
     </h2>
-    <p class="mt-1 text-sm text-gray-300">{{ display_name }} - {{ member.plan_type or t('not_available') }}</p>
+    <p class="mt-1 text-sm text-gray-300">{{ display_name }} - {{ member_plan_label or t('not_available') }}</p>
   </div>
-  <a class="inline-flex items-center justify-center rounded border border-gray-700 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('member_account') }}">{{ t('view_account') }}</a>
+  {{ ui.button(t('view_account'), url_for('member_account'), 'secondary') }}
 </section>
 
 {% if account_page == 'membership' %}
-  <section class="mb-4 rounded-lg border border-gray-700 bg-gray-800/40 p-5">
+  <section class="dreamz-card mb-4">
     <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('current_membership') }}</div>
-    <h3 class="mt-1 text-xl font-semibold text-white">{{ member.plan_type or t('not_available') }}</h3>
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ member_plan_label or t('not_available') }}</h3>
     <div class="mt-4">
       {{ field_rows([
         (t('membership_type'), member.plan_type),
@@ -106,8 +109,8 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="member_id" value="{{ member.member_id }}">
         <label class="block">
-          <span class="text-sm">{{ t('reason_for_cancellation') }}</span>
-          <select id="cancel-reason" name="reason" class="text-black mt-1 block w-full rounded p-2" required>
+          <span class="dreamz-field-label">{{ t('reason_for_cancellation') }}</span>
+          <select id="cancel-reason" name="reason" class="dreamz-select mt-1 block w-full" required>
             <option value="">{{ t('choose_reason') }}</option>
             <option value="Moving away">{{ t('moving_away') }}</option>
             <option value="Financial reasons">{{ t('financial_reasons') }}</option>
@@ -116,10 +119,10 @@
           </select>
         </label>
         <label id="other-reason-field" class="hidden block">
-          <span class="text-sm">{{ t('please_tell_reason') }}</span>
-          <textarea name="other_reason" rows="3" class="mt-1 block w-full rounded bg-gray-900 border border-gray-700 p-2 text-white" placeholder="{{ t('type_reason_here') }}"></textarea>
+          <span class="dreamz-field-label">{{ t('please_tell_reason') }}</span>
+          <textarea name="other_reason" rows="3" class="dreamz-field mt-1 block w-full" placeholder="{{ t('type_reason_here') }}"></textarea>
         </label>
-        <button type="submit" onclick="return confirm('{{ t('confirm_cancel') }}');" class="rounded bg-red-600 px-4 py-2 font-semibold text-white hover:bg-red-700">{{ t('submit_cancellation_request') }}</button>
+        <button type="submit" onclick="return confirm('{{ t('confirm_cancel') }}');" class="dreamz-button-ghost dreamz-button-danger">{{ t('submit_cancellation_request') }}</button>
       </form>
       <script>
         const cancelReason = document.getElementById("cancel-reason");
@@ -155,7 +158,7 @@
     <h3 class="mt-1 text-xl font-semibold text-white">{{ t('frontdesk_membership_notice_title') }}</h3>
     <p class="mt-2 text-sm leading-6 text-yellow-50">{{ t('frontdesk_membership_notice') }}</p>
     <div class="mt-4 flex flex-wrap gap-3">
-      <a class="rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black" href="{{ url_for('public_pricing') }}">{{ t('view_full_pricing') }}</a>
+      {{ ui.button(t('view_full_pricing'), url_for('public_pricing'), 'primary') }}
       {% if gym_balance > 0 %}
         <a class="rounded border border-yellow-500/40 bg-gray-950 px-4 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('member_account_billing') }}">{{ t('view_balance') }}</a>
       {% endif %}

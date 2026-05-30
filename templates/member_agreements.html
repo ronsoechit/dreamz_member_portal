@@ -1,8 +1,9 @@
 {% extends "base.html" %}
+{% import "_ui_macros.html" as ui with context %}
 {% block title %}{{ t('member_agreements_title') }} | Dreamz Fitness{% endblock %}
 
 {% block content %}
-<section class="mb-6 rounded-lg border border-yellow-500/30 bg-gray-900/70 p-6">
+<section class="dreamz-card-highlight mb-6">
   <a class="text-xs font-semibold uppercase tracking-wide text-yellow-400 hover:text-yellow-200" href="{{ url_for('member_account') }}">{{ t('account_title') }}</a>
   <h2 class="mt-1 text-2xl font-semibold text-white">{{ t('member_agreements_title') }}</h2>
   <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-300">{{ t('member_agreements_intro') }}</p>
@@ -11,8 +12,10 @@
 <section class="mb-6 grid gap-4 lg:grid-cols-3">
   <article class="rounded-lg border border-gray-700 bg-gray-800/50 p-5">
     <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('current_membership') }}</div>
-    <h3 class="mt-1 text-xl font-semibold text-white">{{ member.plan_type or t('not_available') }}</h3>
-    <p class="mt-2 text-sm text-gray-300">{{ member.contract_type or t('not_available') }}</p>
+    {% set member_plan_label = ui.display_label(member.plan_type)|trim %}
+    {% set member_contract_label = ui.display_label(member.contract_type)|trim %}
+    <h3 class="mt-1 text-xl font-semibold text-white">{{ member_plan_label or t('not_available') }}</h3>
+    <p class="mt-2 text-sm text-gray-300">{{ member_contract_label or t('not_available') }}</p>
   </article>
   <article class="rounded-lg border border-gray-700 bg-gray-800/50 p-5">
     <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('member_cancellation_renewal') }}</div>
@@ -59,8 +62,8 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="member_id" value="{{ member.member_id }}">
       <label class="block">
-        <span class="text-sm">{{ t('reason_for_cancellation') }}</span>
-        <select id="cancel-reason" name="reason" class="text-black mt-1 block w-full rounded p-2" required>
+        <span class="dreamz-field-label">{{ t('reason_for_cancellation') }}</span>
+        <select id="cancel-reason" name="reason" class="dreamz-select mt-1 block w-full" required>
           <option value="">{{ t('choose_reason') }}</option>
           <option value="Moving away">{{ t('moving_away') }}</option>
           <option value="Financial reasons">{{ t('financial_reasons') }}</option>
@@ -69,15 +72,15 @@
         </select>
       </label>
       <label id="other-reason-field" class="hidden block">
-        <span class="text-sm">{{ t('please_tell_reason') }}</span>
+        <span class="dreamz-field-label">{{ t('please_tell_reason') }}</span>
         <textarea
           name="other_reason"
           rows="3"
-          class="mt-1 block w-full rounded bg-gray-900 border border-gray-700 p-2 text-white"
+          class="dreamz-field mt-1 block w-full"
           placeholder="{{ t('type_reason_here') }}"
         ></textarea>
       </label>
-      <button type="submit" onclick="return confirm('{{ t('confirm_cancel') }}');" class="rounded bg-red-600 px-4 py-2 font-semibold text-white hover:bg-red-700">
+      <button type="submit" onclick="return confirm('{{ t('confirm_cancel') }}');" class="dreamz-button-ghost dreamz-button-danger">
         {{ t('submit_cancellation_request') }}
       </button>
     </form>

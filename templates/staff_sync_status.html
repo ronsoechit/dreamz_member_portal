@@ -34,6 +34,29 @@
 </div>
 
 <section id="sync-status-panel">
+{% if sync_health and sync_health.is_stale %}
+  <div class="mb-5 rounded border border-red-500/50 bg-red-500/10 p-4 text-sm text-red-100">
+    <div class="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+      <div>
+        <div class="font-semibold text-red-200">
+          {% if sync_health.state == 'no_data' %}{{ t('staff_sync_no_data_title') }}{% else %}{{ t('staff_sync_stale_title') }}{% endif %}
+        </div>
+        <p class="mt-1 max-w-4xl text-red-100/90">
+          {% if sync_health.state == 'no_data' %}
+            {{ t('staff_sync_no_data_body') }}
+          {% else %}
+            {{ t('staff_sync_stale_body')|replace('{minutes}', sync_health.stale_after_minutes|string) }}
+          {% endif %}
+          {% if sync_health.last_seen %}
+            <span class="block mt-1">{{ t('staff_sync_last_seen') }} {{ sync_health.last_seen|format_date('%d/%m/%Y %H:%M') }}.</span>
+          {% endif %}
+        </p>
+      </div>
+      <span class="whitespace-nowrap rounded bg-red-400 px-3 py-1 text-xs font-semibold text-gray-950">{{ t('staff_sync_action_needed') }}</span>
+    </div>
+  </div>
+{% endif %}
+
 {% if latest %}
   {% if latest.status == 'success' and latest.error and 'Members.dat is' in latest.error %}
     <div class="mb-5 rounded border border-yellow-500/50 bg-yellow-500/10 p-4 text-sm text-yellow-100">
@@ -50,7 +73,24 @@
     </div>
   {% endif %}
 
-  <div class="mb-6 grid gap-3 md:grid-cols-5">
+  <div class="mb-6 grid gap-3 md:grid-cols-2 lg:grid-cols-6">
+    <div class="rounded border border-gray-700 bg-gray-800/40 p-4">
+      <div class="text-sm text-gray-300">{{ t('staff_sync_connection') }}</div>
+      <div class="mt-1 text-2xl font-semibold {% if sync_health.state == 'online' %}text-green-300{% elif sync_health.state == 'running' %}text-yellow-400{% else %}text-red-300{% endif %}">
+        {% if sync_health.state == 'online' %}
+          {{ t('staff_sync_connection_online') }}
+        {% elif sync_health.state == 'running' %}
+          {{ t('staff_sync_connection_running') }}
+        {% elif sync_health.state == 'stale' %}
+          {{ t('staff_sync_connection_stale') }}
+        {% else %}
+          {{ t('staff_sync_connection_issue') }}
+        {% endif %}
+      </div>
+      {% if sync_health.age_minutes is not none %}
+        <div class="mt-1 text-xs text-gray-500">{{ t('staff_sync_minutes_ago')|replace('{minutes}', sync_health.age_minutes|string) }}</div>
+      {% endif %}
+    </div>
     <div class="rounded border border-gray-700 bg-gray-800/40 p-4">
       <div class="text-sm text-gray-300">Latest Status</div>
       <div class="mt-1 text-2xl font-semibold {% if latest.status == 'success' %}text-green-300{% elif latest.status in ['failed', 'interrupted'] %}text-red-300{% else %}text-yellow-400{% endif %}">{{ latest.status|title }}</div>

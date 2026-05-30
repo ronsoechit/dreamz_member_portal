@@ -181,6 +181,7 @@ AUDIT_ISSUE_LABELS = {
 }
 AUDIT_PAGE_SIZE = 500
 SYNC_PAGE_SIZE = 20
+SYNC_STALE_AFTER_MINUTES = int(os.getenv("SYNC_STALE_AFTER_MINUTES", "30"))
 
 class Member(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -3092,7 +3093,42 @@ def matching_equipment_for_exercise(exercise_name, equipment_name=None):
     return None
 
 
-def equipment_member_context():
+def equipment_for_member_training_plan(member):
+    if not member:
+        return []
+    plan = None
+    record = CoachPlan.query.filter_by(member_id=member.member_id).first()
+    if record:
+        plan = stored_coach_plan(record)
+    if not plan:
+        profile = coach_profile_for_member(member)
+        if profile:
+            plan = coach_personal_plan(profile, member=member, language=current_language())
+    if not plan:
+        return []
+
+    linked_items = {}
+    for section in plan:
+        sessions = section.get("sessions") if isinstance(section, dict) else None
+        if not isinstance(sessions, list):
+            continue
+        for session in sessions:
+            exercises = session.get("exercises") if isinstance(session, dict) else None
+            if not isinstance(exercises, list):
+                continue
+            for exercise in exercises:
+                if not isinstance(exercise, dict):
+                    continue
+                item = matching_equipment_for_exercise(exercise.get("name"), exercise.get("equipment"))
+                if item:
+                    linked_items[item.id] = item
+    return sorted(
+        linked_items.values(),
+        key=lambda item: (not equipment_is_new_arrival(item), item.sort_order or 9999, item.name.lower()),
+    )
+
+
+def equipment_member_context(member=None):
     ensure_runtime_schema()
     seed_equipment_library()
     repair_seeded_equipment_visibility_if_empty()
@@ -3100,39 +3136,44 @@ def equipment_member_context():
     muscle_filter = request.args.get("muscle", "").strip()
     search_query = request.args.get("q", "").strip()
     new_only = request.args.get("new", "").strip() == "1"
-
-    query = member_visible_equipment_query()
-    if category_filter:
-        query = query.filter(EquipmentItem.category_key == category_filter)
-    if muscle_filter:
-        query = query.filter(db.or_(
-            EquipmentItem.primary_muscle_groups.like(f"%{muscle_filter}%"),
-            EquipmentItem.secondary_muscle_groups.like(f"%{muscle_filter}%"),
-        ))
-    if new_only:
-        query = query.filter(EquipmentItem.is_new.is_(True))
+    training_plan_only = request.args.get("mode", "").strip() == "training"
+    filters_active = bool(category_filter or muscle_filter or search_query or new_only or training_plan_only)
 
     categories = EquipmentCategory.query.filter_by(is_active=True).order_by(
         EquipmentCategory.sort_order.asc(),
         EquipmentCategory.name.asc(),
     ).all()
-    items = query.order_by(
-        EquipmentItem.is_new.desc(),
-        EquipmentItem.sort_order.asc(),
-        EquipmentItem.name.asc(),
-    ).all()
-    if search_query:
-        items = [item for item in items if equipment_matches_search(item, search_query)]
-    filters_active = bool(category_filter or muscle_filter or search_query or new_only)
+    items = []
     relaxed_results = False
-    if search_query and not items and (category_filter or muscle_filter or new_only):
-        relaxed_items = member_visible_equipment_query().order_by(
+    if training_plan_only:
+        items = equipment_for_member_training_plan(member)
+    elif filters_active:
+        query = member_visible_equipment_query()
+        if category_filter:
+            query = query.filter(EquipmentItem.category_key == category_filter)
+        if muscle_filter:
+            query = query.filter(db.or_(
+                EquipmentItem.primary_muscle_groups.like(f"%{muscle_filter}%"),
+                EquipmentItem.secondary_muscle_groups.like(f"%{muscle_filter}%"),
+            ))
+        if new_only:
+            query = query.filter(EquipmentItem.is_new.is_(True))
+
+        items = query.order_by(
             EquipmentItem.is_new.desc(),
             EquipmentItem.sort_order.asc(),
             EquipmentItem.name.asc(),
         ).all()
-        items = [item for item in relaxed_items if equipment_matches_search(item, search_query)]
-        relaxed_results = bool(items)
+        if search_query:
+            items = [item for item in items if equipment_matches_search(item, search_query)]
+        if search_query and not items and (category_filter or muscle_filter or new_only):
+            relaxed_items = member_visible_equipment_query().order_by(
+                EquipmentItem.is_new.desc(),
+                EquipmentItem.sort_order.asc(),
+                EquipmentItem.name.asc(),
+            ).all()
+            items = [item for item in relaxed_items if equipment_matches_search(item, search_query)]
+            relaxed_results = bool(items)
     return {
         "equipment_items": items,
         "equipment_categories": categories,
@@ -3141,6 +3182,7 @@ def equipment_member_context():
         "selected_muscle": muscle_filter,
         "equipment_search_query": search_query,
         "new_only": new_only,
+        "training_plan_only": training_plan_only,
         "equipment_filters_active": filters_active,
         "equipment_relaxed_results": relaxed_results,
         "equipment_primary_groups": lambda item: json_list(item.primary_muscle_groups),
@@ -3162,6 +3204,7 @@ def empty_equipment_member_context():
         "selected_muscle": request.args.get("muscle", "").strip(),
         "equipment_search_query": request.args.get("q", "").strip(),
         "new_only": request.args.get("new", "").strip() == "1",
+        "training_plan_only": request.args.get("mode", "").strip() == "training",
         "equipment_filters_active": bool(request.args),
         "equipment_relaxed_results": False,
         "equipment_primary_groups": lambda item: [],
@@ -4770,6 +4813,43 @@ def mark_stale_sync_runs(now=None):
     if stale_runs:
         db.session.commit()
     return stale_runs
+
+
+def sync_connection_health(latest, now=None):
+    now = now or datetime.now()
+    if not latest:
+        return {
+            "state": "no_data",
+            "is_stale": True,
+            "last_seen": None,
+            "age_minutes": None,
+            "stale_after_minutes": SYNC_STALE_AFTER_MINUTES,
+        }
+
+    last_seen = latest.completed_at or latest.started_at
+    age_minutes = None
+    is_stale = False
+    if last_seen:
+        age_seconds = max((now - last_seen).total_seconds(), 0)
+        age_minutes = int(age_seconds // 60)
+        is_stale = age_minutes >= SYNC_STALE_AFTER_MINUTES
+
+    if is_stale:
+        state = "stale"
+    elif latest.status in {"failed", "interrupted"}:
+        state = "error"
+    elif latest.status == "running":
+        state = "running"
+    else:
+        state = "online"
+
+    return {
+        "state": state,
+        "is_stale": is_stale,
+        "last_seen": last_seen,
+        "age_minutes": age_minutes,
+        "stale_after_minutes": SYNC_STALE_AFTER_MINUTES,
+    }
 
 
 def apply_sync_payload(payload):
@@ -7520,6 +7600,8 @@ def create_whatsapp_login_otp(member, phone_e164, remember_device=True):
     result = whatsapp_client().send_otp(phone_e164, code, language=current_language())
     otp_record.provider_status = result.status
     otp_record.provider_message_id = result.provider_message_id or None
+    if result.status != "sent":
+        otp_record.status = "send_failed"
     log_whatsapp_auth_event(
         "otp_requested",
         result.status if result.status != "sent" else "success",
@@ -9328,6 +9410,7 @@ def staff_sync_status():
         start_index = (page - 1) * SYNC_PAGE_SIZE
         runs = query.offset(start_index).limit(SYNC_PAGE_SIZE).all()
         latest = query.first()
+        sync_health = sync_connection_health(latest)
         run_changes = {
             run.id: sync_change_summary_for_template(run)
             for run in runs
@@ -9341,6 +9424,7 @@ def staff_sync_status():
         start_index = 0
         runs = []
         latest = None
+        sync_health = sync_connection_health(None)
         run_changes = {}
         staff_warning = staff_warning or staff_data_warning("staff_sync_nav")
     page_numbers = []
@@ -9355,6 +9439,7 @@ def staff_sync_status():
         "staff_sync_status.html",
         runs=runs,
         latest=latest,
+        sync_health=sync_health,
         run_changes=run_changes,
         page=page,
         total_pages=total_pages,
@@ -9828,7 +9913,7 @@ def member_equipment_library():
         return redirect_response
     staff_warning = None
     try:
-        context = equipment_member_context()
+        context = equipment_member_context(member)
     except Exception:
         db.session.rollback()
         app.logger.exception("Equipment library unavailable while rendering member equipment.")
@@ -11546,6 +11631,18 @@ def whatsapp_login():
             return redirect(url_for("whatsapp_login"))
 
         otp_record, dev_code = create_whatsapp_login_otp(member, phone_e164, remember_device=remember_device)
+        if otp_record.provider_status != "sent":
+            app.logger.error(
+                "WhatsApp login OTP was not sent. provider_status=%s member_id=%s phone=%s. "
+                "Check WHATSAPP_CLOUD_API_TOKEN, WHATSAPP_PHONE_NUMBER_ID and WHATSAPP_OTP_TEMPLATE_NAME.",
+                otp_record.provider_status,
+                member.member_id,
+                phone_e164,
+            )
+            session.pop("pending_whatsapp_otp_id", None)
+            session.pop("dev_whatsapp_otp", None)
+            flash(translated_text("whatsapp_login_unavailable", current_language()), "error")
+            return redirect(url_for("login"))
         session["pending_whatsapp_otp_id"] = otp_record.id
         if dev_code:
             session["dev_whatsapp_otp"] = dev_code

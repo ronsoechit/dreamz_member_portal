@@ -487,6 +487,50 @@ class SyncApiTests(unittest.TestCase):
         self.assertIn("run-04", second_body)
         self.assertNotIn("run-24", second_body)
 
+    def test_staff_sync_status_warns_when_latest_sync_is_stale(self):
+        db.session.add(SyncRun(
+            source="unit-test",
+            status="success",
+            started_at=datetime.now() - timedelta(minutes=46),
+            completed_at=datetime.now() - timedelta(minutes=45),
+            members_received=2,
+            documents_received=3,
+        ))
+        db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+
+        response = self.client.get("/staff/sync")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Gym Assistant sync is not checking in", body)
+        self.assertIn("No recent sync", body)
+        self.assertIn("Last received:", body)
+
+    def test_staff_sync_status_shows_live_connection_for_recent_sync(self):
+        db.session.add(SyncRun(
+            source="unit-test",
+            status="success",
+            started_at=datetime.now() - timedelta(minutes=6),
+            completed_at=datetime.now() - timedelta(minutes=5),
+            members_received=2,
+            documents_received=3,
+        ))
+        db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+
+        response = self.client.get("/staff/sync")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Connection", body)
+        self.assertIn("Live", body)
+        self.assertNotIn("Gym Assistant sync is not checking in", body)
+
     def test_staff_sync_status_marks_stale_running_runs_interrupted(self):
         db.session.add(SyncRun(
             source="unit-test",

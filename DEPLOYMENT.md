@@ -24,6 +24,7 @@ STAFF_MANAGER_PASSWORD=<strong temporary password>
 STAFF_ADMIN_EMAIL=ron@dreamzfitness.com
 STAFF_TOKEN=<long random staff token>
 SYNC_API_TOKEN=<long random sync token>
+SYNC_STALE_AFTER_MINUTES=30
 SESSION_COOKIE_SECURE=true
 EMAIL_DELIVERY_MODE=smtp
 SMTP_HOST=<smtp host>
@@ -60,6 +61,10 @@ $env:SYNC_API_TOKEN="<same token as Railway>"
 ```
 
 5. Check `/staff/sync`, `/staff/data-audit`, and `/staff/email-log`.
+
+### Sync monitoring
+
+The portal shows a warning on `/staff/sync` when no completed GymAssistant sync has been received for `SYNC_STALE_AFTER_MINUTES` minutes. The sync agent itself performs one scan and push per run, so automatic recovery after a power outage depends on the Windows Task Scheduler task or service on the frontdesk computer starting again after reboot. Configure that task to run on startup/login, repeat every few minutes, and run missed tasks as soon as possible.
 
 ### Storage note
 
