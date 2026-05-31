@@ -14,7 +14,7 @@
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
   <link href="{{ url_for('static', filename='css/premium.css', v=static_asset_version('css/premium.css')) }}" rel="stylesheet">
 </head>
-<body class="app-body {% if current_staff_role %}staff-app-body{% endif %} {% if request.endpoint in ['member_group_classes', 'member_group_class_preferences_save', 'member_group_class_plan_add', 'member_group_class_plan_remove', 'member_group_class_attendance_save', 'member_equipment_library', 'member_equipment_detail'] %}hide-floating-coach-mobile{% endif %} bg-gray-900 text-white min-h-screen flex flex-col">
+<body class="app-body {% if current_staff_role %}staff-app-body{% endif %} bg-gray-900 text-white min-h-screen flex flex-col">
 
   <header class="app-header {% if current_staff_role %}staff-header{% endif %} bg-gray-800 shadow-md">
     <div class="container mx-auto flex flex-col gap-4 px-5 py-4">
@@ -454,59 +454,52 @@
         });
 
         const mobileQuery = window.matchMedia("(max-width: 767px)");
+        const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+        const fieldFocusSelector = "input, select, textarea, [contenteditable='true']";
         let lastScrollY = window.scrollY;
         let ticking = false;
-        const coachOverlapSelector = [
-          ".dreamz-card",
-          ".dreamz-card-soft",
-          ".dreamz-card-highlight",
-          ".meal-card",
-          ".summary-card",
-          ".account-tile",
-          ".account-section-tile",
-          ".progress-photo-comparison",
-          "[data-calendar-day-detail]",
-          "form",
-          "footer"
-        ].join(",");
+        let revealTimer = 0;
 
-        const coachWouldCoverContent = () => {
-          const fabRect = toggle?.getBoundingClientRect();
-          if (!fabRect || fabRect.width === 0 || fabRect.height === 0) return false;
-          const guard = {
-            left: fabRect.left - 10,
-            right: fabRect.right + 10,
-            top: fabRect.top - 10,
-            bottom: fabRect.bottom + 10
-          };
-          return Array.from(document.querySelectorAll(coachOverlapSelector)).some((element) => {
-            if (widget.contains(element)) return false;
-            const rect = element.getBoundingClientRect();
-            if (rect.width === 0 || rect.height === 0) return false;
-            if (rect.bottom < 0 || rect.top > window.innerHeight) return false;
-            return !(rect.right < guard.left || rect.left > guard.right || rect.bottom < guard.top || rect.top > guard.bottom);
-          });
+        const hasFocusedField = () => {
+          const active = document.activeElement;
+          return Boolean(active?.matches?.(fieldFocusSelector));
+        };
+
+        const setContextHidden = (hidden) => {
+          widget.classList.toggle("is-context-hidden", hidden && !widget.classList.contains("is-open"));
+        };
+
+        const scheduleCoachReveal = (delay = reducedMotionQuery.matches ? 0 : 780) => {
+          window.clearTimeout(revealTimer);
+          revealTimer = window.setTimeout(() => {
+            if (!mobileQuery.matches || !hasFocusedField()) setContextHidden(false);
+          }, delay);
         };
 
         const updateCoachVisibility = () => {
           ticking = false;
           if (!mobileQuery.matches || widget.classList.contains("is-open")) {
-            widget.classList.remove("is-context-hidden");
+            setContextHidden(false);
             lastScrollY = window.scrollY;
             return;
           }
 
           const currentY = window.scrollY;
-          const movingDown = currentY > lastScrollY + 8;
-          const movingUp = currentY < lastScrollY - 8;
-          const nearTop = currentY < Math.min(180, window.innerHeight * 0.28);
-          const cautiousReveal = movingUp && currentY < window.innerHeight * 0.55;
-          const wouldCoverContent = coachWouldCoverContent();
-          if ((nearTop || cautiousReveal) && !wouldCoverContent) {
-            widget.classList.remove("is-context-hidden");
-          } else if (wouldCoverContent || currentY > 180 || movingDown) {
-            widget.classList.add("is-context-hidden");
+          const movingDown = currentY > lastScrollY + 6;
+          const movingUp = currentY < lastScrollY - 6;
+          const nearTop = currentY < Math.min(140, window.innerHeight * 0.22);
+
+          if (hasFocusedField()) {
+            setContextHidden(true);
+          } else if (nearTop || movingUp) {
+            setContextHidden(false);
+          } else if (movingDown) {
+            setContextHidden(true);
+            scheduleCoachReveal();
+          } else {
+            scheduleCoachReveal();
           }
+
           lastScrollY = currentY;
         };
 
@@ -516,9 +509,14 @@
           window.requestAnimationFrame(updateCoachVisibility);
         };
 
+        document.addEventListener("focusin", (event) => {
+          if (event.target?.matches?.(fieldFocusSelector)) setContextHidden(true);
+        });
+        document.addEventListener("focusout", () => scheduleCoachReveal(650));
         window.addEventListener("scroll", requestCoachVisibilityUpdate, { passive: true });
         window.addEventListener("resize", requestCoachVisibilityUpdate);
         mobileQuery.addEventListener?.("change", requestCoachVisibilityUpdate);
+        reducedMotionQuery.addEventListener?.("change", requestCoachVisibilityUpdate);
         requestCoachVisibilityUpdate();
       })();
     </script>

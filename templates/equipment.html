@@ -82,7 +82,14 @@
 <script>
   (() => {
     const activeChip = document.querySelector(".equipment-quick-filters [aria-current='page']");
-    if (activeChip) activeChip.scrollIntoView({ inline: "center", block: "nearest" });
+    const scroller = activeChip?.parentElement;
+    if (!activeChip || !scroller || scroller.scrollWidth <= scroller.clientWidth) return;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const left = activeChip.offsetLeft - ((scroller.clientWidth - activeChip.offsetWidth) / 2);
+    scroller.scrollTo({
+      left: Math.max(0, left),
+      behavior: reducedMotion.matches ? "auto" : "smooth",
+    });
   })();
 </script>
 

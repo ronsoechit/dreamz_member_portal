@@ -1116,6 +1116,17 @@
       window.setTimeout(() => target.classList.remove("ring-2", "ring-yellow-400", "ring-offset-2", "ring-offset-gray-950"), 1800);
     };
 
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const centerHorizontally = (element) => {
+      const scroller = element?.parentElement;
+      if (!element || !scroller || scroller.scrollWidth <= scroller.clientWidth) return;
+      const left = element.offsetLeft - ((scroller.clientWidth - element.offsetWidth) / 2);
+      scroller.scrollTo({
+        left: Math.max(0, left),
+        behavior: reducedMotion.matches ? "auto" : "smooth",
+      });
+    };
+
     const setCoachView = (view, { scroll = true, highlight = false } = {}) => {
       const requestedView = view === "conversation" ? "chat" : view;
       document.querySelectorAll("[data-coach-view]").forEach((button) => {
@@ -1128,7 +1139,7 @@
         button.classList.toggle("bg-gray-950", !active);
         button.classList.toggle("text-yellow-200", !active);
         button.setAttribute("aria-selected", active ? "true" : "false");
-        if (active) button.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+        if (active) centerHorizontally(button);
       });
       document.querySelectorAll("[data-coach-panel]").forEach((panel) => {
         panel.classList.toggle("hidden", panel.dataset.coachPanel !== requestedView);
@@ -1188,7 +1199,7 @@
     const todayCalendarTile = document.querySelector("[data-calendar-today]");
     if (todayCalendarTile) {
       window.setTimeout(() => {
-        todayCalendarTile.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+        centerHorizontally(todayCalendarTile);
       }, 120);
     }
 
@@ -1245,7 +1256,7 @@
           tab.classList.toggle("border-gray-700", !active);
           tab.classList.toggle("bg-gray-900", !active);
           tab.classList.toggle("text-yellow-200", !active);
-          if (active) tab.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+          if (active) centerHorizontally(tab);
         });
         panels.forEach((panel, index) => panel.classList.toggle("hidden", index !== sessionIndex));
       };
@@ -1264,7 +1275,7 @@
           day.classList.toggle("ring-yellow-400", active);
           day.classList.toggle("ring-offset-2", active);
           day.classList.toggle("ring-offset-gray-950", active);
-          if (active) day.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+          if (active) centerHorizontally(day);
         });
         calendarDetails.forEach((detail) => {
           const active = detail.dataset.calendarDayDetail === dayKey;

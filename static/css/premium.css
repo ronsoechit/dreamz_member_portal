@@ -941,6 +941,36 @@ tbody tr:hover {
   grid-column: span 2;
 }
 
+.dashboard-nutrition-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.dashboard-nutrition-stat {
+  min-height: 4.25rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: var(--dreamz-radius-sm);
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.76), rgba(3, 7, 18, 0.62));
+  padding: 0.78rem;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.dashboard-nutrition-next {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 640px) {
+  .dashboard-nutrition-preview-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .dashboard-nutrition-next {
+    grid-column: auto;
+  }
+}
+
 .meal-card {
   scroll-margin-top: 7rem;
 }
@@ -2091,10 +2121,6 @@ span.rounded,
   .pwa-install-card:not(.hidden) {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .hide-floating-coach-mobile .dreamz-coach-widget {
-    display: none;
   }
 
   .dreamz-card,

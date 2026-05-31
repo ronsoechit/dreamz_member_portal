@@ -103,17 +103,17 @@
           {{ t('your_meal_plan_is_ready') if nutrition_dashboard_plan else t('complete_profile_to_improve_meal_plan') }}
         </p>
         {% if nutrition_dashboard_plan %}
-          <div class="mt-3 grid gap-2 text-sm sm:grid-cols-3">
-            <div class="rounded border border-gray-700 bg-gray-950/40 p-3">
+          <div class="dashboard-nutrition-preview-grid mt-3 text-sm">
+            <div class="dashboard-nutrition-stat">
               <span class="block text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('calories') }}</span>
               <span class="font-semibold text-white">{{ nutrition_dashboard_plan.targets.calories or t('not_available') }}</span>
             </div>
-            <div class="rounded border border-gray-700 bg-gray-950/40 p-3">
+            <div class="dashboard-nutrition-stat">
               <span class="block text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('protein') }}</span>
               <span class="font-semibold text-white">{{ nutrition_dashboard_plan.targets.protein }}g</span>
             </div>
             {% if nutrition_next_meal %}
-              <div class="rounded border border-gray-700 bg-gray-950/40 p-3">
+              <div class="dashboard-nutrition-stat dashboard-nutrition-next">
                 <span class="block text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('next_meal_suggestion') }}</span>
                 <span class="font-semibold text-white">{{ nutrition_next_meal.name }}</span>
               </div>
@@ -124,22 +124,6 @@
       {{ ui.button(t('open_meal_plan'), url_for('member_nutrition'), 'primary') }}
     </div>
   </section>
-
-  {% if new_equipment_items %}
-    <section class="dreamz-card-soft mb-4">
-      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('equipment_new_at_dreamz') }}</div>
-          <div class="mt-2 flex flex-wrap gap-2">
-            {% for item in new_equipment_items %}
-              <a href="{{ url_for('member_equipment_detail', slug=item.slug) }}" class="dreamz-badge">{{ item.name }}</a>
-            {% endfor %}
-          </div>
-        </div>
-        {{ ui.button(t('equipment_view_new_machines'), url_for('member_equipment_library', new=1), 'secondary') }}
-      </div>
-    </section>
-  {% endif %}
 
   <section class="home-classes-card dreamz-card mb-4">
     <div class="mb-3 flex items-center justify-between gap-3">
@@ -189,6 +173,22 @@
       </div>
     {% endif %}
   </section>
+
+  {% if new_equipment_items %}
+    <section class="dreamz-card-soft mb-4">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('equipment_new_at_dreamz') }}</div>
+          <div class="mt-2 flex flex-wrap gap-2">
+            {% for item in new_equipment_items %}
+              <a href="{{ url_for('member_equipment_detail', slug=item.slug) }}" class="dreamz-badge">{{ item.name }}</a>
+            {% endfor %}
+          </div>
+        </div>
+        {{ ui.button(t('equipment_view_new_machines'), url_for('member_equipment_library', new=1), 'secondary') }}
+      </div>
+    </section>
+  {% endif %}
 
   <section class="home-action-grid mb-5 grid gap-3 md:grid-cols-2">
     <div class="md:col-span-2">
