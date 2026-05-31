@@ -2,6 +2,51 @@
 {% import "_ui_macros.html" as ui with context %}
 {% block title %}{{ t('group_classes_title') }} | Dreamz Fitness{% endblock %}
 
+{% macro class_preferences_panel(collapsible=false) %}
+  {% if collapsible %}
+    <details class="dreamz-card dreamz-mobile-dense mt-5">
+      <summary class="cursor-pointer text-lg font-semibold text-white">{{ t('group_class_preferences') }}</summary>
+      <div class="mt-4">
+  {% else %}
+    <section class="dreamz-card dreamz-mobile-dense mb-6">
+      <h3 class="text-lg font-semibold text-white">{{ t('group_class_preferences') }}</h3>
+  {% endif %}
+      <form method="post" action="{{ url_for('member_group_class_preferences_save') }}" class="mt-4 grid gap-3 lg:grid-cols-4">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="block">
+          <span class="dreamz-field-label">{{ t('group_class_weekly_target') }}</span>
+          <input name="preferred_classes_per_week" type="number" min="0" max="7" value="{{ preference.preferred_classes_per_week if preference and preference.preferred_classes_per_week is not none else '' }}" class="dreamz-field mt-1">
+        </label>
+        <label class="block">
+          <span class="dreamz-field-label">{{ t('group_class_plan_mode') }}</span>
+          <select name="plan_mode" class="dreamz-select mt-1">
+            <option value="supplement" {% if not preference or preference.plan_mode == 'supplement' %}selected{% endif %}>{{ t('group_class_plan_mode_supplement') }}</option>
+            <option value="replace_or_supplement" {% if preference and preference.plan_mode == 'replace_or_supplement' %}selected{% endif %}>{{ t('group_class_plan_mode_replace') }}</option>
+          </select>
+        </label>
+        <div class="lg:col-span-2">
+          <div class="dreamz-field-label">{{ t('group_class_favorites') }}</div>
+          <div class="mt-2 flex flex-wrap gap-2">
+            {% for class_type in class_types %}
+              <label class="dreamz-check">
+                <input name="favorite_class_type_id" value="{{ class_type.id }}" type="checkbox" {% if class_type.id in favorite_ids %}checked{% endif %}>
+                {{ class_type.name }}
+              </label>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="lg:col-span-4">
+          <button type="submit" class="dreamz-button-primary">{{ t('save') }}</button>
+        </div>
+      </form>
+  {% if collapsible %}
+      </div>
+    </details>
+  {% else %}
+    </section>
+  {% endif %}
+{% endmacro %}
+
 {% block content %}
 <section class="dreamz-card-highlight dreamz-mobile-dense mb-5">
   <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -14,37 +59,9 @@
   </div>
 </section>
 
-<section class="dreamz-card dreamz-mobile-dense mb-6">
-  <h3 class="text-lg font-semibold text-white">{{ t('group_class_preferences') }}</h3>
-  <form method="post" action="{{ url_for('member_group_class_preferences_save') }}" class="mt-4 grid gap-3 lg:grid-cols-4">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label class="block">
-      <span class="dreamz-field-label">{{ t('group_class_weekly_target') }}</span>
-      <input name="preferred_classes_per_week" type="number" min="0" max="7" value="{{ preference.preferred_classes_per_week if preference and preference.preferred_classes_per_week is not none else '' }}" class="dreamz-field mt-1">
-    </label>
-    <label class="block">
-      <span class="dreamz-field-label">{{ t('group_class_plan_mode') }}</span>
-      <select name="plan_mode" class="dreamz-select mt-1">
-        <option value="supplement" {% if not preference or preference.plan_mode == 'supplement' %}selected{% endif %}>{{ t('group_class_plan_mode_supplement') }}</option>
-        <option value="replace_or_supplement" {% if preference and preference.plan_mode == 'replace_or_supplement' %}selected{% endif %}>{{ t('group_class_plan_mode_replace') }}</option>
-      </select>
-    </label>
-    <div class="lg:col-span-2">
-      <div class="dreamz-field-label">{{ t('group_class_favorites') }}</div>
-      <div class="mt-2 flex flex-wrap gap-2">
-        {% for class_type in class_types %}
-          <label class="dreamz-check">
-            <input name="favorite_class_type_id" value="{{ class_type.id }}" type="checkbox" {% if class_type.id in favorite_ids %}checked{% endif %}>
-            {{ class_type.name }}
-          </label>
-        {% endfor %}
-      </div>
-    </div>
-    <div class="lg:col-span-4">
-      <button type="submit" class="dreamz-button-primary">{{ t('save') }}</button>
-    </div>
-  </form>
-</section>
+{% if not has_group_class_setup %}
+  {{ class_preferences_panel(false) }}
+{% endif %}
 
 <section class="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
   <h3 class="text-lg font-semibold text-white">{{ t('group_class_weekly_schedule') }}</h3>
@@ -72,17 +89,17 @@
     <article class="dreamz-card dreamz-mobile-dense">
       <div class="flex items-start justify-between gap-3">
         <div>
-          <div class="text-xs font-semibold uppercase tracking-wide text-yellow-400">{{ day_label(occurrence.day_of_week) }} · {{ time_label(occurrence.start_time) }}-{{ time_label(occurrence.end_time) }}</div>
+          <div class="text-xs font-semibold uppercase tracking-wide text-yellow-400">{{ day_label(occurrence.day_of_week) }} &middot; {{ time_label(occurrence.start_time) }}-{{ time_label(occurrence.end_time) }}</div>
           <h4 class="mt-1 text-xl font-semibold text-white">{{ occurrence.class_type.name }}</h4>
-          <p class="mt-1 text-sm text-gray-300">{{ occurrence.room }}{% if occurrence.instructor %} · {{ occurrence.instructor }}{% endif %}</p>
+          <p class="mt-1 text-sm text-gray-300">{{ occurrence.room }}{% if occurrence.instructor %} &middot; {{ occurrence.instructor }}{% endif %}</p>
         </div>
         {% if row.is_favorite %}
           {{ ui.badge(t('group_class_favorite'), 'warning', 'shrink-0') }}
         {% endif %}
       </div>
       <div class="mt-4 flex flex-wrap gap-2 text-xs">
-        {{ ui.badge(occurrence.class_type.intensity) }}
-        {{ ui.badge(occurrence.class_type.category) }}
+        {{ ui.badge(ui.group_class_label(occurrence.class_type.intensity)|trim) }}
+        {{ ui.badge(ui.group_class_label(occurrence.class_type.category)|trim) }}
         {% if occurrence.note %}
           {{ ui.badge(occurrence.note, 'success') }}
         {% endif %}
@@ -90,10 +107,10 @@
       <details class="mt-4 rounded border border-gray-700 bg-gray-900/60 p-3 text-sm text-gray-300">
         <summary class="cursor-pointer font-semibold text-yellow-200">{{ t('view_class') }}</summary>
         <div class="mt-3 grid gap-2 text-xs">
-          <div>{{ t('group_class_muscle_focus') }}: {{ occurrence.class_type.muscle_focus or t('not_available') }}</div>
-          <div>{{ t('group_class_cardio_load') }}: {{ occurrence.class_type.cardio_load or t('not_available') }}</div>
-          <div>{{ t('group_class_strength_load') }}: {{ occurrence.class_type.strength_load or t('not_available') }}</div>
-          <div>{{ t('group_class_recovery_impact') }}: {{ occurrence.class_type.recovery_impact or t('not_available') }}</div>
+          <div>{{ t('group_class_muscle_focus') }}: {{ ui.group_class_label(occurrence.class_type.muscle_focus)|trim or t('not_available') }}</div>
+          <div>{{ t('group_class_cardio_load') }}: {{ ui.group_class_label(occurrence.class_type.cardio_load)|trim or t('not_available') }}</div>
+          <div>{{ t('group_class_strength_load') }}: {{ ui.group_class_label(occurrence.class_type.strength_load)|trim or t('not_available') }}</div>
+          <div>{{ t('group_class_recovery_impact') }}: {{ ui.group_class_label(occurrence.class_type.recovery_impact)|trim or t('not_available') }}</div>
         </div>
       </details>
       <div class="mt-4 flex flex-col gap-2">
@@ -128,4 +145,29 @@
     <div class="dreamz-card-soft text-sm text-gray-300">{{ t('group_class_empty_schedule') }}</div>
   {% endfor %}
 </section>
+
+{% if planned_rows %}
+  <section class="mt-5">
+    <div class="mb-3 text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('group_class_my_planned_classes') }}</div>
+    <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {% for row in planned_rows %}
+        {% set occurrence = row.occurrence %}
+        <article class="dreamz-card-soft dreamz-mobile-dense">
+          <div class="text-xs font-semibold uppercase tracking-wide text-yellow-400">{{ day_label(occurrence.day_of_week) }} &middot; {{ time_label(occurrence.start_time) }}-{{ time_label(occurrence.end_time) }}</div>
+          <h4 class="mt-1 text-lg font-semibold text-white">{{ occurrence.class_type.name }}</h4>
+          <p class="mt-1 text-sm text-gray-300">{{ occurrence.room }}{% if occurrence.instructor %} &middot; {{ occurrence.instructor }}{% endif %}</p>
+          <div class="mt-3 flex flex-wrap gap-2 text-xs">
+            {{ ui.badge(ui.group_class_label(occurrence.class_type.intensity)|trim, 'warning') }}
+            {{ ui.badge(ui.group_class_label(occurrence.class_type.category)|trim) }}
+            {{ ui.badge(row.class_date|format_date('%d/%m/%Y'), 'success') }}
+          </div>
+        </article>
+      {% endfor %}
+    </div>
+  </section>
+{% endif %}
+
+{% if has_group_class_setup %}
+  {{ class_preferences_panel(true) }}
+{% endif %}
 {% endblock %}

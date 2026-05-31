@@ -8,10 +8,11 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Dreamz Fitness" />
   <title>{% block title %}{{ t('app_title') }}{% endblock %}</title>
+  {% if ui_build_marker %}<!-- UI build: {{ ui_build_marker }} -->{% endif %}
   <link rel="manifest" href="{{ url_for('web_manifest') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-180.png') }}">
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-  <link href="{{ url_for('static', filename='css/premium.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='css/premium.css', v=static_asset_version('css/premium.css')) }}" rel="stylesheet">
 </head>
 <body class="app-body {% if current_staff_role %}staff-app-body{% endif %} {% if request.endpoint in ['member_group_classes', 'member_group_class_preferences_save', 'member_group_class_plan_add', 'member_group_class_plan_remove', 'member_group_class_attendance_save', 'member_equipment_library', 'member_equipment_detail'] %}hide-floating-coach-mobile{% endif %} bg-gray-900 text-white min-h-screen flex flex-col">
 
@@ -133,7 +134,6 @@
               {% if account_notification_count %}
                 <span
                   class="account-notification-badge"
-                  style="position:absolute;right:-0.28rem;top:-0.28rem;min-width:1.05rem;height:1.05rem;border-radius:999px;background:#ef4444;color:#fff;font-size:0.62rem;font-weight:900;line-height:1;z-index:5;box-shadow:0 0 0 2px rgba(5,8,22,0.96),0 8px 18px rgba(239,68,68,0.35);"
                   aria-hidden="true"
                 >{{ account_notification_count }}</span>
               {% endif %}
@@ -204,7 +204,7 @@
             {% for thread in floating_coach_threads %}
               {% if loop.first %}
                 <div class="dreamz-coach-exchange is-current" data-floating-coach-exchange>
-                  <div class="dreamz-coach-exchange-meta">{{ t('coach_current_conversation') }} · {{ thread.created_at|format_date('%d/%m/%Y %H:%M') }}</div>
+                  <div class="dreamz-coach-exchange-meta">{{ t('coach_current_conversation') }} &middot; {{ thread.created_at|format_date('%d/%m/%Y %H:%M') }}</div>
                   {% if thread.member_message %}
                     <div class="dreamz-coach-message is-member" data-floating-coach-message>
                       <div class="dreamz-coach-message-label text-yellow-200">{{ t('coach_member_label') }}</div>
@@ -339,6 +339,7 @@
           panel.hidden = !open;
           toggle.setAttribute("aria-expanded", open ? "true" : "false");
           widget.classList.toggle("is-open", open);
+          if (open) widget.classList.remove("is-context-hidden");
           if (open && focus) window.setTimeout(() => input?.focus(), 80);
         };
 
@@ -373,7 +374,7 @@
           activeExchange.dataset.floatingCoachExchange = "true";
           const meta = document.createElement("div");
           meta.className = "dreamz-coach-exchange-meta";
-          meta.textContent = "{{ t('coach_current_conversation') }} · " + new Date().toLocaleString([], { dateStyle: "short", timeStyle: "short" });
+          meta.textContent = "{{ t('coach_current_conversation') }} \u00b7 " + new Date().toLocaleString([], { dateStyle: "short", timeStyle: "short" });
           activeExchange.append(meta);
           thread?.prepend(activeExchange);
           return activeExchange;
@@ -451,6 +452,74 @@
             setOpen(true);
           });
         });
+
+        const mobileQuery = window.matchMedia("(max-width: 767px)");
+        let lastScrollY = window.scrollY;
+        let ticking = false;
+        const coachOverlapSelector = [
+          ".dreamz-card",
+          ".dreamz-card-soft",
+          ".dreamz-card-highlight",
+          ".meal-card",
+          ".summary-card",
+          ".account-tile",
+          ".account-section-tile",
+          ".progress-photo-comparison",
+          "[data-calendar-day-detail]",
+          "form",
+          "footer"
+        ].join(",");
+
+        const coachWouldCoverContent = () => {
+          const fabRect = toggle?.getBoundingClientRect();
+          if (!fabRect || fabRect.width === 0 || fabRect.height === 0) return false;
+          const guard = {
+            left: fabRect.left - 10,
+            right: fabRect.right + 10,
+            top: fabRect.top - 10,
+            bottom: fabRect.bottom + 10
+          };
+          return Array.from(document.querySelectorAll(coachOverlapSelector)).some((element) => {
+            if (widget.contains(element)) return false;
+            const rect = element.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) return false;
+            if (rect.bottom < 0 || rect.top > window.innerHeight) return false;
+            return !(rect.right < guard.left || rect.left > guard.right || rect.bottom < guard.top || rect.top > guard.bottom);
+          });
+        };
+
+        const updateCoachVisibility = () => {
+          ticking = false;
+          if (!mobileQuery.matches || widget.classList.contains("is-open")) {
+            widget.classList.remove("is-context-hidden");
+            lastScrollY = window.scrollY;
+            return;
+          }
+
+          const currentY = window.scrollY;
+          const movingDown = currentY > lastScrollY + 8;
+          const movingUp = currentY < lastScrollY - 8;
+          const nearTop = currentY < Math.min(180, window.innerHeight * 0.28);
+          const cautiousReveal = movingUp && currentY < window.innerHeight * 0.55;
+          const wouldCoverContent = coachWouldCoverContent();
+          if ((nearTop || cautiousReveal) && !wouldCoverContent) {
+            widget.classList.remove("is-context-hidden");
+          } else if (wouldCoverContent || currentY > 180 || movingDown) {
+            widget.classList.add("is-context-hidden");
+          }
+          lastScrollY = currentY;
+        };
+
+        const requestCoachVisibilityUpdate = () => {
+          if (ticking) return;
+          ticking = true;
+          window.requestAnimationFrame(updateCoachVisibility);
+        };
+
+        window.addEventListener("scroll", requestCoachVisibilityUpdate, { passive: true });
+        window.addEventListener("resize", requestCoachVisibilityUpdate);
+        mobileQuery.addEventListener?.("change", requestCoachVisibilityUpdate);
+        requestCoachVisibilityUpdate();
       })();
     </script>
   {% endif %}

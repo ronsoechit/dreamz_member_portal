@@ -3,14 +3,14 @@
 {% block title %}{{ t('account_title') }} | Dreamz Fitness{% endblock %}
 
 {% macro account_tile(title, body, href, meta=None) %}
-  <a href="{{ href }}" class="dreamz-card-soft dreamz-interactive p-4">
-    <div class="flex items-start justify-between gap-3">
+  <a href="{{ href }}" class="account-tile dreamz-card-soft dreamz-interactive p-4">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div class="min-w-0">
         <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ title }}</div>
         <p class="mt-2 text-sm leading-6 text-gray-300">{{ body }}</p>
       </div>
       {% if meta %}
-        <span class="dreamz-badge shrink-0">{{ meta }}</span>
+        <span class="dreamz-badge w-fit max-w-full shrink-0 self-start">{{ meta }}</span>
       {% endif %}
     </div>
   </a>

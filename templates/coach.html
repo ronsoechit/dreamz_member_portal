@@ -187,7 +187,7 @@
           <article class="rounded border border-gray-700 bg-gray-900/60 p-3">
             <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ plan.class_date|format_date('%d/%m/%Y') }}</div>
             <div class="mt-1 font-semibold text-white">{{ plan.occurrence.class_type.name }}</div>
-            <div class="mt-1 text-xs text-gray-400">{{ plan.occurrence.start_time.strftime('%H:%M') }} · {{ plan.occurrence.room }}</div>
+            <div class="mt-1 text-xs text-gray-400">{{ plan.occurrence.start_time.strftime('%H:%M') }} &middot; {{ plan.occurrence.room }}</div>
           </article>
         {% endfor %}
       </div>
@@ -445,11 +445,12 @@
               </div>
               <div class="text-xs font-semibold text-yellow-200">{{ training_calendar.week_start|format_date('%d/%m') }} - {{ training_calendar.week_end|format_date('%d/%m') }}</div>
             </div>
-            <div class="coach-week-strip mt-4 flex gap-2 overflow-x-auto pb-1">
+            <div class="coach-week-strip mt-4 flex gap-2 overflow-x-auto pb-1" data-coach-week-strip>
               {% for day in training_calendar.days %}
                 <div
                   class="coach-day-tile shrink-0 cursor-pointer rounded-lg border p-3 transition hover:border-yellow-300 {% if day.is_today %}ring-2 ring-yellow-400 ring-offset-2 ring-offset-gray-950{% endif %} {% if day.status == 'done' %}border-green-400/50 bg-green-500/10{% elif day.status == 'planned' %}border-yellow-400/50 bg-yellow-500/10{% elif day.status == 'activity' %}border-blue-300/40 bg-blue-500/10{% else %}border-gray-700 bg-gray-950/50{% endif %}"
                   data-calendar-day="{{ day.date.isoformat() }}"
+                  {% if day.is_today %}data-calendar-today="true"{% endif %}
                   role="button"
                   tabindex="0"
                   aria-pressed="{{ 'true' if day.is_today else 'false' }}"
@@ -495,23 +496,23 @@
                   <div class="mt-3 grid gap-2 md:grid-cols-2">
                     {% for workout in day.workouts %}
                       <button type="button" data-open-coach-view="history" class="rounded border border-green-500/30 bg-green-500/10 px-3 py-2 text-left text-sm font-semibold text-green-100 hover:border-green-300">
-                        {{ t('coach_calendar_done') }} · {{ t_coach_focus(workout.focus) if workout.focus else t('coach_history_title') }}
+                        {{ t('coach_calendar_done') }} &middot; {{ t_coach_focus(workout.focus) if workout.focus else t('coach_history_title') }}
                       </button>
                     {% endfor %}
                     {% for session in day.planned_sessions %}
                       <button type="button" data-calendar-session="{{ session.number }}" class="rounded border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-left text-sm font-semibold text-yellow-100 hover:border-yellow-300">
-                        {{ t('coach_calendar_planned') }} Â· {{ t('coach_plan_session') }} {{ session.number }} Â· {{ t_coach_focus(session.focus) }}
+                        {{ t('coach_calendar_planned') }} &middot; {{ t('coach_plan_session') }} {{ session.number }} &middot; {{ t_coach_focus(session.focus) }}
                       </button>
                     {% endfor %}
                     {% for plan in day.group_classes %}
                       <a href="{{ url_for('member_group_classes') }}" class="rounded border border-purple-400/30 bg-purple-500/10 px-3 py-2 text-left text-sm font-semibold text-purple-100 hover:border-purple-300">
-                        {{ t('group_classes_title') }} Â· {{ plan.occurrence.start_time.strftime('%H:%M') }} Â· {{ plan.occurrence.class_type.name }}
+                        {{ t('group_classes_title') }} &middot; {{ plan.occurrence.start_time.strftime('%H:%M') }} &middot; {{ plan.occurrence.class_type.name }}
                         <span class="mt-1 block text-xs font-normal text-purple-100/80">{{ plan.occurrence.room }}</span>
                       </a>
                     {% endfor %}
                     {% for activity in day.activities %}
                       <div class="rounded border border-blue-400/30 bg-blue-500/10 px-3 py-2 text-sm text-blue-100">
-                        {{ activity.duration_minutes }} {{ t('minutes_short') }} Â· {{ activity.activity_type }}
+                        {{ activity.duration_minutes }} {{ t('minutes_short') }} &middot; {{ activity.activity_type }}
                       </div>
                     {% endfor %}
                     {% if day.status == 'rest' and not day.group_classes %}
@@ -629,7 +630,7 @@
                     </button>
                     {% if linked_equipment %}
                       <a href="{{ url_for('member_equipment_detail', slug=linked_equipment.slug) }}" class="mt-3 inline-flex rounded border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs font-semibold text-yellow-100 hover:border-yellow-300">
-                        {{ t('view_equipment') }} · {{ linked_equipment.name }}
+                        {{ t('view_equipment') }} &middot; {{ linked_equipment.name }}
                       </a>
                     {% endif %}
                     <div class="mt-3 hidden border-t border-gray-700 pt-3" data-exercise-detail>
@@ -1104,6 +1105,8 @@
     const coachScrollTarget = (view) => {
       if (view === "sessions") return document.querySelector('[data-coach-panel="sessions"]');
       if (view === "history") return document.getElementById("coach-history");
+      if (view === "progress") return document.getElementById("coach-progress");
+      if (view === "nutrition") return document.getElementById("nutrition-plan");
       return document.querySelector("[data-coach-shell]");
     };
 
@@ -1177,9 +1180,16 @@
     focusCoachProfileField();
     if (requestedCoachView) {
       setCoachView(requestedCoachView, {
-        scroll: requestedCoachView === "nutrition" || Boolean(window.location.hash),
+        scroll: ["nutrition", "progress"].includes(requestedCoachView) || Boolean(window.location.hash),
         highlight: requestedCoachView === "nutrition",
       });
+    }
+
+    const todayCalendarTile = document.querySelector("[data-calendar-today]");
+    if (todayCalendarTile) {
+      window.setTimeout(() => {
+        todayCalendarTile.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+      }, 120);
     }
 
     const appendCoachMessage = (actor, message) => {

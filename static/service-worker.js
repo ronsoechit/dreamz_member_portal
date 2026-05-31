@@ -1,4 +1,4 @@
-const CACHE_NAME = "dreamz-member-portal-v1";
+const CACHE_NAME = "dreamz-member-portal-phase-1-3-v2";
 const STATIC_ASSETS = [
   "/static/logo.jpg",
   "/static/css/premium.css",

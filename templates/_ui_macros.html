@@ -34,6 +34,17 @@
   {% endif %}
 {% endmacro %}
 
+{% macro group_class_label(value) %}
+  {% set text = value|string if value is not none and value != '' else '' %}
+  {% set key = text|trim|lower|replace('-', '_')|replace(' ', '_') %}
+  {% if not text %}
+  {% elif key in ['low', 'medium', 'high', 'low_medium', 'medium_high', 'strength', 'cardio', 'recovery', 'mobility', 'conditioning', 'core', 'full_body_cardio', 'lower_body_cardio', 'full_body_strength'] %}
+    {{ t('group_label_' ~ key) }}
+  {% else %}
+    {{ text|replace('_', ' ') }}
+  {% endif %}
+{% endmacro %}
+
 {% macro section_title(label, heading=None, body=None, heading_level='h3') %}
   <div class="dreamz-section-title">{{ label }}</div>
   {% if heading %}

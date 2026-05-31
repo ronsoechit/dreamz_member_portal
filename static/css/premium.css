@@ -867,6 +867,167 @@ tbody tr:hover {
   display: block;
 }
 
+.auth-logo-frame {
+  position: relative;
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 16px;
+  padding: 0.42rem 0.58rem;
+  background:
+    radial-gradient(circle at 58% 0%, rgba(247, 181, 0, 0.18), transparent 58%),
+    rgba(4, 9, 18, 0.76);
+  border: 1px solid rgba(250, 204, 21, 0.18);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.34), 0 0 34px rgba(245, 158, 11, 0.13), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  animation: dreamz-logo-in 520ms var(--dreamz-ease-out) both;
+}
+
+.auth-logo-frame::after {
+  content: "";
+  position: absolute;
+  inset: -45% auto -45% -60%;
+  width: 42%;
+  transform: rotate(18deg);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.16), transparent);
+  animation: dreamz-logo-shine 2.8s var(--dreamz-ease) 480ms both;
+  pointer-events: none;
+}
+
+.auth-logo-frame .auth-logo {
+  position: relative;
+  z-index: 1;
+  display: block;
+}
+
+.language-auth-card {
+  width: min(100%, 42rem);
+}
+
+.language-auth-title {
+  font-size: clamp(1.7rem, 5vw, 2.25rem) !important;
+  line-height: 1.08;
+}
+
+.language-auth-subtitle {
+  font-size: clamp(1.05rem, 2.4vw, 1.22rem) !important;
+  line-height: 1.12;
+}
+
+.language-option-card {
+  min-height: 6.25rem;
+}
+
+.language-option-card .language-option-cta {
+  min-height: 2rem;
+  align-items: center;
+}
+
+.nutrition-target-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.nutrition-target-card {
+  min-height: 4.65rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.nutrition-target-card-wide {
+  grid-column: span 2;
+}
+
+.meal-card {
+  scroll-margin-top: 7rem;
+}
+
+.meal-log-inline {
+  animation: dreamz-card-in var(--dreamz-motion-slow) var(--dreamz-ease-out) both;
+}
+
+.progress-stats-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.progress-photo-grid {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.progress-photo-frame {
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.20);
+  border-radius: var(--dreamz-radius-md);
+  background: rgba(5, 10, 20, 0.74);
+  box-shadow: var(--dreamz-shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.progress-photo-frame img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  object-fit: cover;
+}
+
+.progress-photo-frame figcaption {
+  display: flex;
+  min-height: 3.35rem;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.15rem;
+  padding: 0.72rem;
+  color: var(--dreamz-muted);
+  font-size: var(--dreamz-text-xs);
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.progress-photo-frame figcaption strong {
+  color: #f8fafc;
+  font-size: var(--dreamz-text-sm);
+  text-transform: none;
+}
+
+@keyframes dreamz-logo-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.35rem) scale(0.96);
+    filter: saturate(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: saturate(1);
+  }
+}
+
+@keyframes dreamz-logo-shine {
+  from {
+    opacity: 0;
+    transform: translateX(0) rotate(18deg);
+  }
+  28% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(430%) rotate(18deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-logo-frame,
+  .auth-logo-frame::after,
+  .meal-log-inline {
+    animation: none !important;
+  }
+}
+
 .member-photo-frame,
 .portal-main > .mb-6 > .h-36 {
   border-radius: 24px !important;
@@ -994,10 +1155,21 @@ tbody tr:hover {
   align-items: flex-end;
   gap: 0.75rem;
   pointer-events: none;
+  transition: opacity var(--dreamz-motion-base) var(--dreamz-ease), transform var(--dreamz-motion-base) var(--dreamz-ease);
 }
 
 .dreamz-coach-widget > * {
   pointer-events: auto;
+}
+
+.dreamz-coach-widget.is-context-hidden:not(.is-open) {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(0.75rem) scale(0.96);
+}
+
+.dreamz-coach-widget.is-context-hidden:not(.is-open) > * {
+  pointer-events: none;
 }
 
 .dreamz-coach-fab {
@@ -1310,6 +1482,13 @@ tbody tr:hover {
   scroll-margin-top: 6rem;
 }
 
+.account-tile .dreamz-badge,
+.account-section-tile .dreamz-badge {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .account-details-card {
   padding: 0 !important;
   overflow: hidden;
@@ -1580,6 +1759,20 @@ span.rounded,
 @media (min-width: 1024px) {
   .app-header-actions {
     width: auto;
+  }
+
+  .nutrition-target-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .nutrition-target-card-wide {
+    grid-column: auto;
+  }
+}
+
+@media (min-width: 768px) {
+  .progress-stats-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
@@ -1917,5 +2110,100 @@ span.rounded,
   .dreamz-field,
   .dreamz-select {
     min-height: 2.65rem;
+  }
+
+  .language-auth-body {
+    align-items: flex-start;
+    padding-top: max(0.75rem, env(safe-area-inset-top));
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+
+  .language-auth-card {
+    padding: 0.9rem !important;
+  }
+
+  .language-auth-logo .auth-logo {
+    height: 2.55rem;
+  }
+
+  .language-auth-heading {
+    margin-top: 0.85rem !important;
+  }
+
+  .language-auth-title {
+    font-size: clamp(1.45rem, 7vw, 1.72rem) !important;
+    line-height: 1.05;
+  }
+
+  .language-auth-subtitle {
+    font-size: clamp(1rem, 4.75vw, 1.16rem) !important;
+    line-height: 1.05;
+  }
+
+  .language-option-grid {
+    margin-top: 0.9rem !important;
+    gap: 0.55rem !important;
+  }
+
+  .language-option-card {
+    min-height: 4.95rem;
+    padding: 0.72rem 0.8rem !important;
+  }
+
+  .language-option-card .block.text-lg {
+    font-size: 1rem !important;
+    line-height: 1.15;
+  }
+
+  .language-option-card .block.text-sm {
+    margin-top: 0.12rem !important;
+    font-size: 0.78rem !important;
+    line-height: 1.2;
+  }
+
+  .language-option-card .rounded-full[aria-hidden="true"] {
+    padding: 0.22rem 0.42rem !important;
+    font-size: 1rem !important;
+  }
+
+  .language-option-cta {
+    margin-top: 0.55rem !important;
+    min-height: 1.75rem !important;
+    padding: 0.35rem 0.78rem !important;
+    font-size: 0.64rem !important;
+  }
+
+  .nutrition-targets-card {
+    padding: 0.95rem !important;
+  }
+
+  .nutrition-target-grid {
+    gap: 0.55rem;
+  }
+
+  .nutrition-target-card {
+    min-height: 4.05rem;
+    padding: 0.68rem !important;
+  }
+
+  .nutrition-target-card .text-lg {
+    font-size: 1rem !important;
+  }
+
+  .progress-stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .progress-stats-grid .summary-card {
+    min-height: 4rem;
+  }
+
+  .progress-photo-grid {
+    gap: 0.6rem;
+  }
+
+  .progress-photo-frame figcaption {
+    min-height: 3rem;
+    padding: 0.62rem;
   }
 }

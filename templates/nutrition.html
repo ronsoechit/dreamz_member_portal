@@ -10,7 +10,7 @@
       <div class="text-xs font-semibold uppercase tracking-wide text-green-200">{{ t('nutrition') }}</div>
       <h2 class="mt-1 text-2xl font-semibold text-white">{{ t('nutrition_plan') }}</h2>
       <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-200">
-        {{ t('todays_meal_plan') }} · {{ t('personalized_for_you') }}
+        {{ t('todays_meal_plan') }} &middot; {{ t('personalized_for_you') }}
       </p>
       {% if meal_plan and meal_plan.summary %}
         <p class="mt-3 max-w-4xl text-sm leading-6 text-green-50">{{ meal_plan.summary }}</p>
@@ -30,7 +30,7 @@
 
 <section id="nutrition-plan" class="scroll-mt-28 space-y-4">
   {% if meal_plan %}
-    {% if request.args.get('meal_log') %}
+    {% if request.args.get('meal_log') and not request.args.get('meal') %}
       <div class="rounded border {% if request.args.get('meal_log') == 'saved' %}border-green-500/40 bg-green-500/10 text-green-100{% else %}border-yellow-500/40 bg-yellow-500/10 text-yellow-100{% endif %} p-3 text-sm font-semibold">
         {{ t('meal_log_saved_inline') if request.args.get('meal_log') == 'saved' else t('meal_log_food_required') }}
       </div>
@@ -75,26 +75,26 @@
       </article>
     {% endif %}
 
-    <article class="dreamz-card">
+    <article class="dreamz-card nutrition-targets-card">
       <h3 class="font-semibold text-yellow-300">{{ t('daily_targets') }}</h3>
-      <div class="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <div class="rounded border border-gray-800 bg-gray-950/50 p-3">
+      <div class="nutrition-target-grid mt-3">
+        <div class="nutrition-target-card rounded border border-gray-800 bg-gray-950/50 p-3">
           <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('calories') }}</div>
           <div class="mt-1 text-lg font-semibold text-white">{{ meal_plan.targets.calories or t('not_available') }}</div>
         </div>
-        <div class="rounded border border-gray-800 bg-gray-950/50 p-3">
+        <div class="nutrition-target-card rounded border border-gray-800 bg-gray-950/50 p-3">
           <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('protein') }}</div>
           <div class="mt-1 text-lg font-semibold text-white">{{ meal_plan.targets.protein }}g</div>
         </div>
-        <div class="rounded border border-gray-800 bg-gray-950/50 p-3">
+        <div class="nutrition-target-card rounded border border-gray-800 bg-gray-950/50 p-3">
           <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('carbs') }}</div>
           <div class="mt-1 text-lg font-semibold text-white">{{ meal_plan.targets.carbs or t('not_available') }}{% if meal_plan.targets.carbs %}g{% endif %}</div>
         </div>
-        <div class="rounded border border-gray-800 bg-gray-950/50 p-3">
+        <div class="nutrition-target-card rounded border border-gray-800 bg-gray-950/50 p-3">
           <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('fat') }}</div>
           <div class="mt-1 text-lg font-semibold text-white">{{ meal_plan.targets.fat }}g</div>
         </div>
-        <div class="rounded border border-gray-800 bg-gray-950/50 p-3">
+        <div class="nutrition-target-card nutrition-target-card-wide rounded border border-gray-800 bg-gray-950/50 p-3">
           <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('hydration_guidance') }}</div>
           <div class="mt-1 text-lg font-semibold text-white">{{ meal_plan.targets.hydration_liters }}L</div>
         </div>
@@ -102,21 +102,27 @@
     </article>
 
     <section>
-      <div class="mb-3 flex items-center justify-between gap-3">
+      <div class="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('meal_plan_structure') }}</div>
           <h3 class="mt-1 text-xl font-semibold text-white">{{ t('todays_meal_plan') }}</h3>
         </div>
-        <form method="post" action="{{ url_for('regenerate_nutrition_plan') }}">
+        <form method="post" action="{{ url_for('regenerate_nutrition_plan') }}" class="w-full sm:w-auto">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="dreamz-button-primary">{{ t('regenerate_plan') }}</button>
+          <button type="submit" class="dreamz-button-primary w-full sm:w-auto">{{ t('regenerate_plan') }}</button>
         </form>
       </div>
       <div class="grid gap-4 lg:grid-cols-2">
         {% for meal in meal_plan.meals %}
-          <article id="meal-{{ loop.index }}" class="rounded-lg border {% if request.args.get('meal')|int == loop.index %}border-yellow-400 bg-yellow-500/10 ring-2 ring-yellow-400/40{% else %}border-green-500/20 bg-gray-900/60{% endif %} p-4">
+          {% set is_target_meal = request.args.get('meal')|string == loop.index|string %}
+          <article id="meal-{{ loop.index }}" class="meal-card rounded-lg border {% if is_target_meal %}border-yellow-400 bg-yellow-500/10 ring-2 ring-yellow-400/40{% else %}border-green-500/20 bg-gray-900/60{% endif %} p-4">
             <div class="text-xs font-semibold uppercase tracking-wide text-green-200">{{ meal.title }}</div>
             <h4 class="mt-1 text-lg font-semibold text-white">{{ meal.name }}</h4>
+            {% if is_target_meal and request.args.get('meal_log') %}
+              <div class="meal-log-inline mt-3 rounded border {% if request.args.get('meal_log') == 'saved' %}border-green-500/40 bg-green-500/10 text-green-100{% else %}border-yellow-500/40 bg-yellow-500/10 text-yellow-100{% endif %} px-3 py-2 text-xs font-semibold">
+                {% if request.args.get('meal_log') == 'saved' %}<span aria-hidden="true">&#10003;</span> {% endif %}{{ t('meal_logged') if request.args.get('meal_log') == 'saved' else t('meal_log_food_required') }}
+              </div>
+            {% endif %}
             <p class="mt-2 text-sm leading-6 text-gray-200">{{ meal.foods }}</p>
             <p class="mt-2 text-xs leading-5 text-gray-400">{{ meal.portions }}</p>
             <div class="mt-3 flex flex-wrap gap-2 text-xs font-semibold">

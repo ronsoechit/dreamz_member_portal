@@ -3,6 +3,9 @@
 {% block title %}{{ t('progress') }} | Dreamz Fitness{% endblock %}
 
 {% block content %}
+{% set progress_photo_entries = progress_entries|selectattr('photo_path')|list %}
+{% set first_progress_photo = progress_photo_entries|last if progress_photo_entries else none %}
+{% set latest_progress_photo = progress_photo_entries|first if progress_photo_entries else none %}
 <section class="progress-hero dreamz-card mb-5">
   <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
     <div>
@@ -10,11 +13,11 @@
       <h2 class="mt-1 text-2xl font-semibold">{{ t('progress_title') }}</h2>
       <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-300">{{ t('progress_intro') }}</p>
     </div>
-    {{ ui.button(t('add_progress'), url_for('member_coach', view='progress'), 'primary') }}
+    {{ ui.button(t('add_progress'), url_for('member_coach', view='progress') ~ '#coach-progress', 'primary') }}
   </div>
 </section>
 
-<section class="progress-summary-grid mb-5 grid gap-3 md:grid-cols-4">
+<section class="progress-summary-grid progress-stats-grid mb-5 grid gap-3 md:grid-cols-4">
   {% set weight_entry = progress_entries|selectattr('weight_kg')|list|first %}
   {% set latest_weight_value = weight_entry.weight_kg if weight_entry else (profile.weight_kg if profile else none) %}
   <article class="summary-card">
@@ -39,6 +42,40 @@
       <span class="mt-1 block text-xs text-gray-400">{{ t('profile_weight') }}</span>
     {% endif %}
   </article>
+</section>
+
+<section class="progress-photo-comparison dreamz-card mb-5">
+  <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+    <div>
+      <div class="text-xs font-semibold uppercase tracking-wide text-green-200">{{ t('progress_photo_comparison') }}</div>
+      <h3 class="mt-1 text-xl font-semibold text-white">{{ t('progress_before_after') }}</h3>
+    </div>
+    {{ ui.button(t('add_progress'), url_for('member_coach', view='progress') ~ '#coach-progress', 'secondary') }}
+  </div>
+  {% if progress_photo_entries %}
+    <div class="progress-photo-grid">
+      <figure class="progress-photo-frame">
+        <img src="{{ url_for('coach_progress_photo', entry_id=first_progress_photo.id) }}" alt="{{ t('progress_start_photo') }}">
+        <figcaption>
+          <span>{{ t('progress_start_photo') }}</span>
+          <strong>{{ first_progress_photo.created_at|format_date('%d/%m/%Y') }}</strong>
+        </figcaption>
+      </figure>
+      <figure class="progress-photo-frame">
+        <img src="{{ url_for('coach_progress_photo', entry_id=latest_progress_photo.id) }}" alt="{{ t('progress_latest_photo') }}">
+        <figcaption>
+          <span>{{ t('progress_latest_photo') }}</span>
+          <strong>{{ latest_progress_photo.created_at|format_date('%d/%m/%Y') }}</strong>
+        </figcaption>
+      </figure>
+    </div>
+  {% else %}
+    <div class="progress-photo-empty rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4">
+      <h4 class="font-semibold text-white">{{ t('progress_upload_start_photo') }}</h4>
+      <p class="mt-2 text-sm leading-6 text-yellow-50">{{ t('progress_upload_photo_body') }}</p>
+      {{ ui.button(t('add_progress'), url_for('member_coach', view='progress') ~ '#coach-progress', 'primary', 'mt-4') }}
+    </div>
+  {% endif %}
 </section>
 
 <section class="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">

@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f7b500">
   <title>{{ t('whatsapp_verify_title') }} | Dreamz Fitness</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <link href="{{ url_for('static', filename='css/premium.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='css/premium.css', v=static_asset_version('css/premium.css')) }}" rel="stylesheet">
 </head>
 <body class="auth-body bg-black text-white min-h-screen flex items-center justify-center">
   <div class="auth-card w-full max-w-md p-6 bg-gray-900 rounded-xl shadow-lg">

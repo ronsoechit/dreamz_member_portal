@@ -124,6 +124,9 @@ app.config["SESSION_COOKIE_SECURE"] = os.getenv("SESSION_COOKIE_SECURE", "").low
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=app.config["MEMBER_SESSION_DAYS"])
 app.config["LANGUAGE_COOKIE_NAME"] = "dreamz_language"
 app.config["LANGUAGE_COOKIE_DAYS"] = 365
+if os.getenv("FLASK_ENV") == "development" or os.getenv("FLASK_DEBUG") == "1":
+    app.config["TEMPLATES_AUTO_RELOAD"] = True
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 app.config["GYM_ASSISTANT_ATTACHMENTS_ROOT"] = os.getenv(
     "GYM_ASSISTANT_ATTACHMENTS_ROOT",
     r"D:\Dreamz Fitness\Gym Assistant 2.6\Data\Attachments",
@@ -5302,13 +5305,13 @@ Dreamz Fitness
 def current_member_or_redirect():
     member_id = session.get("member_id")
     if not member_id:
-        flash("Please log in first.")
+        flash(translated_text("please_log_in", current_language()))
         return None, redirect(url_for("login"))
 
     member = Member.query.filter_by(member_id=member_id).first()
     if not member:
         session.pop("member_id", None)
-        flash("Please log in first.")
+        flash(translated_text("please_log_in", current_language()))
         return None, redirect(url_for("login"))
 
     return member, None
@@ -8132,11 +8135,30 @@ def validate_request_csrf_token():
         abort(400, "Invalid CSRF token.")
 
 
+def static_asset_version(filename):
+    try:
+        path = Path(app.static_folder, filename).resolve()
+        static_root = Path(app.static_folder).resolve()
+        if not is_path_under_root(path, static_root):
+            return "1"
+        return str(int(path.stat().st_mtime))
+    except Exception:
+        return "1"
+
+
+def local_ui_build_marker():
+    if app.debug or os.getenv("FLASK_ENV") == "development" or os.getenv("FLASK_DEBUG") == "1":
+        return "phase-1.3"
+    return ""
+
+
 @app.context_processor
 def inject_csrf_token():
     member_id = session.get("member_id")
     return {
         "csrf_token": get_csrf_token,
+        "static_asset_version": static_asset_version,
+        "ui_build_marker": local_ui_build_marker(),
         "t": t,
         "current_language": current_language(),
         "available_languages": LANGUAGES,
@@ -8154,6 +8176,17 @@ def inject_csrf_token():
         "t_document_explanation": lambda document_type: translated_document_explanation(document_type, current_language()),
         "t_coach_focus": lambda value: translated_coach_focus_label(value, current_language()),
     }
+
+
+@app.after_request
+def add_local_debug_headers(response):
+    marker = local_ui_build_marker()
+    if marker:
+        response.headers["X-Dreamz-UI-Build"] = marker
+        response.headers["X-Dreamz-Project-Root"] = str(Path(__file__).resolve().parent)
+        response.headers["X-Dreamz-Template-Auto-Reload"] = str(bool(app.config.get("TEMPLATES_AUTO_RELOAD"))).lower()
+    return response
+
 
 @app.template_filter("format_date")
 def format_date(value, fmt=None):
@@ -8642,16 +8675,18 @@ def choose_language():
         next_url = url_for("login")
     if language_choice_from_request():
         return redirect(next_url)
+    language_order = ["en", "pap", "nl", "es"]
     language_cards = [
         {
             "code": code,
-            "label": label,
+            "label": LANGUAGES[code],
             "flag": LANGUAGE_FLAGS.get(code, ""),
             "title": translated_text("choose_language_title", code),
             "action": translated_text("continue_in_language", code),
-            "aria_label": translated_text("choose_language_card_aria", code, display_language=label),
+            "aria_label": translated_text("choose_language_card_aria", code, display_language=LANGUAGES[code]),
         }
-        for code, label in LANGUAGES.items()
+        for code in language_order
+        if code in LANGUAGES
     ]
     return render_template("language_select.html", next_url=next_url, language_cards=language_cards)
 
@@ -10697,7 +10732,7 @@ def dashboard():
 
     # --- eenvoudige login-check -----------------------------------
     if "member_id" not in session or session["member_id"] != member_id:
-        flash("Please log in first.")
+        flash(translated_text("please_log_in", current_language()))
         return redirect(url_for("login"))
 
     if not member_id:
@@ -10850,6 +10885,7 @@ def member_group_classes():
         preference = member_group_class_preference(member.member_id)
         rows = member_group_class_schedule_rows(member.member_id, selected_day=selected_day, selected_type=selected_type)
         favorite_ids = member_favorite_class_type_ids(member.member_id)
+        planned_rows = [row for row in rows if row.get("plan")]
     except Exception:
         db.session.rollback()
         app.logger.exception("Member group class page fell back to an empty schedule.")
@@ -10857,10 +10893,13 @@ def member_group_classes():
         preference = None
         rows = []
         favorite_ids = set()
+        planned_rows = []
     return render_template(
         "group_classes.html",
         member=member,
         rows=rows,
+        planned_rows=planned_rows,
+        has_group_class_setup=bool(preference or planned_rows),
         class_types=class_types,
         selected_day=selected_day,
         selected_type=selected_type,
@@ -10935,7 +10974,8 @@ def save_meal_log():
         log_type = "followed"
     if log_type == "different" and not food_items and not portion:
         flash(translated_text("meal_log_food_required", current_language()), "error")
-        return redirect(url_for("member_nutrition", meal_log="missing", meal=meal_key) + "#nutrition-plan")
+        meal_anchor = re.sub(r"[^A-Za-z0-9_-]", "", meal_key) or "meal"
+        return redirect(url_for("member_nutrition", meal_log="missing", meal=meal_key) + f"#meal-{meal_anchor}")
     db.session.add(MealLog(
         member_id=member.member_id,
         meal_key=meal_key,
@@ -10951,7 +10991,8 @@ def save_meal_log():
     ))
     db.session.commit()
     flash(translated_text("meal_log_saved", current_language()), "success")
-    return redirect(url_for("member_nutrition", meal_log="saved", meal=meal_key) + "#nutrition-plan")
+    meal_anchor = re.sub(r"[^A-Za-z0-9_-]", "", meal_key) or "meal"
+    return redirect(url_for("member_nutrition", meal_log="saved", meal=meal_key) + f"#meal-{meal_anchor}")
 
 
 @app.post("/nutrition/regenerate")

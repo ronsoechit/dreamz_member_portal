@@ -10,7 +10,7 @@
   <link rel="manifest" href="{{ url_for('web_manifest') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-180.png') }}">
   <script src="https://cdn.tailwindcss.com"></script>
-  <link href="{{ url_for('static', filename='css/premium.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='css/premium.css', v=static_asset_version('css/premium.css')) }}" rel="stylesheet">
 </head>
 <body class="auth-body bg-black text-white min-h-screen flex items-center justify-center">
   <div class="auth-card w-full max-w-md rounded-lg border border-gray-800 bg-gray-900 p-6 shadow-lg">
