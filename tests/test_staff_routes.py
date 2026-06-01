@@ -952,6 +952,43 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("0 -> 2 documents", body)
         self.assertNotIn("Old Member", body)
 
+    def test_staff_daily_changes_lists_suspicious_name_changes(self):
+        db.session.add(Member(member_id="34933", name="Wissenmansen, Dennis"))
+        db.session.add(SyncRun(
+            source="Z:\\Data\\Temp Files\\AddedMembers.btx",
+            status="success",
+            started_at=datetime(2026, 6, 1, 9, 31),
+            completed_at=datetime(2026, 6, 1, 9, 31),
+            change_summary=json.dumps({
+                "new_members": [],
+                "changed_members": [],
+                "document_changes": [],
+                "suspicious_name_changes": [
+                    {
+                        "member_id": "34933",
+                        "name": "Wissenmansen, Dennis",
+                        "source": "Z:\\Data\\Temp Files\\AddedMembers.btx",
+                        "raw_old": "Wissenmansen, Dennis",
+                        "raw_new": "A, Bn",
+                        "parsed_old": "Wissenmansen, Dennis",
+                        "parsed_new": "A, Bn",
+                        "reason": "Blocked suspicious abbreviation-like GymAssistant name change.",
+                    }
+                ],
+            }),
+        ))
+        db.session.commit()
+
+        response = self.client.get("/staff/changes?token=staff-test-token&date=2026-06-01")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Suspicious Name Changes", body)
+        self.assertIn("34933", body)
+        self.assertIn("Wissenmansen, Dennis", body)
+        self.assertIn("A, Bn", body)
+        self.assertIn("AddedMembers.btx", body)
+
     def test_staff_sync_status_distinguishes_cleaned_warnings_from_backup_stale(self):
         db.session.add(SyncRun(
             source="unit-test",

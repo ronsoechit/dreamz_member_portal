@@ -374,6 +374,60 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(summary["changed_members"][0]["changes"][0]["field"], "birthdate")
         self.assertIn("Ignored 1 blank GymAssistant value", SyncRun.query.one().error)
 
+    def test_sync_api_blocks_suspicious_name_change_over_existing_full_name(self):
+        db.session.add(Member(
+            member_id="34933",
+            name="Wissenmansen, Dennis",
+            email="denniswissenmansen@hotmail.com",
+            balance=0,
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            "/api/sync/members",
+            json={
+                "source": "Z:\\Data\\Temp Files\\AddedMembers.btx",
+                "members": [
+                    {
+                        "member_id": "34933",
+                        "name": "A, Bn",
+                        "email": "denniswissenmansen@hotmail.com",
+                        "balance": 5.0,
+                    }
+                ],
+            },
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        member = Member.query.filter_by(member_id="34933").one()
+        self.assertEqual(member.name, "Wissenmansen, Dennis")
+        self.assertEqual(member.balance, 5.0)
+        sync_run = SyncRun.query.one()
+        self.assertIn("Blocked 1 suspicious GymAssistant name change", sync_run.error)
+        summary = json.loads(sync_run.change_summary)
+        self.assertEqual(summary["suspicious_name_changes"][0]["member_id"], "34933")
+        self.assertEqual(summary["suspicious_name_changes"][0]["raw_new"], "A, Bn")
+        self.assertEqual(summary["suspicious_name_changes"][0]["parsed_old"], "Wissenmansen, Dennis")
+        self.assertEqual(summary["changed_members"][0]["changes"][0]["field"], "balance")
+        self.assertNotIn("name", [change["field"] for change in summary["changed_members"][0]["changes"]])
+
+    def test_sync_api_allows_correct_full_name_to_replace_suspicious_existing_name(self):
+        db.session.add(Member(member_id="34933", name="A, Bn"))
+        db.session.commit()
+
+        response = self.client.post(
+            "/api/sync/members",
+            json={"members": [{"member_id": "34933", "name": "Wissenmansen, Dennis"}]},
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Member.query.filter_by(member_id="34933").one().name, "Wissenmansen, Dennis")
+        summary = json.loads(SyncRun.query.one().change_summary)
+        self.assertEqual(summary["changed_members"][0]["changes"][0]["field"], "name")
+        self.assertEqual(summary["suspicious_name_changes"], [])
+
     def test_staff_daily_changes_hides_legacy_blank_contact_changes(self):
         db.session.add(Member(member_id="34878", name="Acosta, Rocila"))
         db.session.add(SyncRun(

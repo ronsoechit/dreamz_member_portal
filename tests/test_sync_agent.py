@@ -152,6 +152,52 @@ class SyncAgentTests(unittest.TestCase):
         self.assertIn("101", member_ids)
         self.assertIn("Data/Temp Files/Member Updates/EditMembers 2026-05-25.txt", [item.path for item in scan.files])
 
+    def test_added_members_file_does_not_overwrite_existing_backup_members(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            backup_dir = data_dir / "Backup"
+            backup_dir.mkdir(parents=True)
+            backup = backup_dir / "GABackup-test.gbu"
+            members_text = "\n".join([
+                "MN=34933",
+                "LN=Wissenmansen",
+                "FN=Dennis",
+                "MTN=1 WEEK PASS",
+                "EM=dennis@example.com",
+                "-",
+                "",
+            ])
+            with zipfile.ZipFile(backup, "w") as backup_file:
+                backup_file.writestr("Members.btx", members_text)
+            added_file = data_dir / "Temp Files" / "AddedMembers.btx"
+            added_file.parent.mkdir(parents=True, exist_ok=True)
+            added_file.write_text(
+                "\n".join([
+                    "MN=34933",
+                    "LN=A",
+                    "FN=Bn",
+                    "MTN=1 WEEK PASS",
+                    "-",
+                    "MN=34934",
+                    "LN=New",
+                    "FN=Member",
+                    "MTN=1 WEEK PASS",
+                    "-",
+                    "",
+                ]),
+                encoding="latin-1",
+            )
+            os.utime(backup, (1000, 1000))
+            os.utime(added_file, (2000, 2000))
+
+            payload = build_sync_payload(root)
+
+        by_id = {member["member_id"]: member for member in payload["members"]}
+        self.assertEqual(by_id["34933"]["name"], "Wissenmansen, Dennis")
+        self.assertEqual(by_id["34933"]["email"], "dennis@example.com")
+        self.assertEqual(by_id["34934"]["name"], "New, Member")
+
     def test_partial_live_member_log_preserves_existing_contact_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "Gym Assistant 2.6"

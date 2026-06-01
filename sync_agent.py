@@ -138,9 +138,12 @@ def parse_members_with_live_logs(member_source: Path) -> ImportResult:
         for log_file in iter_member_log_files(source_root, backup):
             log_result = parse_member_log(log_file)
             issues.extend(log_result.issues)
+            is_added_members_file = log_file.name.lower() in {"addedmembers.btx", "added members.txt"}
             for member in log_result.members:
                 member_id = str(member["member_id"])
                 if member_id in member_map:
+                    if is_added_members_file:
+                        continue
                     member_map[member_id].update(dict(member))
                 else:
                     member_map[member_id] = dict(member)

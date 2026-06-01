@@ -22,7 +22,7 @@
   </div>
 </div>
 
-<div class="mb-5 grid gap-3 md:grid-cols-4">
+<div class="mb-5 grid gap-3 md:grid-cols-5">
   <div class="staff-metric-card rounded border border-gray-700 bg-gray-800/40 p-3">
     <div class="text-sm text-gray-300">Sync Runs</div>
     <div class="mt-1 text-xl font-semibold text-yellow-400">{{ runs|length }}</div>
@@ -36,12 +36,16 @@
     <div class="mt-1 text-xl font-semibold text-yellow-400">{{ changed_members|length }}</div>
   </div>
   <div class="staff-metric-card rounded border border-gray-700 bg-gray-800/40 p-3">
+    <div class="text-sm text-gray-300">Suspicious Names</div>
+    <div class="mt-1 text-xl font-semibold text-red-300">{{ suspicious_name_changes|length }}</div>
+  </div>
+  <div class="staff-metric-card rounded border border-gray-700 bg-gray-800/40 p-3">
     <div class="text-sm text-gray-300">Document Updates</div>
     <div class="mt-1 text-xl font-semibold text-blue-300">{{ document_changes|length }}</div>
   </div>
 </div>
 
-{% if not new_members and not changed_members and not document_changes %}
+{% if not new_members and not changed_members and not suspicious_name_changes and not document_changes %}
   <div class="rounded border border-gray-700 bg-gray-800/40 p-6 text-gray-300">
     No tracked GymAssistant changes were received for this date.
   </div>
@@ -98,6 +102,51 @@
                 <td class="max-w-sm p-2 text-white">{{ change.new if change.new is not none and change.new != '' else 'empty' }}</td>
               </tr>
             {% endfor %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endif %}
+
+{% if suspicious_name_changes %}
+  <section class="mb-5 rounded border border-red-500/30 bg-red-500/10 p-4">
+    <div class="mb-4 flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+      <div>
+        <h3 class="text-xl font-semibold text-red-200">Suspicious Name Changes</h3>
+        <p class="text-sm text-red-100/80">These name updates were blocked and the previous canonical member name was kept.</p>
+      </div>
+      <span class="rounded bg-red-500/20 px-3 py-1 text-sm font-semibold text-red-100">{{ suspicious_name_changes|length }}</span>
+    </div>
+    <div class="overflow-x-auto rounded border border-red-500/20">
+      <table class="min-w-full text-sm">
+        <thead class="bg-red-950/40 text-red-100">
+          <tr>
+            <th class="p-2 text-left">Time</th>
+            <th class="p-2 text-left">Member ID</th>
+            <th class="p-2 text-left">Source</th>
+            <th class="p-2 text-left">Raw old</th>
+            <th class="p-2 text-left">Raw new</th>
+            <th class="p-2 text-left">Parsed old</th>
+            <th class="p-2 text-left">Parsed new</th>
+            <th class="p-2 text-left">Reason</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-red-500/20">
+          {% for item in suspicious_name_changes %}
+            <tr class="align-top">
+              <td class="whitespace-nowrap p-2 text-xs text-red-100/70">{{ item.run_time }}</td>
+              <td class="p-2">
+                <a class="font-semibold text-red-100 underline" href="{{ url_for('staff_member_detail', member_id=item.member_id) }}">#{{ item.member_id }}</a>
+                <span class="block text-xs text-red-100/60">{{ item.name or 'Unknown' }}</span>
+              </td>
+              <td class="max-w-xs break-words p-2 text-xs text-red-100/80">{{ item.source or 'N/A' }}</td>
+              <td class="max-w-xs p-2 text-red-100/80">{{ item.raw_old or 'empty' }}</td>
+              <td class="max-w-xs p-2 font-semibold text-white">{{ item.raw_new or 'empty' }}</td>
+              <td class="max-w-xs p-2 text-red-100/80">{{ item.parsed_old or 'empty' }}</td>
+              <td class="max-w-xs p-2 font-semibold text-white">{{ item.parsed_new or 'empty' }}</td>
+              <td class="max-w-xs p-2 text-xs text-red-100/70">{{ item.reason or 'Suspicious abbreviation-like name.' }}</td>
+            </tr>
           {% endfor %}
         </tbody>
       </table>

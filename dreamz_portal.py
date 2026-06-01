@@ -4592,6 +4592,62 @@ def remove_blank_sync_fields(existing, member_data):
     return ignored_fields
 
 
+def name_letter_parts(value):
+    text = str(value or "").strip()
+    if not text:
+        return []
+    raw_parts = text.split(",", 1) if "," in text else text.split()
+    return [
+        "".join(character for character in part if character.isalpha())
+        for part in raw_parts
+        if part.strip()
+    ]
+
+
+def normal_person_name(value):
+    parts = [part for part in name_letter_parts(value) if part]
+    if len(parts) < 2:
+        return False
+    return sum(1 for part in parts if len(part) >= 3) >= 2
+
+
+def suspicious_sync_name_change(existing_name, new_name):
+    if not has_meaningful_sync_value(existing_name) or not has_meaningful_sync_value(new_name):
+        return False
+    if not normal_person_name(existing_name):
+        return False
+    if str(existing_name).strip() == str(new_name).strip():
+        return False
+
+    parts = [part for part in name_letter_parts(new_name) if part]
+    if len(parts) < 2:
+        return sum(len(part) for part in parts) <= 5
+
+    total_letters = sum(len(part) for part in parts)
+    shortest = min(len(part) for part in parts)
+    if shortest <= 1 and total_letters <= 12:
+        return True
+    if shortest <= 2 and total_letters <= 8:
+        return True
+    return False
+
+
+def suspicious_name_change_summary(existing, raw_member, member_data, source):
+    return {
+        "member_id": str(existing.member_id),
+        "name": existing.name or "",
+        "email": existing.email or "",
+        "plan_type": member_data.get("plan_type") or existing.plan_type or "",
+        "source": source or "",
+        "field": "name",
+        "raw_old": existing.name or "",
+        "raw_new": (raw_member or {}).get("name") or "",
+        "parsed_old": change_value(existing.name) or "",
+        "parsed_new": change_value(member_data.get("name")) or "",
+        "reason": "Blocked suspicious abbreviation-like GymAssistant name change.",
+    }
+
+
 def parse_sync_date(value):
     if not value:
         return None
@@ -4742,11 +4798,16 @@ def existing_document_signatures(member_id):
 
 def sync_change_summary_for_template(sync_run):
     if not sync_run.change_summary:
-        return {"new_members": [], "changed_members": [], "document_changes": []}
+        return {"new_members": [], "changed_members": [], "document_changes": [], "suspicious_name_changes": []}
     try:
-        return json.loads(sync_run.change_summary)
+        summary = json.loads(sync_run.change_summary)
+        summary.setdefault("new_members", [])
+        summary.setdefault("changed_members", [])
+        summary.setdefault("document_changes", [])
+        summary.setdefault("suspicious_name_changes", [])
+        return summary
     except (TypeError, json.JSONDecodeError):
-        return {"new_members": [], "changed_members": [], "document_changes": []}
+        return {"new_members": [], "changed_members": [], "document_changes": [], "suspicious_name_changes": []}
 
 
 def sync_runs_for_local_date(selected_date):
@@ -4762,6 +4823,7 @@ def daily_sync_changes(selected_date):
     new_members = {}
     changed_members = {}
     document_changes = {}
+    suspicious_name_changes = []
 
     for run in runs:
         summary = sync_change_summary_for_template(run)
@@ -4803,11 +4865,18 @@ def daily_sync_changes(selected_date):
             if item.get("documents"):
                 entry["documents"] = item.get("documents")
 
+        for item in summary.get("suspicious_name_changes", []):
+            member_id = str(item.get("member_id") or "")
+            if not member_id:
+                continue
+            suspicious_name_changes.append({**item, "run_time": run_time})
+
     return {
         "runs": runs,
         "new_members": sorted(new_members.values(), key=lambda item: item.get("name") or item.get("member_id") or ""),
         "changed_members": sorted(changed_members.values(), key=lambda item: item.get("name") or item.get("member_id") or ""),
         "document_changes": sorted(document_changes.values(), key=lambda item: item.get("name") or item.get("member_id") or ""),
+        "suspicious_name_changes": sorted(suspicious_name_changes, key=lambda item: (item.get("run_time") or "", item.get("name") or item.get("member_id") or "")),
     }
 
 
@@ -4888,9 +4957,11 @@ def apply_sync_payload(payload):
         "new_members": [],
         "changed_members": [],
         "document_changes": [],
+        "suspicious_name_changes": [],
     }
     ignored_invalid_fields = {}
     ignored_blank_fields = {}
+    suspicious_name_changes = {}
     try:
         for raw_member in members:
             invalid_fields = sync_invalid_field_names(raw_member)
@@ -4902,6 +4973,18 @@ def apply_sync_payload(payload):
                 blank_fields = remove_blank_sync_fields(existing, member_data)
                 if blank_fields:
                     ignored_blank_fields[member_data["member_id"]] = blank_fields
+                if (
+                    "name" in member_data
+                    and suspicious_sync_name_change(existing.name, member_data.get("name"))
+                ):
+                    suspicious_name_changes[member_data["member_id"]] = member_data.get("name")
+                    change_summary["suspicious_name_changes"].append(suspicious_name_change_summary(
+                        existing,
+                        raw_member,
+                        member_data,
+                        source,
+                    ))
+                    member_data.pop("name", None)
                 changes = member_field_changes(existing, member_data)
                 if changes:
                     updated += 1
@@ -4931,7 +5014,7 @@ def apply_sync_payload(payload):
                 if before_documents != after_documents:
                     change_summary["document_changes"].append({
                         "member_id": member_data["member_id"],
-                        "name": member_data.get("name") or "",
+                        "name": member_data.get("name") or (existing.name if existing else ""),
                         "old_count": len(before_documents),
                         "new_count": len(after_documents),
                         "documents": after_documents,
@@ -4963,6 +5046,12 @@ def apply_sync_payload(payload):
             warning_text = (
                 f"Ignored {ignored_count} blank GymAssistant value(s) over existing member data "
                 f"for {len(ignored_blank_fields)} member(s). Create a fresh GymAssistant backup if this keeps happening."
+            )
+            sync_run.error = f"{sync_run.error}\n{warning_text}" if sync_run.error else warning_text
+        if suspicious_name_changes:
+            warning_text = (
+                f"Blocked {len(suspicious_name_changes)} suspicious GymAssistant name change(s). "
+                "Review Staff > Changes before updating canonical names."
             )
             sync_run.error = f"{sync_run.error}\n{warning_text}" if sync_run.error else warning_text
         sync_run.change_summary = json.dumps(change_summary)
@@ -9734,7 +9823,7 @@ def staff_daily_changes():
     except SQLAlchemyError:
         db.session.rollback()
         app.logger.exception("Daily sync change data unavailable while rendering staff changes.")
-        changes = {"runs": [], "new_members": [], "changed_members": [], "document_changes": []}
+        changes = {"runs": [], "new_members": [], "changed_members": [], "document_changes": [], "suspicious_name_changes": []}
         staff_warning = staff_warning or staff_data_warning("staff_changes_nav")
     return render_template(
         "staff_daily_changes.html",
@@ -9746,6 +9835,7 @@ def staff_daily_changes():
         new_members=changes["new_members"],
         changed_members=changes["changed_members"],
         document_changes=changes["document_changes"],
+        suspicious_name_changes=changes.get("suspicious_name_changes", []),
         staff_page_warning=staff_warning,
     )
 
