@@ -43,7 +43,7 @@
       icon: input.icon || preset.icon || (level === "major" ? "trophy" : "target"),
       title: input.title || preset.title || "Dreamz achievement",
       message: input.message || preset.message || "",
-      duration: Number(input.duration || (level === "major" ? 4200 : 3400)),
+      duration: Number(input.duration || (level === "major" ? 4400 : 3600)),
     };
   };
 

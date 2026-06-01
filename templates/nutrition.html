@@ -115,6 +115,7 @@
       <div class="grid gap-4 lg:grid-cols-2">
         {% for meal in meal_plan.meals %}
           {% set is_target_meal = request.args.get('meal')|string == loop.index|string %}
+          {% set meal_saved_for_this_card = is_target_meal and request.args.get('meal_log') == 'saved' %}
           <article id="meal-{{ loop.index }}" class="meal-card rounded-lg border {% if is_target_meal %}border-yellow-400 bg-yellow-500/10 ring-2 ring-yellow-400/40{% else %}border-green-500/20 bg-gray-900/60{% endif %} p-4">
             <div class="text-xs font-semibold uppercase tracking-wide text-green-200">{{ meal.title }}</div>
             <h4 class="mt-1 text-lg font-semibold text-white">{{ meal.name }}</h4>
@@ -138,7 +139,14 @@
                 <input type="hidden" name="log_type" value="followed">
                 <input type="hidden" name="meal_key" value="{{ loop.index }}">
                 <input type="hidden" name="meal_title" value="{{ meal.title }}">
-                <button type="submit" data-loading-text="{{ t('saving') }}" class="dreamz-button-secondary w-full text-xs">{{ t('i_followed_this_meal') }}</button>
+                {% if meal_saved_for_this_card %}
+                  <button type="button" disabled aria-disabled="true" class="dreamz-button-logged w-full text-xs">
+                    <span aria-hidden="true">&#10003;</span>
+                    {{ t('meal_logged_button') }}
+                  </button>
+                {% else %}
+                  <button type="submit" data-loading-text="{{ t('saving') }}" class="dreamz-button-secondary w-full text-xs">{{ t('i_followed_this_meal') }}</button>
+                {% endif %}
               </form>
               <details class="rounded border border-gray-700 bg-gray-950/60 p-3">
                 <summary class="cursor-pointer text-xs font-semibold text-yellow-200">{{ t('i_ate_something_different') }}</summary>

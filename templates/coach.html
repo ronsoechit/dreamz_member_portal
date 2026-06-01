@@ -1407,6 +1407,8 @@
         });
         const saveSession = async () => {
           if (!saveUrl) return;
+          if (panel.dataset.sessionSaveState === "saving" || panel.dataset.sessionSaveState === "saved") return;
+          panel.dataset.sessionSaveState = "saving";
           if (saveStatus) saveStatus.textContent = "{{ t('coach_workout_saving') }}";
           try {
             const response = await fetch(saveUrl, {
@@ -1433,8 +1435,10 @@
               startButton.textContent = "{{ t('coach_session_already_done') }}";
               startButton.className = "mt-4 w-full cursor-not-allowed rounded bg-green-500/20 px-4 py-3 text-sm font-semibold text-green-100 transition sm:w-auto";
             }
+            panel.dataset.sessionSaveState = "saved";
             window.showDreamzAchievement?.({ type: "workout_completed" });
           } catch (error) {
+            panel.dataset.sessionSaveState = "";
             if (saveStatus) saveStatus.textContent = error.message || "{{ t('coach_workout_save_error') }}";
           }
         };

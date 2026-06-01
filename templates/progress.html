@@ -4,6 +4,7 @@
 
 {% block content %}
 {% set progress_photo_entries = progress_entries|selectattr('photo_path')|list %}
+{% set progress_photo_count = progress_photo_entries|length %}
 {% set first_progress_photo = progress_photo_entries|last if progress_photo_entries else none %}
 {% set latest_progress_photo = progress_photo_entries|first if progress_photo_entries else none %}
 <section class="progress-hero dreamz-card mb-5">
@@ -48,11 +49,13 @@
   <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
     <div>
       <div class="text-xs font-semibold uppercase tracking-wide text-green-200">{{ t('progress_photo_comparison') }}</div>
-      <h3 class="mt-1 text-xl font-semibold text-white">{{ t('progress_before_after') }}</h3>
+      <h3 class="mt-1 text-xl font-semibold text-white">
+        {% if progress_photo_count == 1 %}{{ t('progress_start_photo_added') }}{% else %}{{ t('progress_before_after') }}{% endif %}
+      </h3>
     </div>
-    {{ ui.button(t('add_progress'), url_for('member_coach', view='progress') ~ '#coach-progress', 'secondary') }}
+    {{ ui.button(t('progress_add_next_photo') if progress_photo_count == 1 else t('add_progress'), url_for('member_coach', view='progress') ~ '#coach-progress', 'secondary') }}
   </div>
-  {% if progress_photo_entries %}
+  {% if progress_photo_count >= 2 %}
     <div class="progress-photo-grid">
       <figure class="progress-photo-frame">
         <img src="{{ url_for('coach_progress_photo', entry_id=first_progress_photo.id) }}" alt="{{ t('progress_start_photo') }}">
@@ -68,6 +71,21 @@
           <strong>{{ latest_progress_photo.created_at|format_date('%d/%m/%Y') }}</strong>
         </figcaption>
       </figure>
+    </div>
+  {% elif progress_photo_count == 1 %}
+    <div class="progress-photo-single">
+      <figure class="progress-photo-frame progress-photo-frame-single">
+        <img src="{{ url_for('coach_progress_photo', entry_id=latest_progress_photo.id) }}" alt="{{ t('progress_start_photo') }}">
+        <figcaption>
+          <span>{{ t('progress_start_photo') }}</span>
+          <strong>{{ latest_progress_photo.created_at|format_date('%d/%m/%Y') }}</strong>
+        </figcaption>
+      </figure>
+      <div class="progress-photo-single-copy">
+        <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('achievement_progress_start_photo_title') }}</div>
+        <p class="mt-2 text-sm leading-6 text-yellow-50">{{ t('progress_start_photo_added_body') }}</p>
+        {{ ui.button(t('progress_add_next_photo'), url_for('member_coach', view='progress') ~ '#coach-progress', 'primary', 'mt-4') }}
+      </div>
     </div>
   {% else %}
     <div class="progress-photo-empty rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4">
