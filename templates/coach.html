@@ -1118,7 +1118,7 @@
 
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const centerHorizontally = (element) => {
-      const scroller = element?.parentElement;
+      const scroller = element?.closest?.("[data-coach-week-strip], [role='tablist'], .overflow-x-auto") || element?.parentElement;
       if (!element || !scroller || scroller.scrollWidth <= scroller.clientWidth) return;
       const left = element.offsetLeft - ((scroller.clientWidth - element.offsetWidth) / 2);
       scroller.scrollTo({
@@ -1433,6 +1433,7 @@
               startButton.textContent = "{{ t('coach_session_already_done') }}";
               startButton.className = "mt-4 w-full cursor-not-allowed rounded bg-green-500/20 px-4 py-3 text-sm font-semibold text-green-100 transition sm:w-auto";
             }
+            window.showDreamzAchievement?.({ type: "workout_completed" });
           } catch (error) {
             if (saveStatus) saveStatus.textContent = error.message || "{{ t('coach_workout_save_error') }}";
           }
@@ -1537,4 +1538,18 @@
     });
   })();
 </script>
+{% if request.args.get('achievement') in ['progress_saved', 'progress_photo_uploaded'] %}
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      window.showDreamzAchievement?.({
+        type: {{ request.args.get('achievement')|tojson }},
+        {% if request.args.get('achievement') == 'progress_photo_uploaded' and request.args.get('first_photo') == '1' %}
+          title: {{ t('achievement_progress_start_photo_title')|tojson }},
+          message: {{ t('achievement_progress_start_photo_message')|tojson }},
+          icon: "camera",
+        {% endif %}
+      });
+    });
+  </script>
+{% endif %}
 {% endblock %}

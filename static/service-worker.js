@@ -1,7 +1,9 @@
-const CACHE_NAME = "dreamz-member-portal-phase-1-4-v1";
+const CACHE_NAME = "dreamz-member-portal-phase-2-v1";
 const STATIC_ASSETS = [
   "/static/logo.jpg",
   "/static/css/premium.css",
+  "/static/js/achievements.js",
+  "/static/js/pwa-install.js",
   "/static/icons/icon-192.png",
   "/static/icons/icon-512.png",
   "/static/icons/icon-maskable-512.png",

@@ -170,4 +170,11 @@
 {% if has_group_class_setup %}
   {{ class_preferences_panel(true) }}
 {% endif %}
+{% if request.args.get('achievement') == 'class_added' %}
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      window.showDreamzAchievement?.({ type: "class_added" });
+    });
+  </script>
+{% endif %}
 {% endblock %}

@@ -214,4 +214,11 @@
     </article>
   {% endif %}
 </section>
+{% if request.args.get('meal_log') == 'saved' %}
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      window.showDreamzAchievement?.({ type: "meal_logged" });
+    });
+  </script>
+{% endif %}
 {% endblock %}

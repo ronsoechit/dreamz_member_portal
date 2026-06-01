@@ -521,6 +521,71 @@
       })();
     </script>
   {% endif %}
+  <script>
+    window.DREAMZ_ACHIEVEMENT_TEXTS = {
+      meal_logged: {
+        title: {{ t('achievement_meal_logged_title')|tojson }},
+        message: {{ t('achievement_meal_logged_message')|tojson }},
+        icon: "meal",
+        level: "standard"
+      },
+      workout_completed: {
+        title: {{ t('achievement_workout_completed_title')|tojson }},
+        message: {{ t('achievement_workout_completed_message')|tojson }},
+        icon: "dumbbell",
+        level: "standard"
+      },
+      progress_saved: {
+        title: {{ t('achievement_progress_saved_title')|tojson }},
+        message: {{ t('achievement_progress_saved_message')|tojson }},
+        icon: "progress",
+        level: "standard"
+      },
+      progress_photo_uploaded: {
+        title: {{ t('achievement_progress_photo_uploaded_title')|tojson }},
+        message: {{ t('achievement_progress_photo_uploaded_message')|tojson }},
+        icon: "camera",
+        level: "standard"
+      },
+      class_added: {
+        title: {{ t('achievement_class_added_title')|tojson }},
+        message: {{ t('achievement_class_added_message')|tojson }},
+        icon: "calendar",
+        level: "standard"
+      },
+      personal_record: {
+        title: {{ t('achievement_personal_record_title')|tojson }},
+        message: {{ t('achievement_personal_record_message')|tojson }},
+        icon: "trophy",
+        level: "major"
+      },
+      streak_reached: {
+        title: {{ t('achievement_streak_reached_title')|tojson }},
+        message: {{ t('achievement_streak_reached_message')|tojson }},
+        icon: "streak",
+        level: "major"
+      },
+      goal_reached: {
+        title: {{ t('achievement_goal_reached_title')|tojson }},
+        message: {{ t('achievement_goal_reached_message')|tojson }},
+        icon: "target",
+        level: "major"
+      },
+      challenge_completed: {
+        title: {{ t('achievement_challenge_completed_title')|tojson }},
+        message: {{ t('achievement_challenge_completed_message')|tojson }},
+        icon: "trophy",
+        level: "major"
+      },
+      equipment_viewed: {
+        title: {{ t('achievement_equipment_viewed_title')|tojson }},
+        message: {{ t('achievement_equipment_viewed_message')|tojson }},
+        icon: "target",
+        level: "standard"
+      }
+    };
+  </script>
+  <script src="{{ url_for('static', filename='js/achievements.js', v=static_asset_version('js/achievements.js')) }}" defer></script>
   <script src="{{ url_for('static', filename='js/pwa-install.js') }}" defer></script>
 </body>
 </html>

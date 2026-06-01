@@ -878,13 +878,14 @@ class PortalRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/nutrition?meal_log=saved&meal=1#nutrition-plan", response.headers["Location"])
+        self.assertIn("/nutrition?meal_log=saved&meal=1#meal-1", response.headers["Location"])
         self.assertEqual(MealLog.query.filter_by(member_id="13659").count(), 1)
 
         follow_response = self.client.get(response.headers["Location"].split("#", 1)[0])
         self.assertEqual(follow_response.status_code, 200)
         body = follow_response.get_data(as_text=True)
-        self.assertIn("Meal saved. Your recent meal logs have been updated.", body)
+        self.assertIn("Meal logged", body)
+        self.assertIn('window.showDreamzAchievement?.({ type: "meal_logged" });', body)
         self.assertIn("eggs and oats", body)
 
     def test_member_cannot_save_empty_different_meal_log(self):

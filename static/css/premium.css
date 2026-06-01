@@ -979,6 +979,188 @@ tbody tr:hover {
   animation: dreamz-card-in var(--dreamz-motion-slow) var(--dreamz-ease-out) both;
 }
 
+.dreamz-achievement-layer {
+  position: fixed;
+  left: 1rem;
+  right: 1rem;
+  bottom: calc(5.75rem + env(safe-area-inset-bottom));
+  z-index: 88;
+  display: grid;
+  justify-items: end;
+  gap: 0.65rem;
+  pointer-events: none;
+}
+
+.dreamz-achievement-toast {
+  position: relative;
+  width: min(100%, 24rem);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.75rem;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(250, 204, 21, 0.34);
+  border-radius: var(--dreamz-radius-md);
+  background:
+    linear-gradient(135deg, rgba(15, 23, 42, 0.96), rgba(3, 7, 18, 0.94)),
+    radial-gradient(circle at top left, rgba(250, 204, 21, 0.22), transparent 48%);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.44), 0 0 28px rgba(245, 158, 11, 0.12);
+  padding: 0.82rem 0.95rem;
+  opacity: 0;
+  transform: translateY(0.8rem) scale(0.97);
+  transition:
+    opacity var(--dreamz-motion-base) var(--dreamz-ease-out),
+    transform var(--dreamz-motion-base) var(--dreamz-ease-out);
+  animation: dreamz-achievement-pulse 760ms var(--dreamz-ease-out) 120ms both;
+}
+
+.dreamz-achievement-toast::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(250, 204, 21, 0.26), transparent 42%);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.dreamz-achievement-toast.is-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.dreamz-achievement-toast.is-leaving {
+  opacity: 0;
+  transform: translateY(-0.45rem) scale(0.98);
+}
+
+.dreamz-achievement-icon,
+.dreamz-floating-reward {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #facc15;
+}
+
+.dreamz-achievement-icon {
+  position: relative;
+  z-index: 1;
+  width: 2.35rem;
+  height: 2.35rem;
+  border: 1px solid rgba(250, 204, 21, 0.42);
+  border-radius: 999px;
+  background: rgba(250, 204, 21, 0.11);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 0 24px rgba(250, 204, 21, 0.12);
+}
+
+.dreamz-achievement-icon svg,
+.dreamz-floating-reward svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.dreamz-achievement-title,
+.dreamz-achievement-message {
+  position: relative;
+  z-index: 1;
+}
+
+.dreamz-achievement-title {
+  color: #fff7d6;
+  font-size: 0.92rem;
+  font-weight: 850;
+  line-height: 1.2;
+}
+
+.dreamz-achievement-message {
+  margin-top: 0.18rem;
+  color: rgba(229, 231, 235, 0.86);
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.dreamz-achievement-major {
+  border-color: rgba(250, 204, 21, 0.62);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.50), 0 0 44px rgba(245, 158, 11, 0.20);
+}
+
+.dreamz-floating-reward {
+  position: fixed;
+  right: 1.45rem;
+  bottom: calc(8.3rem + env(safe-area-inset-bottom));
+  z-index: 87;
+  width: 2.35rem;
+  height: 2.35rem;
+  border-radius: 999px;
+  border: 1px solid rgba(250, 204, 21, 0.38);
+  background: rgba(3, 7, 18, 0.82);
+  box-shadow: 0 0 26px rgba(245, 158, 11, 0.22);
+  pointer-events: none;
+  animation: dreamz-floating-reward 1250ms var(--dreamz-ease-out) forwards;
+}
+
+.dreamz-achievement-particles {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.dreamz-achievement-particles span {
+  position: absolute;
+  left: calc(16% + (var(--particle-index) * 7%));
+  top: 0.8rem;
+  width: 0.22rem;
+  height: 0.22rem;
+  border-radius: 999px;
+  background: rgba(250, 204, 21, 0.86);
+  box-shadow: 0 0 14px rgba(250, 204, 21, 0.45);
+  animation: dreamz-achievement-particle 1050ms var(--dreamz-ease-out) forwards;
+  animation-delay: calc(var(--particle-index) * 42ms);
+}
+
+@keyframes dreamz-achievement-pulse {
+  0% { transform: translateY(0.8rem) scale(0.97); }
+  52% { transform: translateY(-0.08rem) scale(1.018); }
+  100% { transform: translateY(0) scale(1); }
+}
+
+@keyframes dreamz-floating-reward {
+  0% {
+    opacity: 0;
+    transform: translateY(1rem) scale(0.84);
+  }
+  20% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-2.9rem) scale(0.92);
+  }
+}
+
+@keyframes dreamz-achievement-particle {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) scale(0.7);
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(calc((var(--particle-index) - 4) * 0.18rem), 2.4rem, 0) scale(1);
+  }
+}
+
 .progress-stats-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }

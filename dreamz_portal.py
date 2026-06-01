@@ -55,6 +55,7 @@ import csv
 import secrets
 from types import SimpleNamespace
 from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 from io import StringIO
 from pathlib import Path
@@ -74,6 +75,17 @@ def normalize_database_uri(database_uri, default_database_path):
 
     absolute_path = os.path.abspath(sqlite_path).replace("\\", "/")
     return f"sqlite:///{absolute_path}"
+
+
+def url_with_query(url, **params):
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    for key, value in params.items():
+        if value is None:
+            query.pop(key, None)
+        else:
+            query[key] = str(value)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
 app = Flask(__name__)
@@ -11095,7 +11107,7 @@ def member_group_class_plan_add():
         coach_message = record_group_class_plan_change(member, "group_class_plan_refreshed_added", occurrence, class_date)
     db.session.commit()
     flash(coach_message or translated_text("group_class_added_to_plan", current_language()), "success")
-    return redirect(request.referrer or url_for("member_group_classes"))
+    return redirect(url_with_query(request.referrer or url_for("member_group_classes"), achievement="class_added"))
 
 
 @app.post("/group-classes/plan/<int:plan_id>/remove")
@@ -11311,6 +11323,12 @@ def save_coach_progress():
         flash(translated_text("coach_progress_need_input", current_language()), "error")
         return redirect(url_for("member_coach", view="progress"))
 
+    has_existing_photo = False
+    if has_photo:
+        has_existing_photo = CoachProgressEntry.query.filter_by(member_id=member.member_id).filter(
+            CoachProgressEntry.photo_path.isnot(None)
+        ).first() is not None
+
     photo_mimetype = photo.mimetype if has_photo else None
     photo_path = save_coach_progress_photo(member.member_id, photo) if has_photo else None
     progress = CoachProgressEntry(
@@ -11345,7 +11363,14 @@ def save_coach_progress():
     CoachPlan.query.filter_by(member_id=member.member_id).delete()
     db.session.commit()
     flash(translated_text("coach_progress_saved", current_language()))
-    return redirect(url_for("member_coach", view="progress"))
+    if photo_path:
+        return redirect(url_for(
+            "member_coach",
+            view="progress",
+            achievement="progress_photo_uploaded",
+            first_photo="0" if has_existing_photo else "1",
+        ))
+    return redirect(url_for("member_coach", view="progress", achievement="progress_saved"))
 
 
 @app.route("/coach/workout-log", methods=["POST"])
