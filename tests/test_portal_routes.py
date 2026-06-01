@@ -878,15 +878,43 @@ class PortalRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/nutrition?meal_log=saved&meal=1#meal-1", response.headers["Location"])
+        self.assertIn("/nutrition?meal_log=saved&meal=1&milestones=first_meal_logged#meal-1", response.headers["Location"])
         self.assertEqual(MealLog.query.filter_by(member_id="13659").count(), 1)
+        self.assertEqual(
+            CoachInteraction.query.filter_by(
+                member_id="13659",
+                category="milestone_unlock",
+                message="first_meal_logged",
+            ).count(),
+            1,
+        )
 
         follow_response = self.client.get(response.headers["Location"].split("#", 1)[0])
         self.assertEqual(follow_response.status_code, 200)
         body = follow_response.get_data(as_text=True)
         self.assertIn("Meal logged", body)
+        self.assertIn("First Meal Logged", body)
         self.assertIn('window.showDreamzAchievement?.({ type: "meal_logged" });', body)
         self.assertIn("eggs and oats", body)
+
+        duplicate_response = self.client.post(
+            "/nutrition/meal-log",
+            data=self.csrf_form_data(
+                log_type="followed",
+                meal_key="2",
+                meal_title="Lunch",
+            ),
+        )
+        self.assertEqual(duplicate_response.status_code, 302)
+        self.assertNotIn("milestones=first_meal_logged", duplicate_response.headers["Location"])
+        self.assertEqual(
+            CoachInteraction.query.filter_by(
+                member_id="13659",
+                category="milestone_unlock",
+                message="first_meal_logged",
+            ).count(),
+            1,
+        )
 
     def test_member_cannot_save_empty_different_meal_log(self):
         self.add_member(
@@ -924,7 +952,7 @@ class PortalRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/nutrition?meal_log=missing&meal=1#nutrition-plan", response.headers["Location"])
+        self.assertIn("/nutrition?meal_log=missing&meal=1#meal-1", response.headers["Location"])
         self.assertEqual(MealLog.query.filter_by(member_id="13659").count(), 0)
 
         follow_response = self.client.get(response.headers["Location"].split("#", 1)[0])
@@ -2231,7 +2259,10 @@ class PortalRouteTests(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("account-notification-badge", body)
         self.assertIn("account-nav-label", body)
-        self.assertIn("position:absolute;right:-0.28rem;top:-0.28rem", body)
+        premium_css = Path("static/css/premium.css").read_text(encoding="utf-8")
+        self.assertIn(".account-notification-badge", premium_css)
+        self.assertIn("right: -0.28rem;", premium_css)
+        self.assertIn("top: -0.28rem;", premium_css)
         self.assertIn('aria-label="Account, 1 account notification"', body)
         self.assertIn('href="/account"', body)
         self.assertRegex(body, r'aria-hidden="true"[^>]*>\s*1</span>')

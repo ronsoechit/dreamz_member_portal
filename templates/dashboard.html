@@ -125,6 +125,26 @@
     </div>
   </section>
 
+  {% if milestone_preview %}
+    <section class="dreamz-card-soft mb-4">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('milestones_dashboard_title') }}</div>
+          <p class="mt-1 text-sm leading-6 text-gray-300">{{ t('milestones_dashboard_intro') }}</p>
+        </div>
+        {{ ui.button(t('view_milestones'), url_for('member_progress') ~ '#milestones', 'secondary') }}
+      </div>
+      <div class="dreamz-dashboard-milestones mt-3">
+        {% for badge in milestone_preview %}
+          <div class="dreamz-dashboard-milestone {% if badge.unlocked %}is-unlocked{% else %}is-locked{% endif %}">
+            <span aria-hidden="true">{{ ui.milestone_icon(badge.icon) }}</span>
+            <strong>{{ badge.title }}</strong>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+
   <section class="home-classes-card dreamz-card mb-4">
     <div class="mb-3 flex items-center justify-between gap-3">
       <div>

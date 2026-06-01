@@ -45,6 +45,37 @@
   </article>
 </section>
 
+{% if milestone_badges %}
+  <section id="milestones" class="dreamz-card mb-5">
+    <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('milestones_title') }}</div>
+        <h3 class="mt-1 text-xl font-semibold text-white">{{ t('milestones_progress_title') }}</h3>
+        <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-300">{{ t('milestones_intro') }}</p>
+      </div>
+    </div>
+    <div class="dreamz-milestone-grid">
+      {% for badge in milestone_badges %}
+        <article class="dreamz-milestone-card {% if badge.unlocked %}is-unlocked{% else %}is-locked{% endif %}{% if badge.prepared %} is-prepared{% endif %}">
+          <div class="dreamz-milestone-icon" aria-hidden="true">
+            {{ ui.milestone_icon(badge.icon) }}
+          </div>
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="dreamz-milestone-category">{{ badge.category_label }}</span>
+              <span class="dreamz-milestone-state">
+                {% if badge.prepared %}{{ t('milestone_prepared') }}{% elif badge.unlocked %}{{ t('milestone_unlocked') }}{% else %}{{ t('milestone_locked') }}{% endif %}
+              </span>
+            </div>
+            <h4 class="mt-2 font-semibold text-white">{{ badge.title }}</h4>
+            <p class="mt-1 text-sm leading-5 text-gray-300">{{ badge.description }}</p>
+          </div>
+        </article>
+      {% endfor %}
+    </div>
+  </section>
+{% endif %}
+
 <section class="progress-photo-comparison dreamz-card mb-5">
   <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
     <div>

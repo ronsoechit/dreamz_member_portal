@@ -6489,6 +6489,189 @@ def coach_progress_history(member_id, limit=12):
     )
 
 
+MILESTONE_DEFINITIONS = [
+    {"key": "first_workout_completed", "category": "training", "icon": "dumbbell", "level": "standard"},
+    {"key": "three_workouts_completed", "category": "training", "icon": "dumbbell", "level": "standard"},
+    {"key": "ten_workouts_completed", "category": "training", "icon": "trophy", "level": "major"},
+    {"key": "first_meal_logged", "category": "nutrition", "icon": "meal", "level": "standard"},
+    {"key": "three_meals_logged", "category": "nutrition", "icon": "meal", "level": "standard"},
+    {"key": "first_progress_photo_uploaded", "category": "progress", "icon": "camera", "level": "standard"},
+    {"key": "first_progress_checkin", "category": "progress", "icon": "progress", "level": "standard"},
+    {"key": "first_bodyweight_update", "category": "progress", "icon": "progress", "level": "standard"},
+    {"key": "first_class_added", "category": "classes", "icon": "calendar", "level": "standard"},
+    {"key": "seven_day_consistency_streak", "category": "consistency", "icon": "streak", "level": "major"},
+    {"key": "personal_record", "category": "training", "icon": "trophy", "level": "major", "prepared": True},
+    {"key": "goal_reached", "category": "progress", "icon": "target", "level": "major", "prepared": True},
+]
+
+MILESTONE_DEFINITION_MAP = {item["key"]: item for item in MILESTONE_DEFINITIONS}
+
+
+def member_consistency_streak_days(member_id):
+    dates = set()
+    for (value,) in db.session.query(CoachWorkoutSession.completed_at).filter_by(member_id=member_id).all():
+        if value:
+            dates.add(local_datetime(value).date())
+    for (value,) in db.session.query(MealLog.logged_at).filter_by(member_id=member_id).all():
+        if value:
+            dates.add(local_datetime(value).date())
+    for (value,) in db.session.query(CoachProgressEntry.created_at).filter_by(member_id=member_id).all():
+        if value:
+            dates.add(local_datetime(value).date())
+    for (value,) in db.session.query(CoachActivityLog.activity_date).filter_by(member_id=member_id).all():
+        if value:
+            dates.add(value)
+    for (value,) in db.session.query(MemberClassAttendance.attended_at).filter_by(member_id=member_id).all():
+        if value:
+            dates.add(local_datetime(value).date())
+    if not dates:
+        return 0
+
+    longest = 0
+    current = 0
+    previous = None
+    for day in sorted(dates):
+        if previous and day == previous + timedelta(days=1):
+            current += 1
+        else:
+            current = 1
+        longest = max(longest, current)
+        previous = day
+    return longest
+
+
+def member_milestone_summary(member_id):
+    return {
+        "workouts": CoachWorkoutSession.query.filter_by(member_id=member_id).count(),
+        "meals": MealLog.query.filter_by(member_id=member_id).count(),
+        "progress_checkins": CoachProgressEntry.query.filter_by(member_id=member_id).count(),
+        "progress_photos": (
+            CoachProgressEntry.query
+            .filter_by(member_id=member_id)
+            .filter(CoachProgressEntry.photo_path.isnot(None), CoachProgressEntry.photo_path != "")
+            .count()
+        ),
+        "bodyweight_updates": (
+            CoachProgressEntry.query
+            .filter_by(member_id=member_id)
+            .filter(CoachProgressEntry.weight_kg.isnot(None))
+            .count()
+        ),
+        "classes_added": MemberClassPlan.query.filter_by(member_id=member_id).count(),
+        "consistency_streak": member_consistency_streak_days(member_id),
+    }
+
+
+def milestone_is_earned(key, summary):
+    if key == "first_workout_completed":
+        return summary["workouts"] >= 1
+    if key == "three_workouts_completed":
+        return summary["workouts"] >= 3
+    if key == "ten_workouts_completed":
+        return summary["workouts"] >= 10
+    if key == "first_meal_logged":
+        return summary["meals"] >= 1
+    if key == "three_meals_logged":
+        return summary["meals"] >= 3
+    if key == "first_progress_photo_uploaded":
+        return summary["progress_photos"] >= 1
+    if key == "first_progress_checkin":
+        return summary["progress_checkins"] >= 1
+    if key == "first_bodyweight_update":
+        return summary["bodyweight_updates"] >= 1
+    if key == "first_class_added":
+        return summary["classes_added"] >= 1
+    if key == "seven_day_consistency_streak":
+        return summary["consistency_streak"] >= 7
+    return False
+
+
+def unlocked_milestone_records(member_id):
+    rows = (
+        CoachInteraction.query
+        .filter_by(member_id=member_id, category="milestone_unlock")
+        .order_by(CoachInteraction.created_at.desc(), CoachInteraction.id.desc())
+        .all()
+    )
+    return {row.message: row for row in rows if row.message in MILESTONE_DEFINITION_MAP}
+
+
+def milestone_payload(key, language=None):
+    language = language or current_language()
+    definition = MILESTONE_DEFINITION_MAP.get(key, {})
+    return {
+        "type": key,
+        "title": translated_text(f"milestone_{key}_title", language),
+        "message": translated_text(f"milestone_{key}_message", language),
+        "icon": definition.get("icon", "target"),
+        "level": definition.get("level", "standard"),
+    }
+
+
+def milestone_badges_for_member(member_id, language=None, limit=None):
+    language = language or current_language()
+    summary = member_milestone_summary(member_id)
+    unlocked_records = unlocked_milestone_records(member_id)
+    badges = []
+    for definition in MILESTONE_DEFINITIONS:
+        key = definition["key"]
+        earned = milestone_is_earned(key, summary)
+        record = unlocked_records.get(key)
+        unlocked = earned or bool(record)
+        badges.append({
+            **definition,
+            "title": translated_text(f"milestone_{key}_title", language),
+            "description": translated_text(f"milestone_{key}_description", language),
+            "message": translated_text(f"milestone_{key}_message", language),
+            "category_label": translated_text(f"milestone_category_{definition['category']}", language),
+            "unlocked": unlocked,
+            "unlocked_at": record.created_at if record else None,
+            "prepared": bool(definition.get("prepared")),
+        })
+    badges.sort(key=lambda item: (not item["unlocked"], item.get("prepared", False), item["category"], item["key"]))
+    return badges[:limit] if limit else badges
+
+
+def unlock_member_milestones(member, candidate_keys=None):
+    if not member:
+        return []
+    candidate_keys = [key for key in (candidate_keys or []) if key in MILESTONE_DEFINITION_MAP]
+    if not candidate_keys:
+        return []
+    summary = member_milestone_summary(member.member_id)
+    unlocked_records = unlocked_milestone_records(member.member_id)
+    language = current_language()
+    newly_unlocked = []
+    for key in candidate_keys:
+        definition = MILESTONE_DEFINITION_MAP[key]
+        if definition.get("prepared") or key in unlocked_records or not milestone_is_earned(key, summary):
+            continue
+        db.session.add(CoachInteraction(
+            member_id=member.member_id,
+            actor="system",
+            category="milestone_unlock",
+            source="achievement",
+            language=language,
+            message=key,
+            context_summary=json.dumps(summary, ensure_ascii=False),
+        ))
+        newly_unlocked.append(key)
+    return newly_unlocked
+
+
+def milestone_query_value(keys):
+    keys = [key for key in (keys or []) if key in MILESTONE_DEFINITION_MAP]
+    return ",".join(keys) if keys else None
+
+
+def milestone_payloads_from_query():
+    if not has_request_context():
+        return []
+    raw = request.args.get("milestones", "")
+    keys = [key.strip() for key in raw.split(",") if key.strip() in MILESTONE_DEFINITION_MAP]
+    return [milestone_payload(key) for key in keys]
+
+
 def coach_latest_workout(member_id):
     history = coach_workout_history(member_id, limit=1)
     return history[0] if history else None
@@ -6648,6 +6831,7 @@ def coach_recent_interactions(member_id, limit=8):
     return (
         CoachInteraction.query
         .filter_by(member_id=member_id)
+        .filter(CoachInteraction.category != "milestone_unlock")
         .order_by(CoachInteraction.created_at.desc(), CoachInteraction.id.desc())
         .limit(limit)
         .all()
@@ -8182,6 +8366,7 @@ def inject_csrf_token():
         "account_notification_count": member_account_notification_count(member_id) if member_id and not is_staff_user() else 0,
         "floating_coach_interactions": floating_coach_recent_interactions(member_id) if member_id and not is_staff_user() else [],
         "floating_coach_threads": floating_coach_recent_threads(member_id) if member_id and not is_staff_user() else [],
+        "pending_milestone_achievements": milestone_payloads_from_query,
         "open_cancellation_count": open_cancellation_count() if is_staff_user() else 0,
         "open_email_log_count": open_email_log_count() if is_staff_user() else 0,
         "t_document_title": lambda document_type: translated_document_title(document_type, current_language()),
@@ -9058,6 +9243,11 @@ def member_dashboard_context(member, staff_admin_view=False):
             .all()
         ),
     ) if not staff_admin_view else []
+    milestone_preview = optional_dashboard_value(
+        "milestone_preview",
+        [],
+        lambda: milestone_badges_for_member(member.member_id, language=language, limit=4),
+    ) if not staff_admin_view else []
     documents = optional_dashboard_value(
         "member_documents",
         [],
@@ -9110,6 +9300,7 @@ def member_dashboard_context(member, staff_admin_view=False):
         "today_group_classes": today_group_class_sections["current"],
         "today_earlier_group_classes": today_group_class_sections["earlier"],
         "new_equipment_items": new_equipment_items,
+        "milestone_preview": milestone_preview,
     }
 
 
@@ -11002,9 +11193,19 @@ def save_meal_log():
         language=current_language(),
     ))
     db.session.commit()
+    milestones = unlock_member_milestones(
+        member,
+        ["first_meal_logged", "three_meals_logged", "seven_day_consistency_streak"],
+    )
+    if milestones:
+        db.session.commit()
     flash(translated_text("meal_log_saved", current_language()), "success")
     meal_anchor = re.sub(r"[^A-Za-z0-9_-]", "", meal_key) or "meal"
-    return redirect(url_for("member_nutrition", meal_log="saved", meal=meal_key) + f"#meal-{meal_anchor}")
+    redirect_args = {"meal_log": "saved", "meal": meal_key}
+    milestone_value = milestone_query_value(milestones)
+    if milestone_value:
+        redirect_args["milestones"] = milestone_value
+    return redirect(url_for("member_nutrition", **redirect_args) + f"#meal-{meal_anchor}")
 
 
 @app.post("/nutrition/regenerate")
@@ -11106,8 +11307,15 @@ def member_group_class_plan_add():
         db.session.flush()
         coach_message = record_group_class_plan_change(member, "group_class_plan_refreshed_added", occurrence, class_date)
     db.session.commit()
+    milestones = unlock_member_milestones(member, ["first_class_added"]) if plan_changed else []
+    if milestones:
+        db.session.commit()
     flash(coach_message or translated_text("group_class_added_to_plan", current_language()), "success")
-    return redirect(url_with_query(request.referrer or url_for("member_group_classes"), achievement="class_added"))
+    redirect_args = {"achievement": "class_added"}
+    milestone_value = milestone_query_value(milestones)
+    if milestone_value:
+        redirect_args["milestones"] = milestone_value
+    return redirect(url_with_query(request.referrer or url_for("member_group_classes"), **redirect_args))
 
 
 @app.post("/group-classes/plan/<int:plan_id>/remove")
@@ -11170,7 +11378,13 @@ def member_group_class_attendance_save():
     db.session.flush()
     coach_message = record_group_class_plan_change(member, "group_class_plan_refreshed_attended", occurrence, class_date)
     db.session.commit()
+    milestones = unlock_member_milestones(member, ["seven_day_consistency_streak"])
+    if milestones:
+        db.session.commit()
     flash(coach_message, "success")
+    milestone_value = milestone_query_value(milestones)
+    if milestone_value:
+        return redirect(url_with_query(request.referrer or url_for("member_group_classes"), milestones=milestone_value))
     return redirect(request.referrer or url_for("member_group_classes"))
 
 
@@ -11193,6 +11407,7 @@ def member_progress():
         progress_entries=coach_progress_history(member.member_id),
         group_class_attended_this_week=member_group_class_attendance_count(member.member_id, week_start, week_end),
         group_class_attended_total=member_group_class_attendance_count(member.member_id),
+        milestone_badges=milestone_badges_for_member(member.member_id, language=current_language()),
     )
 
 
@@ -11362,15 +11577,29 @@ def save_coach_progress():
     )
     CoachPlan.query.filter_by(member_id=member.member_id).delete()
     db.session.commit()
-    flash(translated_text("coach_progress_saved", current_language()))
+    milestone_candidates = ["first_progress_checkin", "seven_day_consistency_streak"]
     if photo_path:
-        return redirect(url_for(
-            "member_coach",
-            view="progress",
-            achievement="progress_photo_uploaded",
-            first_photo="0" if has_existing_photo else "1",
-        ))
-    return redirect(url_for("member_coach", view="progress", achievement="progress_saved"))
+        milestone_candidates.append("first_progress_photo_uploaded")
+    if weight_kg is not None:
+        milestone_candidates.append("first_bodyweight_update")
+    milestones = unlock_member_milestones(member, milestone_candidates)
+    if milestones:
+        db.session.commit()
+    flash(translated_text("coach_progress_saved", current_language()))
+    milestone_value = milestone_query_value(milestones)
+    if photo_path:
+        redirect_args = {
+            "view": "progress",
+            "achievement": "progress_photo_uploaded",
+            "first_photo": "0" if has_existing_photo else "1",
+        }
+        if milestone_value:
+            redirect_args["milestones"] = milestone_value
+        return redirect(url_for("member_coach", **redirect_args))
+    redirect_args = {"view": "progress", "achievement": "progress_saved"}
+    if milestone_value:
+        redirect_args["milestones"] = milestone_value
+    return redirect(url_for("member_coach", **redirect_args))
 
 
 @app.route("/coach/workout-log", methods=["POST"])
@@ -11427,12 +11656,24 @@ def save_coach_workout_log():
     )
     CoachPlan.query.filter_by(member_id=member.member_id).delete()
     db.session.commit()
+    milestones = unlock_member_milestones(
+        member,
+        [
+            "first_workout_completed",
+            "three_workouts_completed",
+            "ten_workouts_completed",
+            "seven_day_consistency_streak",
+        ],
+    )
+    if milestones:
+        db.session.commit()
     return jsonify(
         {
             "status": "success",
             "message": translated_text("coach_workout_saved", current_language()),
             "workout_id": workout.id,
             "coach_reply": reply,
+            "milestones": [milestone_payload(key) for key in milestones],
         }
     )
 
@@ -11479,7 +11720,14 @@ def save_coach_activity_log():
     )
     CoachPlan.query.filter_by(member_id=member.member_id).delete()
     db.session.commit()
-    return jsonify({"status": "success", "message": translated_text("coach_activity_saved", current_language())})
+    milestones = unlock_member_milestones(member, ["seven_day_consistency_streak"])
+    if milestones:
+        db.session.commit()
+    return jsonify({
+        "status": "success",
+        "message": translated_text("coach_activity_saved", current_language()),
+        "milestones": [milestone_payload(key) for key in milestones],
+    })
 
 
 @app.route("/coach/message", methods=["POST"])

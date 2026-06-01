@@ -15,6 +15,28 @@
   <span class="{{ class_name }} {{ extra_classes }}">{{ label }}</span>
 {% endmacro %}
 
+{% macro milestone_icon(icon) %}
+  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    {% if icon == 'dumbbell' %}
+      <path d="M4 9h3v6H4zM17 9h3v6h-3zM7 11h10v2H7zM2.8 10h1.2v4H2.8zM20 10h1.2v4H20z"/>
+    {% elif icon == 'meal' %}
+      <path d="M7 3v8M5 3v4M9 3v4M5 7h4M7 11v10M15 3c2.2 1.5 3 3.8 2.1 6.8-.3 1-.9 1.9-1.8 2.6V21h-2V3z"/>
+    {% elif icon == 'camera' %}
+      <path d="M4 7h3l1.3-2h7.4L17 7h3v12H4z"/><circle cx="12" cy="13" r="3.2"/>
+    {% elif icon == 'calendar' %}
+      <path d="M5 5h14v15H5zM8 3v4M16 3v4M5 9h14"/>
+    {% elif icon == 'streak' %}
+      <path d="M12 21c3-2 5-4.7 5-7.8 0-2.6-1.6-5-4.6-7.2.1 2-.6 3.4-2.1 4.4.1-1.8-.7-3.7-2.3-5.4C6.3 7.2 5 10 5 13.2 5 16.3 8 19.4 12 21z"/>
+    {% elif icon == 'trophy' %}
+      <path d="M8 4h8v4a4 4 0 0 1-8 0zM8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 12v4M9 20h6M10 16h4"/>
+    {% elif icon == 'progress' %}
+      <path d="M4 19h16M6 16v-5M12 16V6M18 16v-8"/>
+    {% else %}
+      <circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1.4"/>
+    {% endif %}
+  </svg>
+{% endmacro %}
+
 {% macro display_label(value) %}
   {% set text = value|string if value is not none and value != '' else '' %}
   {% set key = text|trim|lower %}

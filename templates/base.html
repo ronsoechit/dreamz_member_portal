@@ -585,6 +585,16 @@
       }
     };
   </script>
+  {% set milestone_toasts = pending_milestone_achievements() %}
+  {% if milestone_toasts %}
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        {{ milestone_toasts|tojson }}.forEach((milestone, index) => {
+          window.setTimeout(() => window.showDreamzAchievement?.(milestone), index * 420);
+        });
+      });
+    </script>
+  {% endif %}
   <script src="{{ url_for('static', filename='js/achievements.js', v=static_asset_version('js/achievements.js')) }}" defer></script>
   <script src="{{ url_for('static', filename='js/pwa-install.js') }}" defer></script>
 </body>

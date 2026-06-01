@@ -1358,7 +1358,12 @@
             status.className = "mt-2 rounded border border-green-500/40 bg-green-500/10 p-2 text-sm text-green-100";
             status.textContent = result.message || "{{ t('coach_activity_saved') }}";
           }
-          window.setTimeout(() => window.location.reload(), 700);
+          if (Array.isArray(result.milestones)) {
+            result.milestones.forEach((milestone, index) => {
+              window.setTimeout(() => window.showDreamzAchievement?.(milestone), index * 420);
+            });
+          }
+          window.setTimeout(() => window.location.reload(), result.milestones?.length ? 1400 : 700);
         } catch (error) {
           if (status) {
             status.className = "mt-2 rounded border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-100";
@@ -1437,6 +1442,11 @@
             }
             panel.dataset.sessionSaveState = "saved";
             window.showDreamzAchievement?.({ type: "workout_completed" });
+            if (Array.isArray(result.milestones)) {
+              result.milestones.forEach((milestone, index) => {
+                window.setTimeout(() => window.showDreamzAchievement?.(milestone), (index + 1) * 420);
+              });
+            }
           } catch (error) {
             panel.dataset.sessionSaveState = "";
             if (saveStatus) saveStatus.textContent = error.message || "{{ t('coach_workout_save_error') }}";
