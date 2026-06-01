@@ -141,7 +141,8 @@ body.staff-app-body .staff-nav a {
 .dreamz-page-loader-card {
   position: fixed;
   left: 50%;
-  bottom: calc(1.2rem + env(safe-area-inset-bottom));
+  top: max(calc(env(safe-area-inset-top) + 5rem), 46dvh);
+  bottom: auto;
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 0.8rem;
@@ -154,12 +155,12 @@ body.staff-app-body .staff-nav a {
     radial-gradient(circle at top left, rgba(250, 204, 21, 0.22), transparent 52%);
   box-shadow: var(--dreamz-shadow-md), 0 0 32px rgba(245, 158, 11, 0.14);
   padding: 0.9rem 1rem;
-  transform: translate(-50%, 0.75rem);
+  transform: translate(-50%, calc(-50% + 0.75rem));
   transition: transform var(--dreamz-motion-base) var(--dreamz-ease-out);
 }
 
 .dreamz-page-loader.is-visible .dreamz-page-loader-card {
-  transform: translate(-50%, 0);
+  transform: translate(-50%, -50%);
 }
 
 .dreamz-page-loader-title {
@@ -527,6 +528,9 @@ textarea:focus-visible {
 }
 
 .flash-message {
+  position: relative;
+  z-index: 20;
+  scroll-margin-top: 6rem;
   border-radius: var(--dreamz-radius-sm) !important;
   background: rgba(16, 185, 129, 0.12) !important;
   border-color: rgba(110, 231, 183, 0.45) !important;
@@ -2358,6 +2362,37 @@ span.rounded,
 @media (max-width: 767px) {
   body.app-body {
     padding-bottom: calc(7.25rem + env(safe-area-inset-bottom));
+  }
+
+  .dreamz-page-loader-card {
+    top: max(calc(env(safe-area-inset-top) + 5.2rem), 44dvh);
+    width: min(calc(100vw - 2.2rem), 21rem);
+  }
+
+  .dreamz-achievement-layer {
+    top: clamp(calc(env(safe-area-inset-top) + 8rem), 62dvh, calc(100dvh - 12rem - env(safe-area-inset-bottom)));
+    bottom: auto;
+    left: max(0.8rem, env(safe-area-inset-left));
+    right: max(0.8rem, env(safe-area-inset-right));
+    justify-items: center;
+  }
+
+  .dreamz-achievement-toast {
+    width: min(100%, 24rem);
+    padding: 0.9rem 0.95rem;
+  }
+
+  .dreamz-floating-reward {
+    top: clamp(calc(env(safe-area-inset-top) + 5.5rem), 56dvh, calc(100dvh - 14rem - env(safe-area-inset-bottom)));
+    right: max(1rem, env(safe-area-inset-right));
+    bottom: auto;
+  }
+
+  .flash-message {
+    position: sticky;
+    top: calc(0.75rem + env(safe-area-inset-top));
+    z-index: 55;
+    box-shadow: 0 20px 56px rgba(0, 0, 0, 0.36), 0 0 26px rgba(245, 158, 11, 0.08);
   }
 
   .app-header > .container {
