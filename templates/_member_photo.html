@@ -3,6 +3,7 @@
     <img
       src="{{ url_for('member_photo', member_id=member.member_id) }}"
       alt=""
+      decoding="async"
       class="h-full w-full object-cover"
       onerror="this.classList.add('hidden'); this.nextElementSibling.classList.remove('hidden');"
     >

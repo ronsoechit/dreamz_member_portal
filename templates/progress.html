@@ -89,14 +89,14 @@
   {% if progress_photo_count >= 2 %}
     <div class="progress-photo-grid">
       <figure class="progress-photo-frame">
-        <img src="{{ url_for('coach_progress_photo', entry_id=first_progress_photo.id) }}" alt="{{ t('progress_start_photo') }}">
+        <img src="{{ url_for('coach_progress_photo', entry_id=first_progress_photo.id) }}" alt="{{ t('progress_start_photo') }}" loading="lazy" decoding="async">
         <figcaption>
           <span>{{ t('progress_start_photo') }}</span>
           <strong>{{ first_progress_photo.created_at|format_date('%d/%m/%Y') }}</strong>
         </figcaption>
       </figure>
       <figure class="progress-photo-frame">
-        <img src="{{ url_for('coach_progress_photo', entry_id=latest_progress_photo.id) }}" alt="{{ t('progress_latest_photo') }}">
+        <img src="{{ url_for('coach_progress_photo', entry_id=latest_progress_photo.id) }}" alt="{{ t('progress_latest_photo') }}" loading="lazy" decoding="async">
         <figcaption>
           <span>{{ t('progress_latest_photo') }}</span>
           <strong>{{ latest_progress_photo.created_at|format_date('%d/%m/%Y') }}</strong>
@@ -106,7 +106,7 @@
   {% elif progress_photo_count == 1 %}
     <div class="progress-photo-single">
       <figure class="progress-photo-frame progress-photo-frame-single">
-        <img src="{{ url_for('coach_progress_photo', entry_id=latest_progress_photo.id) }}" alt="{{ t('progress_start_photo') }}">
+        <img src="{{ url_for('coach_progress_photo', entry_id=latest_progress_photo.id) }}" alt="{{ t('progress_start_photo') }}" loading="lazy" decoding="async">
         <figcaption>
           <span>{{ t('progress_start_photo') }}</span>
           <strong>{{ latest_progress_photo.created_at|format_date('%d/%m/%Y') }}</strong>
@@ -178,7 +178,7 @@
               <p class="mt-2 text-sm leading-6 text-gray-300">{{ entry.notes }}</p>
             {% endif %}
             {% if entry.photo_path %}
-              <img src="{{ url_for('coach_progress_photo', entry_id=entry.id) }}" alt="" class="mt-3 h-28 w-full rounded-lg object-cover">
+              <img src="{{ url_for('coach_progress_photo', entry_id=entry.id) }}" alt="" loading="lazy" decoding="async" class="mt-3 h-28 w-full rounded-lg object-cover">
             {% endif %}
           </div>
         {% endfor %}

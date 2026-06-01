@@ -105,6 +105,172 @@ body.staff-app-body .staff-nav a {
   font-size: 0.82rem;
 }
 
+.dreamz-page-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dreamz-motion-base) var(--dreamz-ease-out);
+}
+
+.dreamz-page-loader.is-visible {
+  opacity: 1;
+}
+
+.dreamz-page-loader-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  overflow: hidden;
+  background: rgba(250, 204, 21, 0.14);
+  box-shadow: 0 0 24px rgba(245, 158, 11, 0.22);
+}
+
+.dreamz-page-loader-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 42%;
+  background: linear-gradient(90deg, transparent, rgba(250, 204, 21, 0.95), transparent);
+  animation: dreamz-loading-bar 1150ms var(--dreamz-ease-out) infinite;
+}
+
+.dreamz-page-loader-card {
+  position: fixed;
+  left: 50%;
+  bottom: calc(1.2rem + env(safe-area-inset-bottom));
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.8rem;
+  align-items: center;
+  width: min(calc(100vw - 2rem), 22rem);
+  border: 1px solid rgba(250, 204, 21, 0.34);
+  border-radius: var(--dreamz-radius-md);
+  background:
+    linear-gradient(135deg, rgba(15, 23, 42, 0.96), rgba(3, 7, 18, 0.94)),
+    radial-gradient(circle at top left, rgba(250, 204, 21, 0.22), transparent 52%);
+  box-shadow: var(--dreamz-shadow-md), 0 0 32px rgba(245, 158, 11, 0.14);
+  padding: 0.9rem 1rem;
+  transform: translate(-50%, 0.75rem);
+  transition: transform var(--dreamz-motion-base) var(--dreamz-ease-out);
+}
+
+.dreamz-page-loader.is-visible .dreamz-page-loader-card {
+  transform: translate(-50%, 0);
+}
+
+.dreamz-page-loader-title {
+  color: #fff7d6;
+  font-size: 0.92rem;
+  font-weight: 850;
+  line-height: 1.2;
+}
+
+.dreamz-page-loader-skeleton {
+  display: grid;
+  gap: 0.32rem;
+  margin-top: 0.45rem;
+}
+
+.dreamz-page-loader-skeleton span,
+.dreamz-skeleton {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--dreamz-radius-pill);
+  background: rgba(148, 163, 184, 0.13);
+}
+
+.dreamz-page-loader-skeleton span {
+  height: 0.38rem;
+}
+
+.dreamz-page-loader-skeleton span:first-child {
+  width: 82%;
+}
+
+.dreamz-page-loader-skeleton span:last-child {
+  width: 56%;
+}
+
+.dreamz-skeleton {
+  min-height: 1rem;
+}
+
+.dreamz-page-loader-skeleton span::after,
+.dreamz-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(250, 204, 21, 0.16), transparent);
+  animation: dreamz-skeleton-shimmer 1450ms var(--dreamz-ease-out) infinite;
+}
+
+.dreamz-loading-spinner {
+  display: inline-flex;
+  width: 1.18rem;
+  height: 1.18rem;
+  flex: 0 0 auto;
+  border: 2px solid rgba(250, 204, 21, 0.24);
+  border-top-color: rgba(250, 204, 21, 0.95);
+  border-radius: 999px;
+  animation: dreamz-spinner 760ms linear infinite;
+}
+
+.dreamz-page-loader .dreamz-loading-spinner {
+  width: 2rem;
+  height: 2rem;
+  box-shadow: 0 0 24px rgba(245, 158, 11, 0.16);
+}
+
+.dreamz-button-loading-content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.is-loading {
+  cursor: wait !important;
+  pointer-events: none;
+}
+
+button.is-loading,
+a.is-loading,
+input[type="submit"].is-loading {
+  opacity: 0.78;
+}
+
+@keyframes dreamz-loading-bar {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(240%); }
+}
+
+@keyframes dreamz-skeleton-shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@keyframes dreamz-spinner {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dreamz-page-loader,
+  .dreamz-page-loader-card,
+  .dreamz-page-loader-bar::before,
+  .dreamz-page-loader-skeleton span::after,
+  .dreamz-skeleton::after,
+  .dreamz-loading-spinner {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
 body.staff-app-body .staff-language-form select,
 .auth-language-form select {
   min-height: 2rem;

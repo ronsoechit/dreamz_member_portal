@@ -6,6 +6,7 @@ import os
 import platform
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from time import perf_counter
 
 if os.name == "nt":
     platform.machine = lambda: (
@@ -16,7 +17,7 @@ if os.name == "nt":
 
 from flask import (
     Flask, render_template, request, abort,
-    redirect, url_for, flash, session, Response, send_file, send_from_directory, jsonify, has_request_context
+    redirect, url_for, flash, session, Response, send_file, send_from_directory, jsonify, has_request_context, g
 )
 
 from flask_sqlalchemy import SQLAlchemy
@@ -6251,13 +6252,13 @@ def coach_plan_for_member(member, profile, language=None, force=False):
     if not member or not profile:
         return None
 
-    fallback_plan = coach_personal_plan(profile, member=member, language=language)
     record = CoachPlan.query.filter_by(member_id=member.member_id).first()
     if record and not force and record.language == language and record.plan_version == COACH_PLAN_SCHEMA_VERSION:
         stored = stored_coach_plan(record)
         if stored:
             return stored
 
+    fallback_plan = coach_personal_plan(profile, member=member, language=language)
     generated_plan, context = generate_openai_coach_plan(member, profile, fallback_plan, language=language)
     plan = generated_plan or fallback_plan
     source = "openai" if generated_plan else "fallback"
@@ -6386,14 +6387,20 @@ def coach_workout_history(member_id, limit=6):
         .limit(limit)
         .all()
     )
-    history = []
-    for workout in sessions:
+    session_ids = [session_item.id for session_item in sessions]
+    logs_by_session = {session_id: [] for session_id in session_ids}
+    if session_ids:
         logs = (
             CoachWorkoutExerciseLog.query
-            .filter_by(workout_session_id=workout.id)
-            .order_by(CoachWorkoutExerciseLog.exercise_order.asc())
+            .filter(CoachWorkoutExerciseLog.workout_session_id.in_(session_ids))
+            .order_by(CoachWorkoutExerciseLog.workout_session_id.asc(), CoachWorkoutExerciseLog.exercise_order.asc())
             .all()
         )
+        for log in logs:
+            logs_by_session.setdefault(log.workout_session_id, []).append(log)
+    history = []
+    for workout in sessions:
+        logs = logs_by_session.get(workout.id, [])
         history.append(
             {
                 "workout": workout,
@@ -8348,6 +8355,21 @@ def local_ui_build_marker():
     return ""
 
 
+def route_timing_enabled():
+    return (
+        app.debug
+        or os.getenv("FLASK_ENV") == "development"
+        or os.getenv("FLASK_DEBUG") == "1"
+        or os.getenv("DREAMZ_ROUTE_TIMING") == "1"
+    )
+
+
+@app.before_request
+def start_route_timer():
+    if route_timing_enabled():
+        g.dreamz_route_start = perf_counter()
+
+
 @app.context_processor
 def inject_csrf_token():
     member_id = session.get("member_id")
@@ -8382,6 +8404,12 @@ def add_local_debug_headers(response):
         response.headers["X-Dreamz-UI-Build"] = marker
         response.headers["X-Dreamz-Project-Root"] = str(Path(__file__).resolve().parent)
         response.headers["X-Dreamz-Template-Auto-Reload"] = str(bool(app.config.get("TEMPLATES_AUTO_RELOAD"))).lower()
+    if route_timing_enabled() and hasattr(g, "dreamz_route_start"):
+        elapsed_ms = (perf_counter() - g.dreamz_route_start) * 1000
+        endpoint = request.endpoint or "unknown"
+        app.logger.info("route_timing endpoint=%s method=%s status=%s duration_ms=%.1f", endpoint, request.method, response.status_code, elapsed_ms)
+        if marker:
+            response.headers["X-Dreamz-Route-Time-Ms"] = f"{elapsed_ms:.1f}"
     return response
 
 

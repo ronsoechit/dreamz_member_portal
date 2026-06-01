@@ -110,7 +110,7 @@
       <article class="dreamz-card dreamz-mobile-dense">
         <div class="aspect-video overflow-hidden rounded border border-gray-700 bg-gray-950/70">
           {% if item.thumbnail_url or item.image_url %}
-            <img src="{{ item.thumbnail_url or item.image_url }}" alt="{{ item.name }}" class="h-full w-full object-cover">
+            <img src="{{ item.thumbnail_url or item.image_url }}" alt="{{ item.name }}" loading="lazy" decoding="async" class="h-full w-full object-cover">
           {% else %}
             <div class="flex h-full items-center justify-center p-4 text-center">
               <div>

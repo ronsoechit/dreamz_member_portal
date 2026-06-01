@@ -10,6 +10,7 @@
   <link href="{{ url_for('static', filename='css/premium.css', v=static_asset_version('css/premium.css')) }}" rel="stylesheet">
 </head>
 <body class="auth-body language-auth-body bg-black text-white min-h-screen flex items-center justify-center px-4 py-4">
+  {% include "_loading_state.html" %}
   <main class="auth-card language-auth-card w-full max-w-2xl rounded-lg border border-gray-800 bg-gray-900/95 p-5 shadow-2xl sm:p-7">
     <div class="auth-logo-frame language-auth-logo">
       <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Fitness" class="auth-logo h-16">

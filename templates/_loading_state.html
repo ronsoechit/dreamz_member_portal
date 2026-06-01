@@ -1,0 +1,33 @@
+<div class="dreamz-page-loader" data-page-loader hidden role="status" aria-live="polite" aria-atomic="true">
+  <div class="dreamz-page-loader-bar" aria-hidden="true"></div>
+  <div class="dreamz-page-loader-card">
+    <span class="dreamz-loading-spinner" aria-hidden="true"></span>
+    <div class="min-w-0">
+      <div class="dreamz-page-loader-title" data-page-loader-text>{{ t('loading_please_wait') }}</div>
+      <div class="dreamz-page-loader-skeleton" aria-hidden="true">
+        <span></span>
+        <span></span>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  window.DREAMZ_LOADING_TEXTS = {
+    loading_dashboard: {{ t('loading_dashboard')|tojson }},
+    loading_my_coach: {{ t('loading_my_coach')|tojson }},
+    loading_nutrition: {{ t('loading_nutrition')|tojson }},
+    loading_classes: {{ t('loading_classes')|tojson }},
+    loading_equipment: {{ t('loading_equipment')|tojson }},
+    loading_progress: {{ t('loading_progress')|tojson }},
+    loading_account: {{ t('loading_account')|tojson }},
+    loading_please_wait: {{ t('loading_please_wait')|tojson }},
+    saving: {{ t('saving')|tojson }},
+    uploading: {{ t('uploading')|tojson }},
+    processing: {{ t('processing')|tojson }},
+    loading_workout: {{ t('loading_workout')|tojson }},
+    loading_meal_plan: {{ t('loading_meal_plan')|tojson }},
+    loading_progress_photos: {{ t('loading_progress_photos')|tojson }},
+    loading_badges: {{ t('loading_badges')|tojson }}
+  };
+</script>
+<script src="{{ url_for('static', filename='js/loading-states.js', v=static_asset_version('js/loading-states.js')) }}" defer></script>

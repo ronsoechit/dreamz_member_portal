@@ -15,6 +15,7 @@
   <link href="{{ url_for('static', filename='css/premium.css', v=static_asset_version('css/premium.css')) }}" rel="stylesheet">
 </head>
 <body class="app-body {% if current_staff_role %}staff-app-body{% endif %} bg-gray-900 text-white min-h-screen flex flex-col">
+  {% include "_loading_state.html" %}
 
   <header class="app-header {% if current_staff_role %}staff-header{% endif %} bg-gray-800 shadow-md">
     <div class="container mx-auto flex flex-col gap-4 px-5 py-4">
@@ -271,49 +272,6 @@
   </footer>
 
   <script>
-    (() => {
-      const setBusy = (element, text) => {
-        if (!element || element.dataset.loadingActive === "true") return false;
-        element.dataset.loadingActive = "true";
-        element.setAttribute("aria-busy", "true");
-        element.classList.add("opacity-60", "cursor-wait", "pointer-events-none");
-        if (text && !element.dataset.originalText) {
-          element.dataset.originalText = element.textContent.trim();
-          element.textContent = text;
-        }
-        return true;
-      };
-
-      document.addEventListener("submit", (event) => {
-        const form = event.target;
-        if (!(form instanceof HTMLFormElement)) return;
-        if (form.dataset.submitting === "true") {
-          event.preventDefault();
-          return;
-        }
-        form.dataset.submitting = "true";
-        const button = form.querySelector("button[type='submit'], button:not([type])");
-        if (button) {
-          setBusy(button, button.dataset.loadingText || "{{ t('loading') }}");
-          button.disabled = true;
-        }
-      }, true);
-
-      document.addEventListener("click", (event) => {
-        if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-        const link = event.target.closest("a[href]");
-        if (!link || link.dataset.noLoading === "true" || link.target === "_blank" || link.hasAttribute("download")) return;
-        const href = link.getAttribute("href") || "";
-        if (!href || href.startsWith("#") || href.startsWith("javascript:") || href.startsWith("mailto:") || href.startsWith("tel:")) return;
-        if (link.dataset.loadingActive === "true") {
-          event.preventDefault();
-          return;
-        }
-        setBusy(link);
-      }, true);
-    })();
-  </script>
-  <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
         navigator.serviceWorker.register("{{ url_for('service_worker') }}").catch(() => {});
@@ -408,6 +366,10 @@
           appendMessage("member", message);
           input.value = "";
           send.disabled = true;
+          send.dataset.originalHtml = send.dataset.originalHtml || send.innerHTML;
+          send.classList.add("is-loading");
+          send.setAttribute("aria-busy", "true");
+          send.innerHTML = '<span class="dreamz-button-loading-content"><span class="dreamz-loading-spinner" aria-hidden="true"></span><span>{{ t('coach_loading') }}</span></span>';
           setStatus("{{ t('coach_loading') }}");
           try {
             const response = await fetch(messageUrl, {
@@ -428,6 +390,9 @@
             setStatus(error.message || "{{ t('coach_question_required') }}", "error");
           } finally {
             send.disabled = false;
+            send.classList.remove("is-loading");
+            send.removeAttribute("aria-busy");
+            if (send.dataset.originalHtml) send.innerHTML = send.dataset.originalHtml;
           }
         };
 
