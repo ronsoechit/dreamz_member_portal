@@ -7,6 +7,23 @@
   const iosHint = promptEl.querySelector("[data-pwa-ios-hint]");
   const statusEl = promptEl.querySelector("[data-pwa-status]");
   const storageKey = "dreamz-pwa-install-dismissed";
+  const installPaused = window.DREAMZ_PWA_INSTALL_PAUSED !== false;
+
+  const hidePrompt = () => {
+    promptEl.hidden = true;
+    promptEl.classList.add("hidden");
+    if (installButton) installButton.hidden = true;
+    if (iosHint) iosHint.hidden = true;
+    if (statusEl) statusEl.hidden = true;
+  };
+
+  if (installPaused) {
+    hidePrompt();
+    window.addEventListener("beforeinstallprompt", (event) => {
+      event.preventDefault();
+    });
+    return;
+  }
 
   const isStandalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
   const isIos = /iphone|ipad|ipod/i.test(window.navigator.userAgent || "");

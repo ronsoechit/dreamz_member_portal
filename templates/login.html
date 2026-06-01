@@ -188,6 +188,6 @@
       });
     }
   </script>
-  <script src="{{ url_for('static', filename='js/pwa-install.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/pwa-install.js', v=static_asset_version('js/pwa-install.js')) }}" defer></script>
 </body>
 </html>
