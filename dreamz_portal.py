@@ -1054,6 +1054,7 @@ DEFAULT_SETTINGS = {
     "notification_to": "ron@dreamzfitness.com",
     "notification_cc": "",
     "always_cc_admin": "1",
+    "notify_login_code_requests": "1",
 }
 
 DEFAULT_PORTAL_TIMEZONE_OFFSET_HOURS = -4
@@ -8776,6 +8777,43 @@ Dreamz Fitness
     return subject, body, html_body
 
 
+def build_staff_login_code_request_notification(member):
+    member_name = display_member_name(member.name) or "Unknown member"
+    requested_at = local_datetime(datetime.now(timezone.utc)).strftime("%d/%m/%Y %H:%M")
+    subject = f"Dreamz Fitness - login code requested - {member_name}"
+    body = f"""A member requested a login code for the Dreamz Fitness member portal.
+
+Member: {member_name}
+Member ID: {member.member_id}
+Email: {member.email or 'Not available'}
+Requested at: {requested_at}
+
+The login code itself is not included in this admin notification.
+"""
+    html_body = email_html_layout(
+        "Login code requested",
+        "A member requested a login code for the Dreamz Fitness member portal.",
+        rows=[
+            ("Member", member_name),
+            ("Member ID", member.member_id),
+            ("Email", member.email or "Not available"),
+            ("Requested at", requested_at),
+        ],
+        note="The login code itself is not included in this admin notification.",
+    )
+    return subject, body, html_body
+
+
+def send_staff_login_code_request_notification(member):
+    if setting_value("notify_login_code_requests", "1") != "1":
+        return "disabled"
+    to_addresses, cc_addresses = notification_recipients()
+    if not to_addresses and not cc_addresses:
+        return "not_sent"
+    subject, body, html_body = build_staff_login_code_request_notification(member)
+    return deliver_email(to_addresses, subject, body, cc_addresses=cc_addresses, html_body=html_body)
+
+
 def build_staff_cancellation_notification_email(member, reason, request_record=None, event_label="Cancellation request"):
     subject = f"Dreamz Fitness - {event_label} - {display_member_name(member.name) or member.member_id}"
     member_name = display_member_name(member.name)
@@ -9621,6 +9659,10 @@ def staff_settings():
         set_setting_value("notification_to", request.form.get("notification_to", "").strip())
         set_setting_value("notification_cc", request.form.get("notification_cc", "").strip())
         set_setting_value("always_cc_admin", "1" if request.form.get("always_cc_admin") == "1" else "0")
+        set_setting_value(
+            "notify_login_code_requests",
+            "1" if request.form.get("notify_login_code_requests") == "1" else "0",
+        )
 
         for user in StaffUser.query.order_by(StaffUser.role.asc(), StaffUser.username.asc()).all():
             prefix = f"user_{user.id}_"
@@ -11986,6 +12028,13 @@ def login():
                         mail_status = send_member_login_code(member, code, language=current_language())
                     except Exception:
                         mail_status = "failed"
+                    try:
+                        send_staff_login_code_request_notification(member)
+                    except Exception:
+                        app.logger.exception(
+                            "Could not send staff login-code request notification for member_id=%s",
+                            member.member_id,
+                        )
                     if mail_status == "logged":
                         session["dev_login_code"] = code
                     else:

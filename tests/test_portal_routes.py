@@ -502,6 +502,42 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(MemberLoginCode.query.filter_by(email="member@example.com").count(), 1)
         self.assertEqual(EmailLog.query.filter_by(to_addresses="member@example.com").count(), 1)
 
+    def test_login_code_request_notifies_staff_without_code(self):
+        self.add_member(member_id="1206", name="Norluze Damon", email="member@example.com")
+        token = self.get_login_csrf_token()
+
+        response = self.client.post(
+            "/login",
+            data={"step": "email", "email": "member@example.com", "csrf_token": token},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.client.session_transaction() as sess:
+            login_code = sess.get("dev_login_code")
+        self.assertTrue(login_code)
+        staff_email = EmailLog.query.filter(EmailLog.subject.like("%login code requested%")).one()
+        self.assertEqual(staff_email.to_addresses, "ron@dreamzfitness.com")
+        self.assertIn("Norluze Damon", staff_email.body)
+        self.assertIn("1206", staff_email.body)
+        self.assertIn("member@example.com", staff_email.body)
+        self.assertNotIn(login_code, staff_email.body)
+        self.assertNotIn(login_code, staff_email.html_body)
+
+    def test_login_code_staff_notification_can_be_disabled(self):
+        db.session.add(AppSetting(key="notify_login_code_requests", value="0"))
+        db.session.commit()
+        self.add_member(member_id="1206", email="member@example.com")
+        token = self.get_login_csrf_token()
+
+        response = self.client.post(
+            "/login",
+            data={"step": "email", "email": "member@example.com", "csrf_token": token},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(EmailLog.query.count(), 1)
+        self.assertEqual(EmailLog.query.filter_by(to_addresses="member@example.com").count(), 1)
+
     def test_login_code_sent_message_uses_success_style(self):
         self.add_member(member_id="1206", email="member@example.com")
         token = self.get_login_csrf_token()

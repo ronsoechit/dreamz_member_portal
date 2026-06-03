@@ -31,6 +31,10 @@
       <input type="checkbox" name="always_cc_admin" value="1" {% if settings.always_cc_admin == '1' %}checked{% endif %}>
       <span>{{ t('staff_always_cc_admin') }}</span>
     </label>
+    <label class="mt-3 flex items-center gap-2 text-sm">
+      <input type="checkbox" name="notify_login_code_requests" value="1" {% if settings.notify_login_code_requests == '1' %}checked{% endif %}>
+      <span>{{ t('staff_notify_login_code_requests') }}</span>
+    </label>
   </section>
 
   <section class="rounded border border-gray-700 bg-gray-800/40 p-5">

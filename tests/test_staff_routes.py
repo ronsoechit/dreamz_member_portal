@@ -1063,12 +1063,14 @@ class StaffRouteTests(unittest.TestCase):
                 "notification_to": "manager@dreamzfitness.com",
                 "notification_cc": "ron@dreamzfitness.com",
                 "always_cc_admin": "1",
+                "notify_login_code_requests": "1",
             },
             follow_redirects=True,
         )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(AppSetting.query.filter_by(key="notification_to").one().value, "manager@dreamzfitness.com")
+        self.assertEqual(AppSetting.query.filter_by(key="notify_login_code_requests").one().value, "1")
         self.assertIn("Staff settings updated.", response.get_data(as_text=True))
 
     def test_staff_settings_can_create_new_staff_user(self):
