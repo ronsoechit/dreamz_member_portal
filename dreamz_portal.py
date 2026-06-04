@@ -4915,6 +4915,24 @@ def daily_sync_changes(selected_date):
                 continue
             suspicious_name_changes.append({**item, "run_time": run_time})
 
+    current_members = {
+        member.member_id: member
+        for member in Member.query.filter(Member.member_id.in_({
+            *new_members.keys(),
+            *changed_members.keys(),
+            *document_changes.keys(),
+            *[str(item.get("member_id") or "") for item in suspicious_name_changes],
+        })).all()
+    }
+    for collection in (new_members.values(), changed_members.values(), document_changes.values(), suspicious_name_changes):
+        for item in collection:
+            current_member = current_members.get(str(item.get("member_id") or ""))
+            if not current_member:
+                continue
+            item["name"] = item.get("name") or current_member.name or ""
+            item["email"] = item.get("email") or current_member.email or ""
+            item["plan_type"] = item.get("plan_type") or current_member.plan_type or ""
+
     return {
         "runs": runs,
         "new_members": sorted(new_members.values(), key=lambda item: item.get("name") or item.get("member_id") or ""),

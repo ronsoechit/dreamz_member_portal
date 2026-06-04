@@ -952,6 +952,37 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("0 -> 2 documents", body)
         self.assertNotIn("Old Member", body)
 
+    def test_staff_daily_changes_falls_back_to_current_member_name_for_new_members(self):
+        self.add_member(
+            member_id="35007",
+            name="Kerkhof, Mike",
+            plan_type="Delfins Fitness",
+        )
+        db.session.add(SyncRun(
+            source="unit-test",
+            status="success",
+            started_at=datetime(2026, 6, 4, 13, 21),
+            completed_at=datetime(2026, 6, 4, 13, 21),
+            members_received=1,
+            members_new=1,
+            change_summary=json.dumps({
+                "new_members": [
+                    {"member_id": "35007", "name": "", "plan_type": ""}
+                ],
+                "changed_members": [],
+                "document_changes": [],
+            }),
+        ))
+        db.session.commit()
+
+        response = self.client.get("/staff/changes?token=staff-test-token&date=2026-06-04")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Kerkhof, Mike", body)
+        self.assertIn("Delfins Fitness", body)
+        self.assertNotIn(">Unknown</span>", body)
+
     def test_staff_daily_changes_hides_duplicate_active_status_change(self):
         db.session.add(SyncRun(
             source="unit-test",
