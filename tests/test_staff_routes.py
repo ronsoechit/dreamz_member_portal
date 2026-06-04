@@ -952,6 +952,43 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("0 -> 2 documents", body)
         self.assertNotIn("Old Member", body)
 
+    def test_staff_daily_changes_hides_duplicate_active_status_change(self):
+        db.session.add(SyncRun(
+            source="unit-test",
+            status="success",
+            started_at=datetime(2026, 6, 4, 8, 6),
+            completed_at=datetime(2026, 6, 4, 8, 6),
+            members_received=1,
+            members_updated=1,
+            change_summary=json.dumps({
+                "new_members": [],
+                "changed_members": [
+                    {
+                        "member_id": "34886",
+                        "name": "Castelijn, Bas",
+                        "plan_type": "1 WEEK PASS",
+                        "changes": [
+                            {"field": "billing_status", "label": "Billing status", "old": "ACTIVE", "new": "INACTIVE"},
+                            {"field": "is_active", "label": "Active", "old": True, "new": False},
+                        ],
+                    }
+                ],
+                "document_changes": [],
+            }),
+        ))
+        db.session.commit()
+
+        response = self.client.get("/staff/changes?token=staff-test-token&date=2026-06-04")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Billing status", body)
+        self.assertIn("ACTIVE", body)
+        self.assertIn("INACTIVE", body)
+        self.assertNotIn(">Active</td>", body)
+        self.assertNotIn(">True</td>", body)
+        self.assertNotIn(">False</td>", body)
+
     def test_staff_daily_changes_lists_suspicious_name_changes(self):
         db.session.add(Member(member_id="34933", name="Wissenmansen, Dennis"))
         db.session.add(SyncRun(
@@ -1330,8 +1367,9 @@ class StaffRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn("Membership status", body)
-        self.assertIn("Payment Information", body)
+        self.assertIn("Membership &amp; billing", body)
+        self.assertIn("Contact &amp; identity", body)
+        self.assertIn("Recent sync changes", body)
         self.assertNotIn("I want to cancel my contract", body)
 
     def test_manager_can_view_staff_member_document(self):

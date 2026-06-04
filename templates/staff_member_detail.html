@@ -1,88 +1,114 @@
 {% extends "base.html" %}
-{% block title %}Staff Member - {{ display_name }}{% endblock %}
+{% block title %}{{ t('staff_member_view') }} - {{ display_name }}{% endblock %}
 
 {% block content %}
 <section class="staff-page-heading mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
   <div>
     <div class="text-xs font-semibold uppercase tracking-wide text-yellow-400">{{ t('staff_member_view') }}</div>
     <h2 class="mt-1 text-2xl font-semibold">{{ display_name }}</h2>
-    <p class="mt-1 text-sm text-gray-400">#{{ member.member_id }}{% if member.plan_type %} · {{ member.plan_type }}{% endif %}</p>
+    <p class="mt-1 text-sm text-gray-400">#{{ member.member_id }}{% if member.plan_type %} &middot; {{ member.plan_type }}{% endif %}</p>
   </div>
   <div class="flex flex-wrap gap-2">
     <a class="rounded border border-gray-700 bg-gray-900/70 px-3 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('staff_data_audit') }}">{{ t('back_to_audit') }}</a>
+    <a class="rounded border border-gray-700 bg-gray-900/70 px-3 py-2 text-sm font-semibold text-gray-100 hover:border-green-400" href="{{ url_for('staff_daily_changes') }}">{{ t('staff_view_changes') }}</a>
+    {% if documents %}
+      <a class="rounded border border-gray-700 bg-gray-900/70 px-3 py-2 text-sm font-semibold text-gray-100 hover:border-blue-400" href="#member-documents">{{ t('staff_view_documents') }}</a>
+    {% endif %}
     {% if current_staff_role == 'admin' %}
       <form method="post" action="{{ url_for('staff_reset_member_coach', member_id=member.member_id) }}" data-loading-form onsubmit="return confirm('{{ t('coach_admin_reset_confirm') }}');">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="rounded border border-red-400/50 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-100 hover:bg-red-500/20" data-loading-label="{{ t('coach_admin_reset_processing') }}" {% if not coach_data_total %}disabled{% endif %}>{{ t('coach_admin_reset_button') }}</button>
+        <button type="submit" class="rounded border border-red-400/50 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-100 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50" data-loading-label="{{ t('coach_admin_reset_processing') }}" {% if not coach_data_total %}disabled{% endif %}>{{ t('coach_admin_reset_button') }}</button>
       </form>
     {% endif %}
   </div>
 </section>
 
-<section class="staff-member-summary mb-4 rounded border border-gray-700 bg-gray-800/40 p-4">
+<section class="staff-member-command mb-4 rounded border border-gray-700 bg-gray-800/40 p-4">
   <div class="grid gap-4 lg:grid-cols-[auto_1fr] lg:items-center">
     <div class="staff-member-photo">
       {% include "_member_photo.html" %}
     </div>
-    <div class="grid gap-3 md:grid-cols-4">
-      <div>
-        <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('current_membership') }}</div>
-        <div class="mt-1 font-semibold text-white">{{ member.plan_type or t('not_available') }}</div>
+    <div class="space-y-4">
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="rounded-full border px-3 py-1 text-sm font-semibold {{ member_status.badge_class }}">{{ t(member_status.label_key) }}</span>
+        <span class="rounded-full border px-3 py-1 text-sm font-semibold {{ due_status.badge_class }}">
+          {{ t(due_status.label_key) }}{% if due_status.date %}: {{ due_status.date|format_date }}{% endif %}
+        </span>
+        {% if gym_balance > 0 %}
+          <span class="rounded-full border border-yellow-400/40 bg-yellow-500/15 px-3 py-1 text-sm font-semibold text-yellow-100">{{ t('open_gym_balance') }} ${{ '%.2f'|format(gym_balance) }}</span>
+        {% else %}
+          <span class="rounded-full border border-green-400/30 bg-green-500/10 px-3 py-1 text-sm font-semibold text-green-100">{{ t('no_open_gym_balance') }}</span>
+        {% endif %}
       </div>
-      <div>
-        <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('contract_type') }}</div>
-        <div class="mt-1 font-semibold text-white">{{ member.contract_type or t('not_available') }}</div>
-      </div>
-      <div>
-        <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('billing_amount') }}</div>
-        <div class="mt-1 font-semibold text-white">${{ '%.2f'|format(member.billing_amount or 0) }}</div>
-      </div>
-      <div>
-        <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">{{ t('open_gym_balance') }}</div>
-        <div class="mt-1 font-semibold {% if gym_balance > 0 %}text-yellow-300{% else %}text-white{% endif %}">${{ '%.2f'|format(gym_balance) }}</div>
+      <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div class="staff-kpi">
+          <div class="staff-kpi-label">{{ t('current_membership') }}</div>
+          <div class="staff-kpi-value">{{ member.plan_type or t('not_available') }}</div>
+        </div>
+        <div class="staff-kpi">
+          <div class="staff-kpi-label">{{ t('contract_type') }}</div>
+          <div class="staff-kpi-value">{{ member.contract_type or t('not_available') }}</div>
+        </div>
+        <div class="staff-kpi">
+          <div class="staff-kpi-label">{{ t('billing_amount') }}</div>
+          <div class="staff-kpi-value">${{ '%.2f'|format(member.billing_amount or 0) }}</div>
+        </div>
+        <div class="staff-kpi">
+          <div class="staff-kpi-label">{{ t('staff_latest_sync') }}</div>
+          <div class="staff-kpi-value text-sm">{{ sync_context.latest.run_time if sync_context.latest else t('staff_no_recent_sync') }}</div>
+        </div>
       </div>
     </div>
   </div>
 </section>
 
-<div class="staff-member-grid grid gap-4 lg:grid-cols-3">
+<div class="staff-member-grid grid gap-4 xl:grid-cols-3">
   <section class="rounded border border-gray-700 bg-gray-800/40 p-4">
-    <h3 class="text-base font-semibold text-yellow-300">{{ t('member_information') }}</h3>
+    <h3 class="text-base font-semibold text-yellow-300">{{ t('staff_membership_billing') }}</h3>
+    <dl class="mt-3 grid gap-2 text-sm">
+      <div class="staff-field-row"><dt>{{ t('staff_gym_assistant_status') }}</dt><dd>{{ member_status.billing_status or t('not_available') }}</dd></div>
+      <div class="staff-field-row"><dt>{{ t('staff_portal_status') }}</dt><dd>{% if member_status.portal_active is sameas true %}{{ t('status_active') }}{% elif member_status.portal_active is sameas false %}{{ t('status_inactive') }}{% else %}{{ t('status_unknown') }}{% endif %}</dd></div>
+      <div class="staff-field-row"><dt>{{ t('billing_option') }}</dt><dd>{{ member.billing_option or t('not_available') }}</dd></div>
+      <div class="staff-field-row"><dt>{{ t('billing_amount') }}</dt><dd>${{ '%.2f'|format(member.billing_amount or 0) }}</dd></div>
+      <div class="staff-field-row"><dt>{{ t('due_date') }}</dt><dd>{{ member.due_date|format_date if member.due_date else t('not_available') }}</dd></div>
+      <div class="staff-field-row"><dt>{{ t('next_payment') }}</dt><dd>{{ next_payment|format_date if next_payment else t('not_available') }}</dd></div>
+      <div class="staff-field-row"><dt>{{ t('last_payment') }}</dt><dd>{{ member.last_payment|format_date if member.last_payment else t('not_available') }}</dd></div>
+      <div class="staff-field-row"><dt>{{ t('last_paid_amount') }}</dt><dd>${{ '%.2f'|format(member.last_payment_amount or 0) }}</dd></div>
+      <div class="staff-field-row"><dt>{{ t('open_gym_balance') }}</dt><dd class="{% if gym_balance > 0 %}text-yellow-300{% endif %}">${{ '%.2f'|format(gym_balance) }}</dd></div>
+    </dl>
+  </section>
+
+  <section class="rounded border border-gray-700 bg-gray-800/40 p-4">
+    <h3 class="text-base font-semibold text-yellow-300">{{ t('staff_contact_identity') }}</h3>
     <dl class="mt-3 grid gap-2 text-sm">
       <div class="staff-field-row"><dt>{{ t('name') }}</dt><dd>{{ member.name or t('not_available') }}</dd></div>
       <div class="staff-field-row"><dt>{{ t('email') }}</dt><dd>{{ member.email or t('not_available') }}</dd></div>
       <div class="staff-field-row"><dt>{{ t('phone') }}</dt><dd>{{ member.phone or t('not_available') }}</dd></div>
       <div class="staff-field-row"><dt>{{ t('mobile') }}</dt><dd>{{ member.mobile or t('not_available') }}</dd></div>
-      <div class="staff-field-row"><dt>{{ t('visits') }}</dt><dd>{{ member.visits or t('not_available') }}</dd></div>
+      <div class="staff-field-row"><dt>{{ t('birthdate') }}</dt><dd>{{ member.birthdate|format_date if member.birthdate else t('not_available') }}</dd></div>
+      <div class="staff-field-row"><dt>{{ t('documents') }}</dt><dd>{{ document_count }}</dd></div>
     </dl>
   </section>
 
   <section class="rounded border border-gray-700 bg-gray-800/40 p-4">
-    <h3 class="text-base font-semibold text-yellow-300">{{ t('membership_status') }}</h3>
+    <h3 class="text-base font-semibold text-yellow-300">{{ t('staff_activity_snapshot') }}</h3>
     <dl class="mt-3 grid gap-2 text-sm">
-      <div class="staff-field-row"><dt>{{ t('membership_type') }}</dt><dd>{{ member.plan_type or t('not_available') }}</dd></div>
-      <div class="staff-field-row"><dt>{{ t('contract_type') }}</dt><dd>{{ member.contract_type or t('not_available') }}</dd></div>
+      <div class="staff-field-row"><dt>{{ t('visits') }}</dt><dd>{{ member.visits if member.visits is not none else t('not_available') }}</dd></div>
       <div class="staff-field-row"><dt>{{ t('signup_date') }}</dt><dd>{{ member.signup_date|format_date if member.signup_date else t('not_available') }}</dd></div>
       <div class="staff-field-row"><dt>{{ t('contract_begin') }}</dt><dd>{{ member.start_date|format_date if member.start_date else t('not_available') }}</dd></div>
       <div class="staff-field-row"><dt>{{ t('contract_end') }}</dt><dd>{{ member.end_date|format_date if member.end_date else t('not_available') }}</dd></div>
-    </dl>
-  </section>
-
-  <section class="rounded border border-gray-700 bg-gray-800/40 p-4">
-    <h3 class="text-base font-semibold text-yellow-300">{{ t('payment_information') }}</h3>
-    <dl class="mt-3 grid gap-2 text-sm">
-      <div class="staff-field-row"><dt>{{ t('billing_amount') }}</dt><dd>${{ '%.2f'|format(member.billing_amount or 0) }}</dd></div>
-      <div class="staff-field-row"><dt>{{ t('next_payment') }}</dt><dd>{{ next_payment|format_date if next_payment else t('not_available') }}</dd></div>
-      <div class="staff-field-row"><dt>{{ t('last_payment') }}</dt><dd>{{ member.last_payment|format_date if member.last_payment else t('not_available') }}</dd></div>
-      <div class="staff-field-row"><dt>{{ t('outstanding_balance') }}</dt><dd>${{ '%.2f'|format(gym_balance) }}</dd></div>
-      <div class="staff-field-row"><dt>{{ t('documents') }}</dt><dd>{{ document_count }}</dd></div>
+      <div class="staff-field-row"><dt>{{ t('staff_sync_source') }}</dt><dd>{{ sync_context.latest.source if sync_context.latest else t('not_available') }}</dd></div>
+      <div class="staff-field-row"><dt>{{ t('payment_status') }}</dt><dd>{{ payment_status }}</dd></div>
     </dl>
   </section>
 </div>
 
 {% if documents %}
-  <section class="mt-4 rounded border border-gray-700 bg-gray-800/40 p-4">
-    <h3 class="text-base font-semibold text-yellow-300">{{ t('documents') }}</h3>
+  <section id="member-documents" class="mt-4 rounded border border-gray-700 bg-gray-800/40 p-4">
+    <div class="flex items-center justify-between gap-3">
+      <h3 class="text-base font-semibold text-yellow-300">{{ t('documents') }}</h3>
+      <span class="rounded bg-gray-900/70 px-3 py-1 text-xs font-semibold text-gray-300">{{ document_count }}</span>
+    </div>
     <div class="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
       {% for document in documents %}
         <a class="rounded border border-gray-700 bg-gray-900/70 p-3 text-sm hover:border-yellow-400" href="{{ url_for('view_member_document', document_id=document.id) }}">
@@ -93,4 +119,43 @@
     </div>
   </section>
 {% endif %}
+
+<section class="mt-4 rounded border border-gray-700 bg-gray-800/40 p-4">
+  <div class="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+    <div>
+      <h3 class="text-base font-semibold text-yellow-300">{{ t('staff_recent_sync_changes') }}</h3>
+      {% if sync_context.latest %}
+        <p class="text-xs text-gray-400">{{ t('staff_latest_sync') }}: {{ sync_context.latest.run_time }} &middot; {{ sync_context.latest.source }}</p>
+      {% endif %}
+    </div>
+  </div>
+  {% if sync_context.changes %}
+    <div class="mt-3 overflow-x-auto rounded border border-gray-700">
+      <table class="min-w-full text-sm">
+        <thead class="bg-gray-800 text-xs uppercase tracking-wide text-gray-400">
+          <tr>
+            <th class="p-2 text-left">{{ t('staff_time') }}</th>
+            <th class="p-2 text-left">{{ t('staff_field') }}</th>
+            <th class="p-2 text-left">{{ t('staff_from') }}</th>
+            <th class="p-2 text-left">{{ t('staff_to') }}</th>
+            <th class="p-2 text-left">{{ t('staff_source') }}</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-800">
+          {% for change in sync_context.changes %}
+            <tr>
+              <td class="whitespace-nowrap p-2 text-xs text-gray-400">{{ change.run_time }}</td>
+              <td class="whitespace-nowrap p-2 font-semibold text-gray-100">{{ change.label }}</td>
+              <td class="max-w-sm p-2 text-gray-300">{{ change.old if change.old is not none and change.old != '' else t('staff_empty_value') }}</td>
+              <td class="max-w-sm p-2 text-white">{{ change.new if change.new is not none and change.new != '' else t('staff_empty_value') }}</td>
+              <td class="whitespace-nowrap p-2 text-xs text-gray-400">{{ change.source }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="mt-3 rounded border border-gray-700 bg-gray-900/60 p-3 text-sm text-gray-300">{{ t('staff_no_recent_sync_changes') }}</p>
+  {% endif %}
+</section>
 {% endblock %}

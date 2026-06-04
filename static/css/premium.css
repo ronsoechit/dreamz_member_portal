@@ -295,6 +295,7 @@ body.staff-app-body .staff-page-heading h2 {
 }
 
 body.staff-app-body .staff-member-summary,
+body.staff-app-body .staff-member-command,
 body.staff-app-body .staff-member-grid section {
   padding: 1rem !important;
 }
@@ -308,6 +309,30 @@ body.staff-app-body .staff-member-grid section {
 .staff-member-photo .member-photo-frame .h-24 {
   width: 3.2rem !important;
   height: 3.2rem !important;
+}
+
+.staff-kpi {
+  min-height: 5rem;
+  border: 1px solid rgba(71, 85, 105, 0.8);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.52);
+  padding: 0.85rem;
+}
+
+.staff-kpi-label {
+  color: #93a4bc;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.staff-kpi-value {
+  margin-top: 0.35rem;
+  color: #f8fafc;
+  font-size: 1rem;
+  font-weight: 750;
+  overflow-wrap: anywhere;
 }
 
 .staff-field-row {

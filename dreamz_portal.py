@@ -4776,6 +4776,51 @@ def visible_sync_change(change):
     return True
 
 
+SYNC_STATUS_BOOL_VALUES = {
+    "ACTIVE": True,
+    "INACTIVE": False,
+}
+
+
+def sync_bool_value(value):
+    if isinstance(value, bool):
+        return value
+    normalized = str(value or "").strip().lower()
+    if normalized in {"true", "1", "yes", "active"}:
+        return True
+    if normalized in {"false", "0", "no", "inactive"}:
+        return False
+    return None
+
+
+def duplicate_active_status_change(changes, change):
+    change = change or {}
+    if change.get("field") != "is_active":
+        return False
+    old_bool = sync_bool_value(change.get("old"))
+    new_bool = sync_bool_value(change.get("new"))
+    if old_bool is None or new_bool is None:
+        return False
+    for other in changes or []:
+        other = other or {}
+        if other.get("field") != "billing_status":
+            continue
+        other_old = SYNC_STATUS_BOOL_VALUES.get(str(other.get("old") or "").strip().upper())
+        other_new = SYNC_STATUS_BOOL_VALUES.get(str(other.get("new") or "").strip().upper())
+        if old_bool == other_old and new_bool == other_new:
+            return True
+    return False
+
+
+def display_sync_changes(changes):
+    visible_changes = [change for change in changes or [] if visible_sync_change(change)]
+    return [
+        change
+        for change in visible_changes
+        if not duplicate_active_status_change(visible_changes, change)
+    ]
+
+
 def document_signature(record):
     return {
         "document_type": record.get("document_type") or "other",
@@ -4848,9 +4893,7 @@ def daily_sync_changes(selected_date):
                 "plan_type": item.get("plan_type") or "",
                 "changes": [],
             })
-            for change in item.get("changes", []):
-                if not visible_sync_change(change):
-                    continue
+            for change in display_sync_changes(item.get("changes", [])):
                 entry["changes"].append({**change, "run_time": run_time})
             if not entry["changes"]:
                 changed_members.pop(member_id, None)
@@ -10846,6 +10889,101 @@ def staff_data_audit_csv():
     )
 
 
+def staff_member_status_context(member):
+    billing_status = (member.billing_status or "").strip().upper()
+    active = member.is_active is True
+    inactive = member.is_active is False or billing_status == "INACTIVE"
+    if active and billing_status == "ACTIVE":
+        label_key = "status_active"
+        badge_class = "bg-green-500/15 text-green-200 border-green-400/40"
+    elif inactive:
+        label_key = "status_inactive"
+        badge_class = "bg-red-500/15 text-red-100 border-red-400/40"
+    else:
+        label_key = "status_unknown"
+        badge_class = "bg-gray-700/60 text-gray-200 border-gray-600"
+    return {
+        "label_key": label_key,
+        "badge_class": badge_class,
+        "billing_status": billing_status or None,
+        "portal_active": member.is_active,
+    }
+
+
+def staff_member_due_context(member, today=None):
+    today = today or local_datetime(datetime.now(timezone.utc)).date()
+    due_date = member.due_date or member.next_payment
+    if not due_date:
+        return {
+            "label_key": "status_unknown",
+            "badge_class": "bg-gray-700/60 text-gray-200 border-gray-600",
+            "date": None,
+        }
+    if due_date < today:
+        label_key = "overdue"
+        badge_class = "bg-red-500/15 text-red-100 border-red-400/40"
+    elif due_date == today:
+        label_key = "due_today"
+        badge_class = "bg-yellow-500/15 text-yellow-100 border-yellow-400/40"
+    else:
+        label_key = "status_upcoming"
+        badge_class = "bg-blue-500/15 text-blue-100 border-blue-400/40"
+    return {"label_key": label_key, "badge_class": badge_class, "date": due_date}
+
+
+def latest_member_sync_context(member_id, limit=6):
+    member_id = str(member_id)
+    language = current_language()
+    recent_changes = []
+    latest_seen = None
+    for run in SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc()).limit(80).all():
+        summary = sync_change_summary_for_template(run)
+        run_time = run.completed_at or run.started_at
+        run_label = format_date(run_time, "%d/%m/%Y %H:%M") if run_time else ""
+        source = run.source or "sync-agent"
+        seen_in_run = False
+        for section_name in ("changed_members", "new_members", "suspicious_name_changes"):
+            for item in summary.get(section_name, []):
+                if str(item.get("member_id") or "") != member_id:
+                    continue
+                seen_in_run = True
+                if section_name == "changed_members":
+                    for change in display_sync_changes(item.get("changes", [])):
+                        recent_changes.append({
+                            **change,
+                            "run_time": run_label,
+                            "source": source,
+                        })
+                elif section_name == "new_members":
+                    recent_changes.append({
+                        "label": translated_text("staff_new_member_change", language),
+                        "old": "",
+                        "new": item.get("plan_type") or "",
+                        "run_time": run_label,
+                        "source": source,
+                    })
+                else:
+                    recent_changes.append({
+                        "label": translated_text("staff_suspicious_name_change", language),
+                        "old": item.get("parsed_old") or item.get("raw_old") or "",
+                        "new": item.get("parsed_new") or item.get("raw_new") or "",
+                        "run_time": run_label,
+                        "source": item.get("source") or source,
+                    })
+        if seen_in_run and latest_seen is None:
+            latest_seen = {
+                "run_time": run_label,
+                "source": source,
+                "status": run.status,
+            }
+        if len(recent_changes) >= limit and latest_seen:
+            break
+    return {
+        "latest": latest_seen,
+        "changes": recent_changes[:limit],
+    }
+
+
 @app.get("/staff/members/<member_id>")
 def staff_member_detail(member_id):
     require_staff_access()
@@ -10853,6 +10991,11 @@ def staff_member_detail(member_id):
     documents = optional_dashboard_value("staff_member_documents", [], lambda: member_documents(member))
     coach_counts = optional_dashboard_value("staff_member_coach_counts", {"total": 0}, lambda: coach_data_counts(member.member_id))
     next_payment = member.next_payment or compute_next_payment(member)
+    sync_context = optional_dashboard_value(
+        "staff_member_sync_context",
+        {"latest": None, "changes": []},
+        lambda: latest_member_sync_context(member.member_id),
+    )
     return render_template(
         "staff_member_detail.html",
         member=member,
@@ -10864,6 +11007,9 @@ def staff_member_detail(member_id):
         next_payment=next_payment,
         gym_balance=member.balance or 0.0,
         payment_status=localized_payment_status(payment_status_for_member(member), current_language()),
+        member_status=staff_member_status_context(member),
+        due_status=staff_member_due_context(member),
+        sync_context=sync_context,
     )
 
 
