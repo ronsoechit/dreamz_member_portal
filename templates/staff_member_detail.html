@@ -98,7 +98,7 @@
       <div class="staff-field-row"><dt>{{ t('contract_begin') }}</dt><dd>{{ member.start_date|format_date if member.start_date else t('not_available') }}</dd></div>
       <div class="staff-field-row"><dt>{{ t('contract_end') }}</dt><dd>{{ member.end_date|format_date if member.end_date else t('not_available') }}</dd></div>
       <div class="staff-field-row"><dt>{{ t('staff_sync_source') }}</dt><dd>{{ sync_context.latest.source if sync_context.latest else t('not_available') }}</dd></div>
-      <div class="staff-field-row"><dt>{{ t('payment_status') }}</dt><dd>{{ payment_status }}</dd></div>
+      <div class="staff-field-row"><dt>{{ t('payment_status') }}</dt><dd>{{ payment_status.label if payment_status.label is defined else payment_status }}</dd></div>
     </dl>
   </section>
 </div>

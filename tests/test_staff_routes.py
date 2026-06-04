@@ -1343,13 +1343,25 @@ class StaffRouteTests(unittest.TestCase):
 
     def test_manager_can_open_staff_member_detail(self):
         self.add_member()
+        db.session.add(SyncRun(
+            source="unit-test",
+            status="success",
+            started_at=datetime(2026, 6, 4, 8, 5),
+            completed_at=datetime(2026, 6, 4, 8, 6),
+            change_summary=json.dumps({"new_members": [], "changed_members": [], "document_changes": []}),
+        ))
+        db.session.commit()
         with self.client.session_transaction() as sess:
             sess["staff_role"] = "manager"
 
         response = self.client.get("/staff/members/1206")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Staff member view", response.get_data(as_text=True))
+        body = response.get_data(as_text=True)
+        self.assertIn("Staff member view", body)
+        self.assertIn("Latest sync", body)
+        self.assertIn("unit-test", body)
+        self.assertNotIn("{&#39;status&#39;:", body)
 
     def test_staff_member_detail_explains_member_only_cancellation_button(self):
         today = date.today()
@@ -1370,6 +1382,8 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("Membership &amp; billing", body)
         self.assertIn("Contact &amp; identity", body)
         self.assertIn("Recent sync changes", body)
+        self.assertIn("Payment data may be stale", body)
+        self.assertNotIn("{&#39;status&#39;:", body)
         self.assertNotIn("I want to cancel my contract", body)
 
     def test_manager_can_view_staff_member_document(self):

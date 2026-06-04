@@ -10935,18 +10935,25 @@ def latest_member_sync_context(member_id, limit=6):
     member_id = str(member_id)
     language = current_language()
     recent_changes = []
+    runs = SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc()).limit(600).all()
     latest_seen = None
-    for run in SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc()).limit(80).all():
+    if runs:
+        latest_run = runs[0]
+        latest_time = latest_run.completed_at or latest_run.started_at
+        latest_seen = {
+            "run_time": format_date(latest_time, "%d/%m/%Y %H:%M") if latest_time else "",
+            "source": latest_run.source or "sync-agent",
+            "status": latest_run.status,
+        }
+    for run in runs:
         summary = sync_change_summary_for_template(run)
         run_time = run.completed_at or run.started_at
         run_label = format_date(run_time, "%d/%m/%Y %H:%M") if run_time else ""
         source = run.source or "sync-agent"
-        seen_in_run = False
         for section_name in ("changed_members", "new_members", "suspicious_name_changes"):
             for item in summary.get(section_name, []):
                 if str(item.get("member_id") or "") != member_id:
                     continue
-                seen_in_run = True
                 if section_name == "changed_members":
                     for change in display_sync_changes(item.get("changes", [])):
                         recent_changes.append({
@@ -10970,13 +10977,7 @@ def latest_member_sync_context(member_id, limit=6):
                         "run_time": run_label,
                         "source": item.get("source") or source,
                     })
-        if seen_in_run and latest_seen is None:
-            latest_seen = {
-                "run_time": run_label,
-                "source": source,
-                "status": run.status,
-            }
-        if len(recent_changes) >= limit and latest_seen:
+        if len(recent_changes) >= limit:
             break
     return {
         "latest": latest_seen,
