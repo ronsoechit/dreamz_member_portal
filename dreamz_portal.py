@@ -101,6 +101,7 @@ app.config["SQLALCHEMY_DATABASE_URI"] = normalize_database_uri(
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["STAFF_TOKEN"] = os.getenv("STAFF_TOKEN")
 app.config["SYNC_API_TOKEN"] = os.getenv("SYNC_API_TOKEN")
+app.config["FEP_API_TOKEN"] = os.getenv("FEP_API_TOKEN")
 app.config["STAFF_ADMIN_USERNAME"] = os.getenv("STAFF_ADMIN_USERNAME", "ron")
 app.config["STAFF_ADMIN_PASSWORD"] = os.getenv("STAFF_ADMIN_PASSWORD", "dreamz-admin-dev")
 app.config["STAFF_MANAGER_USERNAME"] = os.getenv("STAFF_MANAGER_USERNAME", "manager")
@@ -8041,6 +8042,22 @@ def require_sync_access():
         abort(403, "Sync API access denied.")
 
 
+def require_fep_access():
+    expected_token = (
+        app.config.get("FEP_API_TOKEN")
+        or os.getenv("FEP_API_TOKEN")
+        or app.config.get("SYNC_API_TOKEN")
+        or os.getenv("SYNC_API_TOKEN")
+    )
+    auth_header = request.headers.get("Authorization", "")
+    bearer_token = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""
+    supplied_token = request.headers.get("X-FEP-Token") or bearer_token
+    if not expected_token:
+        abort(503, "FEP API token is not configured.")
+    if not supplied_token or not secrets.compare_digest(str(supplied_token), str(expected_token)):
+        abort(403, "FEP API access denied.")
+
+
 def require_staff_access(required_role=None):
     role = current_staff_role()
     if role:
@@ -9606,6 +9623,60 @@ def api_sync_members():
         "members_updated": sync_run.members_updated,
         "documents_received": sync_run.documents_received,
     }
+
+
+def fep_member_snapshot_row(member):
+    return {
+        "member_id": str(member.member_id or ""),
+        "name": member.name or "",
+        "display_name": display_member_name(member.name) or member.name or "",
+        "email": member.email or "",
+        "phone": member.phone or member.mobile or "",
+        "plan_type": member.plan_type or "",
+        "contract_type": member.contract_type or "",
+        "billing_status": member.billing_status or "",
+        "billing_option": member.billing_option or "",
+        "billing_type": member.billing_type or "",
+        "billing_amount": float(member.billing_amount or 0),
+        "balance": float(member.balance or 0),
+        "last_payment": change_value(member.last_payment),
+        "last_payment_amount": float(member.last_payment_amount or 0),
+        "next_payment": change_value(member.next_payment),
+        "due_date": change_value(member.due_date),
+        "start_date": change_value(member.start_date),
+        "end_date": change_value(member.end_date),
+        "is_active": member.is_active if member.is_active is not None else None,
+    }
+
+
+def fep_latest_sync_meta():
+    latest = SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc()).first()
+    if not latest:
+        return None
+    return {
+        "id": latest.id,
+        "status": latest.status,
+        "source": latest.source,
+        "started_at": change_value(latest.started_at),
+        "completed_at": change_value(latest.completed_at),
+        "members_received": latest.members_received,
+        "members_new": latest.members_new,
+        "members_updated": latest.members_updated,
+        "error": latest.error or "",
+    }
+
+
+@app.get("/api/fep/member-snapshot")
+def api_fep_member_snapshot():
+    require_fep_access()
+    ensure_runtime_schema()
+    members = Member.query.order_by(Member.member_id.asc()).all()
+    return jsonify({
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "member_count": len(members),
+        "latest_sync": fep_latest_sync_meta(),
+        "members": [fep_member_snapshot_row(member) for member in members],
+    })
 
 
 def safe_storage_upload_key(raw_key):
