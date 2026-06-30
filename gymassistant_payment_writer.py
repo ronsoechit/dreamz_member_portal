@@ -241,6 +241,13 @@ def find_open_payment_dialog(member_id: str | None = None) -> int | None:
     return None
 
 
+def find_transaction_payment_dialog() -> int | None:
+    for info in enum_top_windows():
+        if info.visible and info.text.startswith("Transaction - Member Payment"):
+            return info.hwnd
+    return None
+
+
 def dialog_texts(hwnd: int) -> list[str]:
     texts = [window_text(hwnd)]
     for child in enum_children(hwnd):
@@ -496,15 +503,43 @@ def cancel_dialog(dialog_hwnd: int) -> None:
     click_button(cancel.hwnd)
 
 
-def apply_payment(dialog_hwnd: int, timeout: float) -> None:
+def apply_payment(dialog_hwnd: int, timeout: float, payment_method: str = "Credit Card") -> None:
     children = enum_children(dialog_hwnd)
     record = find_child(children, text="&Record Payment", class_name_="Button", enabled=True)
     click_button(record.hwnd)
 
-    def dialog_closed():
-        return not find_open_payment_dialog()
+    deadline = time.time() + timeout
+    transaction_hwnd = None
+    while time.time() < deadline:
+        transaction_hwnd = find_transaction_payment_dialog()
+        if transaction_hwnd:
+            break
+        if not find_open_payment_dialog():
+            grace_deadline = min(deadline, time.time() + 1.0)
+            while time.time() < grace_deadline:
+                transaction_hwnd = find_transaction_payment_dialog()
+                if transaction_hwnd:
+                    break
+                time.sleep(0.1)
+            if not transaction_hwnd:
+                return
+            break
+        time.sleep(0.1)
 
-    wait_until(dialog_closed, timeout, "Timed out waiting for Gym Assistant payment dialog to close after applying payment.")
+    if not transaction_hwnd:
+        raise RuntimeError("Timed out waiting for Gym Assistant payment transaction dialog.")
+
+    if not click_dialog_button(transaction_hwnd, {payment_method}):
+        raise RuntimeError(f"Could not find enabled payment method button {payment_method!r}.")
+
+    def transaction_closed():
+        return not find_transaction_payment_dialog()
+
+    wait_until(
+        transaction_closed,
+        timeout,
+        f"Timed out waiting for Gym Assistant transaction dialog to close after selecting {payment_method}.",
+    )
 
 
 def run_writer(
@@ -513,6 +548,7 @@ def run_writer(
     timeout: float,
     foreground_ui: bool = False,
     require_idle_seconds: float = 0,
+    payment_method: str = "Credit Card",
 ) -> dict:
     source_root = Path(stdin_payload.get("source_root") or r"D:\Dreamz Fitness\Gym Assistant 2.6")
     update = stdin_payload.get("update") or {}
@@ -578,7 +614,7 @@ def run_writer(
             "error": "Dry run only. Re-run with --apply to record the Gym Assistant payment.",
         }
 
-    apply_payment(dialog_hwnd, timeout)
+    apply_payment(dialog_hwnd, timeout, payment_method=payment_method)
     return {
         "status": "applied",
         "applied": True,
@@ -602,6 +638,11 @@ def main() -> int:
         help="With --apply, refuse to run unless the Windows desktop has been idle this many seconds.",
     )
     parser.add_argument("--timeout", type=float, default=15.0, help="Seconds to wait for Gym Assistant UI changes.")
+    parser.add_argument(
+        "--payment-method",
+        default="Credit Card",
+        help="Gym Assistant transaction payment method to click after Record Payment.",
+    )
     args = parser.parse_args()
 
     try:
@@ -613,6 +654,7 @@ def main() -> int:
             timeout=args.timeout,
             foreground_ui=args.foreground_ui,
             require_idle_seconds=args.require_idle_seconds,
+            payment_method=args.payment_method,
         )
         print(json.dumps(result, sort_keys=True))
         if result.get("status") == "deferred":
