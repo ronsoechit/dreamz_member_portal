@@ -519,12 +519,12 @@ def run_writer(
     member_id = str(update.get("member_id") or "").strip()
     if not member_id:
         raise RuntimeError("update.member_id is required.")
-    if apply and not foreground_ui:
+    if not foreground_ui:
         raise RuntimeError(
             "Refusing to drive the visible Gym Assistant UI without --foreground-ui. "
             "Use this only in a controlled session or on a dedicated/idle workstation."
         )
-    if apply and require_idle_seconds > 0:
+    if require_idle_seconds > 0:
         idle_seconds = desktop_idle_seconds()
         if idle_seconds < require_idle_seconds:
             return {
