@@ -288,6 +288,26 @@ def cancel_blocking_dialog(dialog: BlockingDialog) -> None:
     click_dialog_button(dialog.hwnd, {"Cancel"})
 
 
+def member_view_blocking_reason(main_hwnd: int) -> str | None:
+    texts = [child.text.strip() for child in enum_children(main_hwnd) if child.text and child.text.strip()]
+    for text in texts:
+        match = re.search(r"Dependent of\s+#(\d+)\s*(.*)", text, re.IGNORECASE)
+        if match:
+            responsible = " ".join(match.group(2).split()).strip()
+            responsible_label = f"#{match.group(1)}"
+            if responsible:
+                responsible_label = f"{responsible_label} {responsible}"
+            return f"member is a dependent of responsible member {responsible_label}; manual payment review required."
+
+    for index, text in enumerate(texts):
+        if text != "Linked Memberships:":
+            continue
+        linked_value = next((candidate for candidate in texts[index + 1 :] if candidate != "Linked Memberships:"), "")
+        if linked_value and linked_value.strip() != "- none -":
+            return f"member has linked membership data ({linked_value}); manual payment review required."
+    return None
+
+
 def wait_for_payment_dialog(member_id: str, timeout: float) -> int:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -531,6 +551,9 @@ def run_writer(
 
     main_hwnd = find_main_window(source_root)
     select_member(main_hwnd, member_id, timeout)
+    blocking_reason = member_view_blocking_reason(main_hwnd)
+    if blocking_reason:
+        raise RuntimeError(blocking_reason)
     dialog_hwnd = open_payment_dialog(main_hwnd, member_id, timeout)
     observed = inspect_payment_dialog(dialog_hwnd, update)
 
