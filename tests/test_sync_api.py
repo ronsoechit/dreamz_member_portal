@@ -12,13 +12,14 @@ if importlib.util.find_spec("flask") is None or importlib.util.find_spec("flask_
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
-from dreamz_portal import Member, MemberDocument, SyncRun, app, db  # noqa: E402
+from dreamz_portal import FepPaymentUpdate, Member, MemberDocument, SyncRun, app, db  # noqa: E402
 
 
 class SyncApiTests(unittest.TestCase):
     def setUp(self):
         app.config["TESTING"] = True
         app.config["SYNC_API_TOKEN"] = "sync-test-token"
+        app.config["FEP_API_TOKEN"] = "fep-test-token"
         app.config["_RUNTIME_SCHEMA_READY"] = False
         self.ctx = app.app_context()
         self.ctx.push()
@@ -31,7 +32,58 @@ class SyncApiTests(unittest.TestCase):
         db.drop_all()
         self.ctx.pop()
         app.config["SYNC_API_TOKEN"] = None
+        app.config["FEP_API_TOKEN"] = None
         app.config["_RUNTIME_SCHEMA_READY"] = False
+
+    def fep_headers(self, token="fep-test-token"):
+        return {
+            "X-FEP-Token": token,
+            "Authorization": f"Bearer {token}",
+        }
+
+    def add_direct_debit_member(self, **overrides):
+        data = {
+            "member_id": "34203",
+            "name": "Direct, Debit",
+            "billing_status": "ACTIVE",
+            "is_active": True,
+            "billing_amount": 60.0,
+            "balance": 0.0,
+            "last_payment": date(2026, 5, 29),
+            "last_payment_amount": 60.0,
+            "due_date": date(2026, 7, 1),
+            "next_payment": date(2026, 7, 1),
+        }
+        data.update(overrides)
+        member = Member(**data)
+        db.session.add(member)
+        db.session.commit()
+        return member
+
+    def fep_payment_payload(self, **overrides):
+        payload = {
+            "source": "fep_manager_bank_upload_auto",
+            "idempotency_key": "fep-bank-upload:522:123:700",
+            "upload_id": 522,
+            "upload_filename": "202607directdebits.txt",
+            "record_id": 123,
+            "client_number": "34203",
+            "mcb_account": "1234567890",
+            "name_owner": "Direct Debit",
+            "details": "JUL Dreamz Fitness",
+            "transaction_date": "20260629",
+            "member_id": "34203",
+            "member_name": "Direct, Debit",
+            "membership_period": "2026-07",
+            "bank_amount": "61.00",
+            "base_amount": "60.00",
+            "gym_billing_amount": "60.00",
+            "statement_id": 700,
+            "statement_date": "20260629",
+            "statement_description": "MCB direct debit",
+        }
+        payload.update(overrides)
+        return payload
 
     def test_sync_api_requires_token(self):
         response = self.client.post("/api/sync/members", json={"members": []})
@@ -606,6 +658,176 @@ class SyncApiTests(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("interrupted", body)
         self.assertIn("The next scheduled run can continue normally.", body)
+
+    def test_fep_payment_update_requires_token(self):
+        self.add_direct_debit_member()
+
+        response = self.client.post("/api/fep/payment-update", json=self.fep_payment_payload())
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_fep_payment_update_queues_without_mutating_member(self):
+        self.add_direct_debit_member()
+
+        response = self.client.post(
+            "/api/fep/payment-update",
+            json=self.fep_payment_payload(),
+            headers=self.fep_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json["ok"])
+        self.assertFalse(response.json["applied"])
+        self.assertTrue(response.json["queued"])
+        self.assertEqual(response.json["status"], "pending_gym_assistant_apply")
+        member = Member.query.filter_by(member_id="34203").one()
+        self.assertEqual(member.last_payment, date(2026, 5, 29))
+        self.assertEqual(member.next_payment, date(2026, 7, 1))
+        record = FepPaymentUpdate.query.one()
+        self.assertEqual(record.member_id, "34203")
+        self.assertIn("***7890", record.request_payload_json)
+        self.assertNotIn("1234567890", record.request_payload_json)
+        self.assertIn("\"next_payment\": \"2026-08-01\"", record.new_values_json)
+
+    def test_fep_payment_update_duplicate_is_idempotent(self):
+        self.add_direct_debit_member()
+        payload = self.fep_payment_payload()
+
+        first = self.client.post("/api/fep/payment-update", json=payload, headers=self.fep_headers())
+        second = self.client.post("/api/fep/payment-update", json=payload, headers=self.fep_headers())
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertTrue(second.json["duplicate"])
+        self.assertFalse(second.json["applied"])
+        self.assertEqual(FepPaymentUpdate.query.count(), 1)
+
+    def test_fep_payment_update_rejects_idempotency_payload_conflict(self):
+        self.add_direct_debit_member()
+        payload = self.fep_payment_payload()
+        self.client.post("/api/fep/payment-update", json=payload, headers=self.fep_headers())
+
+        changed_payload = self.fep_payment_payload(statement_description="different statement")
+        response = self.client.post("/api/fep/payment-update", json=changed_payload, headers=self.fep_headers())
+
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(response.json["ok"])
+        self.assertIn("different payload", response.json["error"])
+        self.assertEqual(FepPaymentUpdate.query.count(), 1)
+
+    def test_fep_payment_update_rejects_amount_mismatch(self):
+        self.add_direct_debit_member()
+
+        response = self.client.post(
+            "/api/fep/payment-update",
+            json=self.fep_payment_payload(base_amount="55.00", gym_billing_amount="55.00"),
+            headers=self.fep_headers(),
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(response.json["ok"])
+        self.assertIn("does not match member billing_amount", response.json["error"])
+        self.assertEqual(FepPaymentUpdate.query.count(), 0)
+
+    def test_fep_payment_update_rejects_dependent_member(self):
+        self.add_direct_debit_member(responsible_member_id="17436")
+
+        response = self.client.post(
+            "/api/fep/payment-update",
+            json=self.fep_payment_payload(),
+            headers=self.fep_headers(),
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(response.json["ok"])
+        self.assertIn("dependent of responsible member #17436", response.json["error"])
+        self.assertEqual(FepPaymentUpdate.query.count(), 0)
+
+    def test_fep_payment_update_rejects_member_with_dependents(self):
+        self.add_direct_debit_member(dependent_member_ids="28193")
+
+        response = self.client.post(
+            "/api/fep/payment-update",
+            json=self.fep_payment_payload(),
+            headers=self.fep_headers(),
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(response.json["ok"])
+        self.assertIn("linked dependent membership", response.json["error"])
+        self.assertEqual(FepPaymentUpdate.query.count(), 0)
+
+    def test_fep_payment_update_rejects_period_when_current_due_does_not_match(self):
+        self.add_direct_debit_member(due_date=date(2026, 6, 1), next_payment=date(2026, 6, 1))
+
+        response = self.client.post(
+            "/api/fep/payment-update",
+            json=self.fep_payment_payload(),
+            headers=self.fep_headers(),
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(response.json["ok"])
+        self.assertIn("does not match membership_period", response.json["error"])
+        self.assertEqual(FepPaymentUpdate.query.count(), 0)
+
+    def test_sync_agent_queue_result_and_member_sync_confirmation(self):
+        self.add_direct_debit_member()
+        self.client.post("/api/fep/payment-update", json=self.fep_payment_payload(), headers=self.fep_headers())
+
+        queue_response = self.client.get(
+            "/api/sync/fep-payment-updates",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(queue_response.status_code, 200)
+        update = queue_response.json["updates"][0]
+        self.assertEqual(update["member_id"], "34203")
+        self.assertEqual(update["target_values"]["last_payment"], "2026-06-29")
+        self.assertEqual(update["target_values"]["next_payment"], "2026-08-01")
+
+        result_response = self.client.post(
+            f"/api/sync/fep-payment-updates/{update['id']}/result",
+            json={"status": "applied", "writer": "unit-test"},
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(result_response.status_code, 200)
+        record = FepPaymentUpdate.query.one()
+        self.assertEqual(record.status, "applied_to_gym_assistant")
+        record.applied_at = datetime(2026, 6, 30, 12, 0)
+        db.session.commit()
+        member = Member.query.filter_by(member_id="34203").one()
+        self.assertEqual(member.next_payment, date(2026, 7, 1))
+
+        sync_response = self.client.post(
+            "/api/sync/members",
+            json={
+                "source": "unit-test-gymassistant-sync",
+                "members": [
+                    {
+                        "member_id": "34203",
+                        "last_payment": "2026-06-30",
+                        "last_payment_amount": 60.0,
+                        "due_date": "2026-08-01",
+                        "next_payment": "2026-08-01",
+                        "billing_status": "ACTIVE",
+                        "is_active": True,
+                        "billing_amount": 60.0,
+                        "balance": 0.0,
+                    }
+                ],
+            },
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(sync_response.status_code, 200)
+        db.session.refresh(record)
+        db.session.refresh(member)
+        self.assertEqual(record.status, "confirmed_by_gym_assistant_sync")
+        self.assertIsNotNone(record.confirmed_at)
+        self.assertEqual(member.last_payment, date(2026, 6, 30))
+        self.assertEqual(member.next_payment, date(2026, 8, 1))
 
 
 if __name__ == "__main__":

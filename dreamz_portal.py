@@ -6,6 +6,7 @@ import os
 import platform
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from decimal import Decimal, InvalidOperation
 from time import perf_counter
 
 if os.name == "nt":
@@ -241,6 +242,8 @@ class Member(db.Model):
     photo_path       = db.Column(db.String)
     password_hash    = db.Column(db.String(512))
     password_set_at  = db.Column(db.DateTime)
+    responsible_member_id = db.Column(db.String, index=True)
+    dependent_member_ids  = db.Column(db.Text)
 
 
 class MemberDocument(db.Model):
@@ -638,6 +641,37 @@ class SyncRun(db.Model):
     documents_received = db.Column(db.Integer, default=0, nullable=False)
     change_summary = db.Column(db.Text)
     error = db.Column(db.Text)
+
+
+class FepPaymentUpdate(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    idempotency_key = db.Column(db.String, unique=True, nullable=False, index=True)
+    source = db.Column(db.String, nullable=False, index=True)
+    status = db.Column(db.String, default="received", nullable=False, index=True)
+    member_id = db.Column(db.String, nullable=False, index=True)
+    member_name = db.Column(db.String)
+    membership_period = db.Column(db.String, nullable=False, index=True)
+    upload_id = db.Column(db.Integer, index=True)
+    upload_filename = db.Column(db.String)
+    record_id = db.Column(db.Integer, index=True)
+    statement_id = db.Column(db.Integer, index=True)
+    transaction_date = db.Column(db.Date)
+    statement_date = db.Column(db.Date)
+    bank_amount = db.Column(db.Float)
+    base_amount = db.Column(db.Float)
+    gym_billing_amount = db.Column(db.Float)
+    request_payload_hash = db.Column(db.String, nullable=False, index=True)
+    request_payload_json = db.Column(db.Text)
+    old_values_json = db.Column(db.Text)
+    new_values_json = db.Column(db.Text)
+    result_json = db.Column(db.Text)
+    actor = db.Column(db.String)
+    error = db.Column(db.Text)
+    apply_attempts = db.Column(db.Integer, default=0, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    applied_at = db.Column(db.DateTime)
+    confirmed_at = db.Column(db.DateTime)
 
 
 class MemberLoginCode(db.Model):
@@ -2133,6 +2167,8 @@ def ensure_runtime_schema():
     ensure_model_column("group_class_occurrence", "status", "VARCHAR DEFAULT 'scheduled' NOT NULL")
     ensure_model_column("member", "password_hash", "VARCHAR(512)")
     ensure_model_column("member", "password_set_at", "TIMESTAMP")
+    ensure_model_column("member", "responsible_member_id", "VARCHAR")
+    ensure_model_column("member", "dependent_member_ids", "TEXT")
     db.create_all()
     seed_default_settings()
     seed_default_staff_users()
@@ -4516,6 +4552,408 @@ def route_document_type_key(document_type):
     return route_map.get(document_type, document_type)
 
 
+FEP_PAYMENT_STATUS_RECEIVED = "received"
+FEP_PAYMENT_STATUS_PENDING = "pending_gym_assistant_apply"
+FEP_PAYMENT_STATUS_APPLIED = "applied_to_gym_assistant"
+FEP_PAYMENT_STATUS_CONFIRMED = "confirmed_by_gym_assistant_sync"
+FEP_PAYMENT_STATUS_REJECTED = "rejected"
+FEP_PAYMENT_STATUS_FAILED = "failed"
+FEP_PAYMENT_WRITTEN_STATUSES = {
+    FEP_PAYMENT_STATUS_APPLIED,
+    FEP_PAYMENT_STATUS_CONFIRMED,
+}
+FEP_PAYMENT_CENT = Decimal("0.01")
+
+
+class FepPaymentReject(ValueError):
+    def __init__(self, message, status_code=400):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def stable_json_hash(payload):
+    serialized = json.dumps(payload or {}, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def masked_fep_payload(payload):
+    masked = dict(payload or {})
+    account = str(masked.get("mcb_account") or "").strip()
+    if account:
+        visible = account[-4:] if len(account) >= 4 else account
+        masked["mcb_account"] = f"***{visible}"
+    return masked
+
+
+def json_text(payload):
+    return json.dumps(payload or {}, ensure_ascii=True, sort_keys=True, default=str)
+
+
+def parse_fep_money(value, field_name, required=True):
+    if value in (None, ""):
+        if required:
+            raise FepPaymentReject(f"{field_name} is required.", 400)
+        return None
+    try:
+        amount = Decimal(str(value).strip()).quantize(FEP_PAYMENT_CENT)
+    except (InvalidOperation, ValueError):
+        raise FepPaymentReject(f"{field_name} must be a valid money amount.", 400)
+    if amount < 0:
+        raise FepPaymentReject(f"{field_name} cannot be negative.", 400)
+    return amount
+
+
+def decimal_money(value):
+    if value in (None, ""):
+        return Decimal("0.00")
+    try:
+        return Decimal(str(value)).quantize(FEP_PAYMENT_CENT)
+    except (InvalidOperation, ValueError):
+        return Decimal("0.00")
+
+
+def money_matches(left, right, tolerance=FEP_PAYMENT_CENT):
+    return abs(decimal_money(left) - decimal_money(right)) <= tolerance
+
+
+def parse_fep_yyyymmdd(value, field_name, required=True):
+    text = str(value or "").strip()
+    if not text:
+        if required:
+            raise FepPaymentReject(f"{field_name} is required.", 400)
+        return None
+    try:
+        return datetime.strptime(text, "%Y%m%d").date()
+    except ValueError:
+        raise FepPaymentReject(f"{field_name} must use YYYYMMDD format.", 400)
+
+
+def parse_fep_int(value, field_name, required=False):
+    if value in (None, ""):
+        if required:
+            raise FepPaymentReject(f"{field_name} is required.", 400)
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise FepPaymentReject(f"{field_name} must be an integer.", 400)
+
+
+def parse_fep_membership_period(value):
+    text = str(value or "").strip()
+    if not re.match(r"^\d{4}-\d{2}$", text):
+        raise FepPaymentReject("membership_period must use YYYY-MM format.", 400)
+    year, month = [int(part) for part in text.split("-", 1)]
+    try:
+        period_start = date(year, month, 1)
+    except ValueError:
+        raise FepPaymentReject("membership_period is not a valid month.", 400)
+    return text, period_start
+
+
+def due_date_after_membership_period(period_start):
+    return period_start + relativedelta(months=1)
+
+
+def member_active_for_fep_payment(member):
+    if getattr(member, "is_active", None) is False:
+        return False
+    billing_status = str(getattr(member, "billing_status", "") or "").strip().upper()
+    return getattr(member, "is_active", None) is True or billing_status == "ACTIVE"
+
+
+def linked_member_ids(value):
+    return [member_id for member_id in re.findall(r"\d+", str(value or "")) if int(member_id) > 0]
+
+
+def reject_linked_member_for_fep_payment(member):
+    responsible_id = str(getattr(member, "responsible_member_id", "") or "").strip()
+    if responsible_id:
+        raise FepPaymentReject(
+            f"member is a dependent of responsible member #{responsible_id}; manual payment review required.",
+            409,
+        )
+    dependent_ids = linked_member_ids(getattr(member, "dependent_member_ids", None))
+    if dependent_ids:
+        raise FepPaymentReject(
+            f"member has linked dependent membership(s) {', '.join(dependent_ids)}; manual payment review required.",
+            409,
+        )
+
+
+def fep_member_payment_snapshot(member):
+    fields = [
+        "billing_status",
+        "is_active",
+        "billing_amount",
+        "balance",
+        "last_payment",
+        "last_payment_amount",
+        "due_date",
+        "next_payment",
+        "responsible_member_id",
+        "dependent_member_ids",
+    ]
+    return {field: change_value(getattr(member, field, None)) for field in fields}
+
+
+def fep_public_update(record, duplicate=False):
+    payload = {
+        "ok": True,
+        "applied": record.status in FEP_PAYMENT_WRITTEN_STATUSES,
+        "confirmed": record.status == FEP_PAYMENT_STATUS_CONFIRMED,
+        "duplicate": bool(duplicate),
+        "queued": record.status == FEP_PAYMENT_STATUS_PENDING,
+        "status": record.status,
+        "member_id": record.member_id,
+        "idempotency_key": record.idempotency_key,
+    }
+    if record.error:
+        payload["error"] = record.error
+    return payload
+
+
+def fep_error_response(message, status_code=400, idempotency_key=None):
+    payload = {"ok": False, "error": str(message)}
+    if idempotency_key:
+        payload["idempotency_key"] = idempotency_key
+    return jsonify(payload), status_code
+
+
+def validate_fep_payment_payload(payload):
+    if not isinstance(payload, dict):
+        raise FepPaymentReject("Expected JSON payment update payload.", 400)
+
+    source = str(payload.get("source") or "").strip()
+    idempotency_key = str(payload.get("idempotency_key") or "").strip()
+    member_id = str(payload.get("member_id") or "").strip()
+    client_number = str(payload.get("client_number") or "").strip()
+    if not source:
+        raise FepPaymentReject("source is required.", 400)
+    if not idempotency_key:
+        raise FepPaymentReject("idempotency_key is required.", 400)
+    if not member_id:
+        raise FepPaymentReject("member_id is required.", 400)
+    if client_number and client_number != member_id:
+        raise FepPaymentReject("client_number does not match member_id.", 409)
+
+    membership_period, period_start = parse_fep_membership_period(payload.get("membership_period"))
+    transaction_date = parse_fep_yyyymmdd(payload.get("transaction_date"), "transaction_date", required=False)
+    statement_date = parse_fep_yyyymmdd(payload.get("statement_date"), "statement_date", required=False)
+    payment_date = statement_date or transaction_date
+    if not payment_date:
+        raise FepPaymentReject("statement_date or transaction_date is required.", 400)
+
+    bank_amount = parse_fep_money(payload.get("bank_amount"), "bank_amount")
+    base_amount = parse_fep_money(payload.get("base_amount"), "base_amount", required=False)
+    gym_billing_amount = parse_fep_money(payload.get("gym_billing_amount"), "gym_billing_amount")
+    if gym_billing_amount <= 0:
+        raise FepPaymentReject("gym_billing_amount must be greater than 0.", 400)
+    if bank_amount < gym_billing_amount:
+        raise FepPaymentReject("bank_amount cannot be lower than gym_billing_amount.", 409)
+    if base_amount is not None and not money_matches(base_amount, gym_billing_amount):
+        raise FepPaymentReject("base_amount does not match gym_billing_amount.", 409)
+
+    member = Member.query.filter_by(member_id=member_id).first()
+    if not member:
+        raise FepPaymentReject("member_id was not found in Member Portal/Gym Assistant data.", 409)
+    if not member_active_for_fep_payment(member):
+        raise FepPaymentReject("member is not active in Member Portal/Gym Assistant data.", 409)
+    reject_linked_member_for_fep_payment(member)
+    if member.billing_amount in (None, 0):
+        raise FepPaymentReject("member has no billing_amount to validate the payment against.", 409)
+    if not money_matches(member.billing_amount, gym_billing_amount):
+        raise FepPaymentReject(
+            f"gym_billing_amount {gym_billing_amount} does not match member billing_amount {decimal_money(member.billing_amount)}.",
+            409,
+        )
+
+    cancellation = active_cancellation_request_for_member(member)
+    if cancellation:
+        raise FepPaymentReject("member has an active cancellation/admin flow; manual payment review required.", 409)
+
+    target_due_date = due_date_after_membership_period(period_start)
+    current_due_date = member.next_payment or member.due_date
+    if not current_due_date:
+        raise FepPaymentReject("member has no current due_date/next_payment; manual payment review required.", 409)
+    if current_due_date != period_start:
+        raise FepPaymentReject(
+            "member current due_date/next_payment does not match membership_period; manual payment review required.",
+            409,
+        )
+    if current_due_date >= target_due_date:
+        raise FepPaymentReject("membership_period already appears paid or past the target due date.", 409)
+
+    target_values = {
+        "last_payment": payment_date,
+        "last_payment_amount": float(gym_billing_amount),
+        "due_date": target_due_date,
+        "next_payment": target_due_date,
+    }
+    member_balance = decimal_money(member.balance)
+    if member_balance > 0:
+        if money_matches(member_balance, gym_billing_amount) or money_matches(member_balance, bank_amount):
+            target_values["balance"] = 0.0
+        else:
+            raise FepPaymentReject("member has an open balance that does not match this payment; manual review required.", 409)
+
+    return {
+        "source": source,
+        "idempotency_key": idempotency_key,
+        "member": member,
+        "member_id": member_id,
+        "member_name": payload.get("member_name") or member.name,
+        "membership_period": membership_period,
+        "upload_id": parse_fep_int(payload.get("upload_id"), "upload_id"),
+        "upload_filename": str(payload.get("upload_filename") or "").strip() or None,
+        "record_id": parse_fep_int(payload.get("record_id"), "record_id"),
+        "statement_id": parse_fep_int(payload.get("statement_id"), "statement_id"),
+        "transaction_date": transaction_date,
+        "statement_date": statement_date,
+        "bank_amount": bank_amount,
+        "base_amount": base_amount,
+        "gym_billing_amount": gym_billing_amount,
+        "old_values": fep_member_payment_snapshot(member),
+        "new_values": {key: change_value(value) for key, value in target_values.items()},
+    }
+
+
+def create_fep_payment_update(payload):
+    payload_hash = stable_json_hash(payload)
+    idempotency_key = str((payload or {}).get("idempotency_key") or "").strip()
+    existing = FepPaymentUpdate.query.filter_by(idempotency_key=idempotency_key).first() if idempotency_key else None
+    if existing:
+        if existing.request_payload_hash != payload_hash:
+            raise FepPaymentReject("idempotency_key was already used with a different payload.", 409)
+        return existing, True
+
+    validated = validate_fep_payment_payload(payload)
+    record = FepPaymentUpdate(
+        idempotency_key=validated["idempotency_key"],
+        source=validated["source"],
+        status=FEP_PAYMENT_STATUS_PENDING,
+        member_id=validated["member_id"],
+        member_name=validated["member_name"],
+        membership_period=validated["membership_period"],
+        upload_id=validated["upload_id"],
+        upload_filename=validated["upload_filename"],
+        record_id=validated["record_id"],
+        statement_id=validated["statement_id"],
+        transaction_date=validated["transaction_date"],
+        statement_date=validated["statement_date"],
+        bank_amount=float(validated["bank_amount"]),
+        base_amount=float(validated["base_amount"]) if validated["base_amount"] is not None else None,
+        gym_billing_amount=float(validated["gym_billing_amount"]),
+        request_payload_hash=payload_hash,
+        request_payload_json=json_text(masked_fep_payload(payload)),
+        old_values_json=json_text(validated["old_values"]),
+        new_values_json=json_text(validated["new_values"]),
+        actor=validated["source"],
+    )
+    db.session.add(record)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        existing = FepPaymentUpdate.query.filter_by(idempotency_key=validated["idempotency_key"]).first()
+        if existing and existing.request_payload_hash == payload_hash:
+            return existing, True
+        raise
+    return record, False
+
+
+def fep_payment_update_target(record):
+    try:
+        values = json.loads(record.new_values_json or "{}")
+    except json.JSONDecodeError:
+        values = {}
+    return values if isinstance(values, dict) else {}
+
+
+def parse_fep_target_date(value):
+    if not value:
+        return None
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def fep_payment_sync_item(record):
+    target_values = fep_payment_update_target(record)
+    return {
+        "id": record.id,
+        "idempotency_key": record.idempotency_key,
+        "source": record.source,
+        "status": record.status,
+        "member_id": record.member_id,
+        "member_name": record.member_name,
+        "membership_period": record.membership_period,
+        "upload_id": record.upload_id,
+        "upload_filename": record.upload_filename,
+        "record_id": record.record_id,
+        "statement_id": record.statement_id,
+        "transaction_date": record.transaction_date.isoformat() if record.transaction_date else None,
+        "statement_date": record.statement_date.isoformat() if record.statement_date else None,
+        "bank_amount": record.bank_amount,
+        "base_amount": record.base_amount,
+        "gym_billing_amount": record.gym_billing_amount,
+        "target_values": target_values,
+    }
+
+
+def fep_record_matches_member(record, member):
+    target_values = fep_payment_update_target(record)
+    if not target_values:
+        return False
+    for field in ("last_payment_amount", "due_date", "next_payment"):
+        if field not in target_values:
+            continue
+        actual = change_value(getattr(member, field, None))
+        expected = target_values.get(field)
+        if field == "last_payment_amount":
+            if not money_matches(actual, expected):
+                return False
+        elif actual != expected:
+            return False
+    if "last_payment" in target_values:
+        actual_date = getattr(member, "last_payment", None)
+        expected_date = parse_fep_target_date(target_values.get("last_payment"))
+        if not actual_date or not expected_date:
+            return False
+        latest_expected = (record.applied_at.date() if record.applied_at else date.today()) + timedelta(days=1)
+        if actual_date < expected_date or actual_date > latest_expected:
+            return False
+    if "balance" in target_values and not money_matches(getattr(member, "balance", None), target_values.get("balance")):
+        return False
+    return True
+
+
+def confirm_fep_payment_updates_from_member_sync(member):
+    if not member:
+        return []
+    records = (
+        FepPaymentUpdate.query
+        .filter(
+            FepPaymentUpdate.member_id == member.member_id,
+            FepPaymentUpdate.status.in_([FEP_PAYMENT_STATUS_APPLIED]),
+        )
+        .all()
+    )
+    confirmed = []
+    now = datetime.now()
+    for record in records:
+        if not fep_record_matches_member(record, member):
+            continue
+        record.status = FEP_PAYMENT_STATUS_CONFIRMED
+        record.confirmed_at = now
+        record.updated_at = now
+        confirmed.append(record)
+    return confirmed
+
+
 DATE_SYNC_FIELDS = {
     "birthdate",
     "start_date",
@@ -4702,6 +5140,8 @@ SYNC_CHANGE_FIELDS = [
     "signup_date",
     "photo_path",
     "is_active",
+    "responsible_member_id",
+    "dependent_member_ids",
 ]
 
 SYNC_CHANGE_LABELS = {
@@ -4726,6 +5166,8 @@ SYNC_CHANGE_LABELS = {
     "signup_date": "Signup date",
     "photo_path": "Photo",
     "is_active": "Active",
+    "responsible_member_id": "Responsible member",
+    "dependent_member_ids": "Dependent members",
 }
 
 
@@ -5033,6 +5475,7 @@ def apply_sync_payload(payload):
                 ignored_invalid_fields[member_data["member_id"]] = invalid_fields
             existing = Member.query.filter_by(member_id=member_data["member_id"]).first()
             if existing:
+                member_record = existing
                 blank_fields = remove_blank_sync_fields(existing, member_data)
                 if blank_fields:
                     ignored_blank_fields[member_data["member_id"]] = blank_fields
@@ -5061,7 +5504,8 @@ def apply_sync_payload(payload):
                 for key, value in member_data.items():
                     setattr(existing, key, value)
             else:
-                db.session.add(Member(**member_data))
+                member_record = Member(**member_data)
+                db.session.add(member_record)
                 new += 1
                 change_summary["new_members"].append(member_change_summary(
                     member_data["member_id"],
@@ -5092,6 +5536,7 @@ def apply_sync_payload(payload):
                             source_filename=record.get("source_filename"),
                             display_order=display_order,
                         ))
+            confirm_fep_payment_updates_from_member_sync(member_record)
 
         sync_run.status = "success"
         sync_run.completed_at = datetime.now()
@@ -9646,6 +10091,8 @@ def fep_member_snapshot_row(member):
         "start_date": change_value(member.start_date),
         "end_date": change_value(member.end_date),
         "is_active": member.is_active if member.is_active is not None else None,
+        "responsible_member_id": member.responsible_member_id or "",
+        "dependent_member_ids": member.dependent_member_ids or "",
     }
 
 
@@ -9677,6 +10124,39 @@ def api_fep_member_snapshot():
         "latest_sync": fep_latest_sync_meta(),
         "members": [fep_member_snapshot_row(member) for member in members],
     })
+
+
+@app.post("/api/fep/payment-update")
+def api_fep_payment_update():
+    require_fep_access()
+    ensure_runtime_schema()
+    payload = request.get_json(silent=True)
+    idempotency_key = str((payload or {}).get("idempotency_key") or "").strip() if isinstance(payload, dict) else None
+
+    try:
+        record, duplicate = create_fep_payment_update(payload)
+    except FepPaymentReject as exc:
+        db.session.rollback()
+        return fep_error_response(str(exc), exc.status_code, idempotency_key=idempotency_key)
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.exception("FEP payment-update failed.")
+        return fep_error_response(str(exc), 500, idempotency_key=idempotency_key)
+
+    return jsonify(fep_public_update(record, duplicate=duplicate))
+
+
+@app.get("/api/fep/payment-update")
+def api_fep_payment_update_status():
+    require_fep_access()
+    ensure_runtime_schema()
+    idempotency_key = request.args.get("idempotency_key", "").strip()
+    if not idempotency_key:
+        return fep_error_response("idempotency_key is required.", 400)
+    record = FepPaymentUpdate.query.filter_by(idempotency_key=idempotency_key).first()
+    if not record:
+        return fep_error_response("payment update was not found.", 404, idempotency_key=idempotency_key)
+    return jsonify(fep_public_update(record))
 
 
 def safe_storage_upload_key(raw_key):
@@ -9713,6 +10193,54 @@ def api_sync_member_ids():
             for (member_id,) in db.session.query(Member.member_id).all()
         ]
     }
+
+
+@app.get("/api/sync/fep-payment-updates")
+def api_sync_fep_payment_updates():
+    require_sync_access()
+    ensure_runtime_schema()
+    try:
+        limit = max(1, min(int(request.args.get("limit", 50)), 100))
+    except ValueError:
+        limit = 50
+    records = (
+        FepPaymentUpdate.query
+        .filter_by(status=FEP_PAYMENT_STATUS_PENDING)
+        .order_by(FepPaymentUpdate.created_at.asc(), FepPaymentUpdate.id.asc())
+        .limit(limit)
+        .all()
+    )
+    return {
+        "status": "success",
+        "updates": [fep_payment_sync_item(record) for record in records],
+    }
+
+
+@app.post("/api/sync/fep-payment-updates/<int:update_id>/result")
+def api_sync_fep_payment_update_result(update_id):
+    require_sync_access()
+    ensure_runtime_schema()
+    payload = request.get_json(silent=True) or {}
+    record = db.session.get(FepPaymentUpdate, update_id)
+    if not record:
+        return {"ok": False, "error": "payment update was not found."}, 404
+    result_status = str(payload.get("status") or "").strip()
+    if result_status not in {"applied", "failed"}:
+        return {"ok": False, "error": "status must be applied or failed."}, 400
+
+    now = datetime.now()
+    record.apply_attempts = (record.apply_attempts or 0) + 1
+    record.updated_at = now
+    record.result_json = json_text(payload)
+    if result_status == "applied":
+        record.status = FEP_PAYMENT_STATUS_APPLIED
+        record.applied_at = now
+        record.error = None
+    else:
+        record.status = FEP_PAYMENT_STATUS_FAILED
+        record.error = str(payload.get("error") or "Gym Assistant write-back failed.")
+    db.session.commit()
+    return {"ok": True, "status": record.status, "idempotency_key": record.idempotency_key}
 
 
 @app.get("/api/sync/missing-file-keys")

@@ -77,6 +77,21 @@ $B=0
 -
 """
 
+BACKUP_LINKED_SAMPLE = BACKUP_SAMPLE.replace("$B=0\n-", "$B=0\nDPL=2000\n-", 1) + """MN=2000
+LN=Dependent
+FN=Member
+PU=20260601
+LP=20260429
+MTN=contract Dreamz 12 months
+R$=6500
+BT=1 MONTHS EFT
+N$=6500
+ST=0
+$B=0
+DPL=
+-
+"""
+
 
 class GymAssistantImportTests(unittest.TestCase):
     def write_temp(self, suffix, content):
@@ -175,6 +190,14 @@ class GymAssistantImportTests(unittest.TestCase):
 
         self.assertEqual(result.issues, [])
         self.assertEqual(result.members[0]["birthdate"], date(1992, 4, 15))
+
+    def test_parse_members_btx_imports_linked_memberships(self):
+        path = self.write_temp(".btx", BACKUP_LINKED_SAMPLE)
+        result = parse_gymassistant_export(path)
+
+        members = {member["member_id"]: member for member in result.members}
+        self.assertEqual(members["1206"]["dependent_member_ids"], "2000")
+        self.assertEqual(members["2000"]["responsible_member_id"], "1206")
 
     def test_parse_gbu_backup_export(self):
         with tempfile.NamedTemporaryFile(suffix=".gbu", delete=False) as handle:

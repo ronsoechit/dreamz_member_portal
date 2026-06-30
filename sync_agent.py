@@ -7,6 +7,8 @@ from datetime import date, datetime, timezone
 import json
 import os
 from pathlib import Path
+import shlex
+import subprocess
 from typing import Iterable
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
@@ -560,6 +562,102 @@ def get_missing_file_keys(portal_url: str, token: str, timeout: int = 300) -> se
     return {str(key).replace("\\", "/").lstrip("/") for key in missing_keys}
 
 
+def get_fep_payment_updates(portal_url: str, token: str, limit: int = 50, timeout: int = 60) -> list[dict]:
+    endpoint = portal_url.rstrip("/") + f"/api/sync/fep-payment-updates?limit={max(1, min(limit, 100))}"
+    http_request = urlrequest.Request(
+        endpoint,
+        method="GET",
+        headers={"X-Sync-Token": token},
+    )
+    try:
+        with urlrequest.urlopen(http_request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+            payload = json.loads(raw) if raw else {}
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"FEP payment queue API returned HTTP {exc.code}: {detail}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Could not reach FEP payment queue API: {exc}") from exc
+    updates = payload.get("updates")
+    return updates if isinstance(updates, list) else []
+
+
+def post_fep_payment_update_result(portal_url: str, token: str, update_id: int, payload: dict, timeout: int = 60) -> dict:
+    endpoint = portal_url.rstrip("/") + f"/api/sync/fep-payment-updates/{update_id}/result"
+    return post_json(endpoint, token, payload, timeout=timeout)
+
+
+def run_fep_payment_writer(command: str, source_root: Path, update: dict, timeout: int = 300) -> dict:
+    if not command:
+        raise RuntimeError("FEP payment writer command is not configured. Refusing to fake Gym Assistant payment state.")
+
+    request_payload = {
+        "source_root": str(source_root.resolve()),
+        "update": update,
+    }
+    args = shlex.split(command, posix=os.name != "nt")
+    completed = subprocess.run(
+        args,
+        input=json.dumps(request_payload),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if completed.returncode != 0:
+        stderr = (completed.stderr or "").strip()
+        stdout = (completed.stdout or "").strip()
+        detail = stderr or stdout or f"writer exited with code {completed.returncode}"
+        try:
+            error_payload = json.loads(detail)
+            if isinstance(error_payload, dict) and error_payload.get("error"):
+                detail = str(error_payload["error"])
+        except json.JSONDecodeError:
+            pass
+        raise RuntimeError(detail)
+    output = (completed.stdout or "").strip()
+    if not output:
+        return {"status": "applied"}
+    try:
+        result = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"writer returned non-JSON output: {output}") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError("writer returned JSON, but not an object.")
+    result.setdefault("status", "applied")
+    return result
+
+
+def process_fep_payment_updates(
+    source_root: Path,
+    portal_url: str,
+    token: str,
+    writer_command: str,
+    limit: int = 50,
+) -> dict:
+    updates = get_fep_payment_updates(portal_url, token, limit=limit)
+    summary = {"received": len(updates), "applied": 0, "failed": 0, "deferred": 0}
+    for update in updates:
+        update_id = int(update["id"])
+        try:
+            writer_result = run_fep_payment_writer(writer_command, source_root, update)
+            if writer_result.get("status") == "deferred":
+                summary["deferred"] += 1
+                continue
+            writer_result["status"] = "applied"
+            post_fep_payment_update_result(portal_url, token, update_id, writer_result)
+            summary["applied"] += 1
+        except Exception as exc:
+            post_fep_payment_update_result(
+                portal_url,
+                token,
+                update_id,
+                {"status": "failed", "error": str(exc)},
+            )
+            summary["failed"] += 1
+    return summary
+
+
 def load_manifest(path: Path) -> dict | None:
     if not path.exists():
         return None
@@ -635,6 +733,9 @@ def main() -> None:
     parser.add_argument("--portal-url", help="Portal base URL, for example http://127.0.0.1:5000.")
     parser.add_argument("--sync-token", default=os.getenv("SYNC_API_TOKEN"), help="Sync API token. Defaults to SYNC_API_TOKEN.")
     parser.add_argument("--push-members", action="store_true", help="Push member and document metadata to the portal sync API.")
+    parser.add_argument("--process-fep-payments", action="store_true", help="Process queued FEP payment updates before pushing member sync data.")
+    parser.add_argument("--fep-payment-writer", default=os.getenv("FEP_PAYMENT_WRITER_COMMAND", ""), help="Local command that writes one FEP payment update to Gym Assistant. Receives JSON on stdin.")
+    parser.add_argument("--fep-payment-limit", type=int, default=50, help="Maximum queued FEP payment updates to process per run.")
     parser.add_argument("--member-limit", type=int, help="Limit pushed members for testing.")
     parser.add_argument("--upload-files", action="store_true", help="Upload pushed member PDFs and photos to S3-compatible storage.")
     parser.add_argument("--upload-via-portal", action="store_true", help="Upload files through the portal API so S3 credentials stay on Railway.")
@@ -654,6 +755,23 @@ def main() -> None:
     if args.write_manifest and not args.push_members:
         save_manifest(scan, manifest_path)
         print(f"Manifest written: {manifest_path}")
+
+    if args.process_fep_payments:
+        if not args.portal_url:
+            raise SystemExit("--portal-url is required with --process-fep-payments")
+        if not args.sync_token:
+            raise SystemExit("--sync-token or SYNC_API_TOKEN is required with --process-fep-payments")
+        if not args.fep_payment_writer:
+            raise SystemExit("--fep-payment-writer or FEP_PAYMENT_WRITER_COMMAND is required with --process-fep-payments")
+        result = process_fep_payment_updates(
+            source_root,
+            args.portal_url,
+            args.sync_token,
+            args.fep_payment_writer,
+            limit=args.fep_payment_limit,
+        )
+        print("FEP payment processing response:")
+        print(json.dumps(result, indent=2))
 
     if args.push_members:
         if not args.portal_url:

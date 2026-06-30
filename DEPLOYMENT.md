@@ -24,6 +24,7 @@ STAFF_MANAGER_PASSWORD=<strong temporary password>
 STAFF_ADMIN_EMAIL=ron@dreamzfitness.com
 STAFF_TOKEN=<long random staff token>
 SYNC_API_TOKEN=<long random sync token>
+FEP_API_TOKEN=<long random FEP token>
 SYNC_STALE_AFTER_MINUTES=30
 SESSION_COOKIE_SECURE=true
 EMAIL_DELIVERY_MODE=smtp
@@ -65,6 +66,34 @@ $env:SYNC_API_TOKEN="<same token as Railway>"
 ### Sync monitoring
 
 The portal shows a warning on `/staff/sync` when no completed GymAssistant sync has been received for `SYNC_STALE_AFTER_MINUTES` minutes. The sync agent itself performs one scan and push per run, so automatic recovery after a power outage depends on the Windows Task Scheduler task or service on the frontdesk computer starting again after reboot. Configure that task to run on startup/login, repeat every few minutes, and run missed tasks as soon as possible.
+
+### FEP payment write-back
+
+FEP payment updates are accepted by the portal at `/api/fep/payment-update` with `FEP_API_TOKEN`. The portal validates and queues the update, but does not mark the member paid until the local GymAssistant sync confirms the changed payment fields.
+
+Linked GymAssistant memberships are excluded from automatic write-back. If a member is a dependent of another member, or has dependents linked to the account, the portal returns `409` for manual review. The guarded UI writer also cancels GymAssistant's dependent-member prompt instead of choosing a responsible member automatically.
+
+The frontdesk sync agent can process queued FEP updates before pushing normal member sync data:
+
+```powershell
+$env:SYNC_API_TOKEN="<same token as Railway>"
+$env:FEP_PAYMENT_WRITER_COMMAND="<local command that writes one payment update to GymAssistant>"
+.\.venv\Scripts\python.exe sync_agent.py `
+  --source-root "D:\Dreamz Fitness\Gym Assistant 2.6" `
+  --portal-url "https://<railway-app-url>" `
+  --process-fep-payments `
+  --push-members
+```
+
+The writer command receives JSON on stdin and must update GymAssistant itself. The agent refuses to fake payment state when no writer command is configured.
+
+Do not run a visible GymAssistant UI writer during normal frontdesk work. It can interrupt staff if they are entering a member, taking a payment, or using other software. Use one of these safe modes:
+
+- preferred: an official GymAssistant batch/import/payment route, if available;
+- acceptable: a dedicated/idle GymAssistant workstation/session that staff do not use;
+- fallback: schedule the writer outside staffed hours or require a long Windows idle time.
+
+The included `gymassistant_payment_writer.py` is a guarded UI writer for controlled testing. It only records a payment when explicitly started with `--apply --foreground-ui`; use `--require-idle-seconds` if it is ever scheduled on a staff workstation. If the desktop is not idle, the writer returns `deferred`, and the sync agent leaves the queued payment pending for a later run.
 
 ### Storage note
 

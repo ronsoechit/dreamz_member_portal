@@ -137,6 +137,10 @@ def parse_backup_money(raw: str | None) -> float:
         return parse_money(value)
 
 
+def parse_backup_member_ids(raw: str | None) -> list[str]:
+    return [member_id for member_id in re.findall(r"\d+", str(raw or "")) if int(member_id) > 0]
+
+
 def derive_contract_type(plan_type: str | None) -> str:
     plan = re.sub(r"\s+", " ", (plan_type or "").strip().lower())
     if "contract" in plan and re.search(r"\b6\b|6\s*mo|6\s*month", plan):
@@ -235,6 +239,9 @@ def normalize_backup_record(fields: dict[str, str], record_number: int) -> tuple
             issues.append(ImportIssue(record_number, record_key, parsed.raw, "Date could not be parsed"))
 
     record["next_payment"] = record.get("due_date")
+    dependent_member_ids = parse_backup_member_ids(fields.get("DPL"))
+    if dependent_member_ids:
+        record["dependent_member_ids"] = ",".join(dependent_member_ids)
     return record, issues
 
 
@@ -345,9 +352,29 @@ def parse_report_txt(path: str | Path) -> ImportResult:
     return ImportResult(members, issues)
 
 
+def attach_backup_member_relationships(members: list[dict], raw_records: list[dict[str, str]]) -> None:
+    members_by_id = {str(member.get("member_id")): member for member in members if member.get("member_id")}
+    for fields in raw_records:
+        responsible_id = (fields.get("MN") or "").strip()
+        if not responsible_id:
+            continue
+        dependent_ids = [
+            dependent_id
+            for dependent_id in parse_backup_member_ids(fields.get("DPL"))
+            if dependent_id and dependent_id != responsible_id
+        ]
+        if dependent_ids and responsible_id in members_by_id:
+            members_by_id[responsible_id]["dependent_member_ids"] = ",".join(dependent_ids)
+        for dependent_id in dependent_ids:
+            dependent = members_by_id.get(dependent_id)
+            if dependent and not dependent.get("responsible_member_id"):
+                dependent["responsible_member_id"] = responsible_id
+
+
 def _parse_backup_text(text: str) -> ImportResult:
     issues: list[ImportIssue] = []
     members: list[dict] = []
+    raw_records: list[dict[str, str]] = []
     fields: dict[str, str] = {}
     record_number = 0
     in_member_record = False
@@ -363,6 +390,7 @@ def _parse_backup_text(text: str) -> ImportResult:
                 issues.extend(row_issues)
                 if member:
                     members.append(member)
+                    raw_records.append(dict(fields))
             fields = {}
             in_member_record = False
             continue
@@ -382,7 +410,9 @@ def _parse_backup_text(text: str) -> ImportResult:
         issues.extend(row_issues)
         if member:
             members.append(member)
+            raw_records.append(dict(fields))
 
+    attach_backup_member_relationships(members, raw_records)
     return ImportResult(members, issues)
 
 

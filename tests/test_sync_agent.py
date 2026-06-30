@@ -2,10 +2,11 @@ from pathlib import Path
 import tempfile
 import unittest
 import os
+import subprocess
 import zipfile
 from unittest.mock import patch
 
-from sync_agent import build_sync_payload, diff_manifest, load_manifest, save_manifest, scan_source
+from sync_agent import build_sync_payload, diff_manifest, load_manifest, process_fep_payment_updates, run_fep_payment_writer, save_manifest, scan_source
 
 
 def write_backup(path: Path, member_id: str = "100") -> None:
@@ -474,6 +475,77 @@ class SyncAgentTests(unittest.TestCase):
 
         self.assertEqual(uploaded, [("contract.pdf", "portal/Data/Attachments/0000100/contract.pdf")])
         self.assertEqual(payload["documents"]["100"][0]["path"], "s3://dreamz-test/portal/Data/Attachments/0000100/contract.pdf")
+
+    def test_process_fep_payment_updates_posts_writer_success(self):
+        update = {"id": 7, "member_id": "34203", "target_values": {"next_payment": "2026-08-01"}}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            root.mkdir()
+            with (
+                patch("sync_agent.get_fep_payment_updates", return_value=[update]) as get_updates,
+                patch("sync_agent.run_fep_payment_writer", return_value={"status": "applied", "writer": "unit-test"}) as writer,
+                patch("sync_agent.post_fep_payment_update_result", return_value={"ok": True}) as post_result,
+            ):
+                result = process_fep_payment_updates(root, "https://portal.example", "sync-token", "writer-cmd")
+
+        self.assertEqual(result, {"received": 1, "applied": 1, "failed": 0, "deferred": 0})
+        get_updates.assert_called_once()
+        writer.assert_called_once_with("writer-cmd", root, update)
+        post_result.assert_called_once_with(
+            "https://portal.example",
+            "sync-token",
+            7,
+            {"status": "applied", "writer": "unit-test"},
+        )
+
+    def test_process_fep_payment_updates_posts_writer_failure(self):
+        update = {"id": 8, "member_id": "34203", "target_values": {"next_payment": "2026-08-01"}}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            root.mkdir()
+            with (
+                patch("sync_agent.get_fep_payment_updates", return_value=[update]),
+                patch("sync_agent.run_fep_payment_writer", side_effect=RuntimeError("writer not configured")),
+                patch("sync_agent.post_fep_payment_update_result", return_value={"ok": True}) as post_result,
+            ):
+                result = process_fep_payment_updates(root, "https://portal.example", "sync-token", "writer-cmd")
+
+        self.assertEqual(result, {"received": 1, "applied": 0, "failed": 1, "deferred": 0})
+        post_result.assert_called_once_with(
+            "https://portal.example",
+            "sync-token",
+            8,
+            {"status": "failed", "error": "writer not configured"},
+        )
+
+    def test_process_fep_payment_updates_leaves_deferred_pending(self):
+        update = {"id": 9, "member_id": "34203", "target_values": {"next_payment": "2026-08-01"}}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            root.mkdir()
+            with (
+                patch("sync_agent.get_fep_payment_updates", return_value=[update]),
+                patch("sync_agent.run_fep_payment_writer", return_value={"status": "deferred", "reason": "desktop_not_idle"}),
+                patch("sync_agent.post_fep_payment_update_result", return_value={"ok": True}) as post_result,
+            ):
+                result = process_fep_payment_updates(root, "https://portal.example", "sync-token", "writer-cmd")
+
+        self.assertEqual(result, {"received": 1, "applied": 0, "failed": 0, "deferred": 1})
+        post_result.assert_not_called()
+
+    def test_run_fep_payment_writer_uses_json_error_message(self):
+        completed = subprocess.CompletedProcess(
+            args=["writer"],
+            returncode=1,
+            stdout="",
+            stderr='{"status":"failed","error":"manual payment review required"}',
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            root.mkdir()
+            with patch("sync_agent.subprocess.run", return_value=completed):
+                with self.assertRaisesRegex(RuntimeError, "manual payment review required"):
+                    run_fep_payment_writer("writer", root, {"member_id": "34203"})
 
 
 if __name__ == "__main__":
