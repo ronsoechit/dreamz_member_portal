@@ -549,7 +549,18 @@ def run_writer(
         cancel_blocking_dialog(blocking_dialog)
         raise RuntimeError(blocking_dialog.reason)
 
-    main_hwnd = find_main_window(source_root)
+    try:
+        main_hwnd = find_main_window(source_root)
+    except RuntimeError as exc:
+        if apply and "Could not find the running Gym Assistant main window" in str(exc):
+            return {
+                "status": "deferred",
+                "applied": False,
+                "member_id": member_id,
+                "reason": "gym_assistant_not_running",
+                "error": str(exc),
+            }
+        raise
     select_member(main_hwnd, member_id, timeout)
     blocking_reason = member_view_blocking_reason(main_hwnd)
     if blocking_reason:
