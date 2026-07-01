@@ -473,8 +473,6 @@ def inspect_payment_dialog(dialog_hwnd: int, update: dict) -> dict:
 
     if not observed["dialog_title"].startswith(f"Member Payment for #{member_id},"):
         raise RuntimeError(f"Payment dialog is for the wrong member: {observed['dialog_title']}")
-    if "ACH" not in observed["billing_option"].upper() and "EFT" not in observed["billing_option"].upper():
-        raise RuntimeError(f"Member billing option is not ACH/EFT: {observed['billing_option']}")
     if observed["current_due_date"] != period_start.strftime("%d/%m/%Y"):
         raise RuntimeError(
             f"Current due date {observed['current_due_date']} does not match membership_period {membership_period}."
@@ -530,6 +528,7 @@ def apply_payment(dialog_hwnd: int, timeout: float, payment_method: str = "Credi
         raise RuntimeError("Timed out waiting for Gym Assistant payment transaction dialog.")
 
     if not click_dialog_button(transaction_hwnd, {payment_method}):
+        click_dialog_button(transaction_hwnd, {"Cancel"})
         raise RuntimeError(f"Could not find enabled payment method button {payment_method!r}.")
 
     def transaction_closed():
@@ -602,7 +601,11 @@ def run_writer(
     if blocking_reason:
         raise RuntimeError(blocking_reason)
     dialog_hwnd = open_payment_dialog(main_hwnd, member_id, timeout)
-    observed = inspect_payment_dialog(dialog_hwnd, update)
+    try:
+        observed = inspect_payment_dialog(dialog_hwnd, update)
+    except Exception:
+        cancel_dialog(dialog_hwnd)
+        raise
 
     if not apply:
         cancel_dialog(dialog_hwnd)
