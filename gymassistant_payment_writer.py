@@ -267,6 +267,16 @@ def find_credit_card_approval_dialog() -> int | None:
     return None
 
 
+def find_credit_card_result_dialog() -> int | None:
+    for info in enum_top_windows():
+        if not info.visible:
+            continue
+        combined = " ".join(dialog_texts(info.hwnd)).casefold()
+        if info.text.startswith("CC Charge Results") or ("result: approved" in combined and "amount:" in combined):
+            return info.hwnd
+    return None
+
+
 def find_dependent_payment_prompt() -> BlockingDialog | None:
     for info in enum_top_windows():
         if not info.visible:
@@ -585,8 +595,31 @@ def apply_payment(dialog_hwnd: int, timeout: float, payment_method: str = "Credi
                 "Timed out waiting for Gym Assistant credit card approval dialog to close.",
             )
 
+        result_deadline = time.time() + min(timeout, 5.0)
+        result_hwnd = None
+        while time.time() < result_deadline:
+            result_hwnd = find_credit_card_result_dialog()
+            if result_hwnd:
+                break
+            time.sleep(0.1)
+
+        if result_hwnd:
+            if not click_dialog_button(result_hwnd, {"OK"}):
+                raise RuntimeError("Could not find enabled OK button on Credit Card result dialog.")
+
+            wait_until(
+                lambda: not find_credit_card_result_dialog(),
+                timeout,
+                "Timed out waiting for Gym Assistant credit card result dialog to close.",
+            )
+
     wait_until(
-        lambda: not find_open_payment_dialog() and not find_transaction_payment_dialog() and not find_credit_card_approval_dialog(),
+        lambda: (
+            not find_open_payment_dialog()
+            and not find_transaction_payment_dialog()
+            and not find_credit_card_approval_dialog()
+            and not find_credit_card_result_dialog()
+        ),
         timeout,
         "Timed out waiting for Gym Assistant payment dialogs to close after applying payment.",
     )
