@@ -379,6 +379,21 @@ def value_right_of(children: list[WindowInfo], label_text: str, classes: tuple[s
     return sorted(candidates, key=lambda child: (abs(child.rect.center_y - label.rect.center_y), child.rect.left))[0]
 
 
+def value_right_of_label_prefix(
+    children: list[WindowInfo],
+    label_prefix: str,
+    classes: tuple[str, ...] = ("Static", "Edit", "ComboBox"),
+) -> WindowInfo:
+    labels = [
+        child
+        for child in children
+        if child.class_name == "Static" and child.text.strip().startswith(label_prefix)
+    ]
+    if not labels:
+        raise RuntimeError(f"Could not find label starting with {label_prefix!r}.")
+    return value_right_of(children, labels[0].text, classes=classes)
+
+
 def decimal_money(value) -> Decimal:
     try:
         return Decimal(str(value).replace("$", "").replace(",", "").strip()).quantize(Decimal("0.01"))
@@ -464,7 +479,7 @@ def inspect_payment_dialog(dialog_hwnd: int, update: dict) -> dict:
         "current_balance": value_right_of(children, "Current Balance:").text,
         "last_paid_date": value_right_of(children, "Last Paid Date:").text,
         "current_due_date": value_right_of(children, "Current Due Date:").text,
-        "billing_periods": get_text(value_right_of(children, "Billing Periods (ACH):", ("ComboBox", "Edit")).hwnd),
+        "billing_periods": get_text(value_right_of_label_prefix(children, "Billing Periods", ("ComboBox", "Edit")).hwnd),
         "membership_fees": get_text(value_right_of(children, "Membership Fees:", ("Edit", "Static")).hwnd),
         "other_fees": get_text(value_right_of(children, "Other Fees:", ("Edit", "Static")).hwnd),
         "total_payment_due": value_right_of(children, "Total Payment Due:").text,
