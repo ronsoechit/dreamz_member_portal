@@ -257,6 +257,16 @@ def dialog_texts(hwnd: int) -> list[str]:
     return [text.strip() for text in texts if text and text.strip()]
 
 
+def find_credit_card_approval_dialog() -> int | None:
+    for info in enum_top_windows():
+        if not info.visible:
+            continue
+        combined = " ".join(dialog_texts(info.hwnd)).casefold()
+        if "was credit card charge approved" in combined and "approved" in combined:
+            return info.hwnd
+    return None
+
+
 def find_dependent_payment_prompt() -> BlockingDialog | None:
     for info in enum_top_windows():
         if not info.visible:
@@ -553,6 +563,32 @@ def apply_payment(dialog_hwnd: int, timeout: float, payment_method: str = "Credi
         transaction_closed,
         timeout,
         f"Timed out waiting for Gym Assistant transaction dialog to close after selecting {payment_method}.",
+    )
+
+    if payment_method.strip().casefold() == "credit card":
+        approval_deadline = time.time() + min(timeout, 5.0)
+        approval_hwnd = None
+        while time.time() < approval_deadline:
+            approval_hwnd = find_credit_card_approval_dialog()
+            if approval_hwnd:
+                break
+            time.sleep(0.1)
+
+        if approval_hwnd:
+            if not click_dialog_button(approval_hwnd, {"Approved"}):
+                click_dialog_button(approval_hwnd, {"Cancel"})
+                raise RuntimeError("Could not find enabled Credit Card approval button.")
+
+            wait_until(
+                lambda: not find_credit_card_approval_dialog(),
+                timeout,
+                "Timed out waiting for Gym Assistant credit card approval dialog to close.",
+            )
+
+    wait_until(
+        lambda: not find_open_payment_dialog() and not find_transaction_payment_dialog() and not find_credit_card_approval_dialog(),
+        timeout,
+        "Timed out waiting for Gym Assistant payment dialogs to close after applying payment.",
     )
 
 
