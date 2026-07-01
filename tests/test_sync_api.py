@@ -685,9 +685,38 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(member.next_payment, date(2026, 7, 1))
         record = FepPaymentUpdate.query.one()
         self.assertEqual(record.member_id, "34203")
+        self.assertEqual(record.target_agent, "frontdesk_dreamz")
         self.assertIn("***7890", record.request_payload_json)
         self.assertNotIn("1234567890", record.request_payload_json)
         self.assertIn("\"next_payment\": \"2026-08-01\"", record.new_values_json)
+
+    def test_fep_payment_update_accepts_ron_laptop_target_agent(self):
+        self.add_direct_debit_member()
+
+        response = self.client.post(
+            "/api/fep/payment-update",
+            json=self.fep_payment_payload(target_agent="ron_laptop"),
+            headers=self.fep_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["target_agent"], "ron_laptop")
+        record = FepPaymentUpdate.query.one()
+        self.assertEqual(record.target_agent, "ron_laptop")
+
+    def test_fep_payment_update_rejects_unknown_target_agent(self):
+        self.add_direct_debit_member()
+
+        response = self.client.post(
+            "/api/fep/payment-update",
+            json=self.fep_payment_payload(target_agent="unknown_pc"),
+            headers=self.fep_headers(),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.json["ok"])
+        self.assertIn("target_agent", response.json["error"])
+        self.assertEqual(FepPaymentUpdate.query.count(), 0)
 
     def test_fep_payment_update_duplicate_is_idempotent(self):
         self.add_direct_debit_member()
@@ -783,6 +812,8 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(queue_response.status_code, 200)
         update = queue_response.json["updates"][0]
         self.assertEqual(update["member_id"], "34203")
+        self.assertEqual(update["status"], "processing_gym_assistant_apply")
+        self.assertEqual(update["claimed_by"], "frontdesk_dreamz")
         self.assertEqual(update["target_values"]["last_payment"], "2026-06-29")
         self.assertEqual(update["target_values"]["next_payment"], "2026-08-01")
 
@@ -828,6 +859,75 @@ class SyncApiTests(unittest.TestCase):
         self.assertIsNotNone(record.confirmed_at)
         self.assertEqual(member.last_payment, date(2026, 6, 30))
         self.assertEqual(member.next_payment, date(2026, 8, 1))
+
+    def test_sync_agent_queue_claims_only_matching_target_agent(self):
+        self.add_direct_debit_member()
+        self.client.post(
+            "/api/fep/payment-update",
+            json=self.fep_payment_payload(target_agent="ron_laptop"),
+            headers=self.fep_headers(),
+        )
+
+        frontdesk_response = self.client.get(
+            "/api/sync/fep-payment-updates?agent_id=frontdesk_dreamz",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+        laptop_response = self.client.get(
+            "/api/sync/fep-payment-updates?agent_id=ron_laptop",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(frontdesk_response.status_code, 200)
+        self.assertEqual(frontdesk_response.json["updates"], [])
+        self.assertEqual(laptop_response.status_code, 200)
+        self.assertEqual(len(laptop_response.json["updates"]), 1)
+        record = FepPaymentUpdate.query.one()
+        self.assertEqual(record.status, "processing_gym_assistant_apply")
+        self.assertEqual(record.claimed_by, "ron_laptop")
+
+    def test_sync_agent_queue_peek_does_not_claim(self):
+        self.add_direct_debit_member()
+        self.client.post(
+            "/api/fep/payment-update",
+            json=self.fep_payment_payload(target_agent="ron_laptop"),
+            headers=self.fep_headers(),
+        )
+
+        response = self.client.get(
+            "/api/sync/fep-payment-updates?agent_id=ron_laptop&peek=1",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json["peek"])
+        self.assertEqual(len(response.json["updates"]), 1)
+        record = FepPaymentUpdate.query.one()
+        self.assertEqual(record.status, "pending_gym_assistant_apply")
+        self.assertIsNone(record.claimed_by)
+
+    def test_sync_agent_result_rejects_wrong_agent_claim(self):
+        self.add_direct_debit_member()
+        self.client.post(
+            "/api/fep/payment-update",
+            json=self.fep_payment_payload(target_agent="ron_laptop"),
+            headers=self.fep_headers(),
+        )
+        update = self.client.get(
+            "/api/sync/fep-payment-updates?agent_id=ron_laptop",
+            headers={"X-Sync-Token": "sync-test-token"},
+        ).json["updates"][0]
+
+        response = self.client.post(
+            f"/api/sync/fep-payment-updates/{update['id']}/result",
+            json={"status": "applied", "writer": "unit-test"},
+            headers={"X-Sync-Token": "sync-test-token", "X-Sync-Agent": "frontdesk_dreamz"},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("claimed by Ron laptop", response.json["error"])
+        record = FepPaymentUpdate.query.one()
+        self.assertEqual(record.status, "processing_gym_assistant_apply")
+        self.assertEqual(record.claimed_by, "ron_laptop")
 
 
 if __name__ == "__main__":

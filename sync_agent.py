@@ -12,6 +12,7 @@ import subprocess
 from typing import Iterable
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 
 from ga_import import ImportIssue, ImportResult, parse_gymassistant_export, parse_member_log
 from ga_documents import infer_member_document_records
@@ -502,16 +503,19 @@ def build_sync_payload(
     }
 
 
-def post_json(url: str, token: str, payload: dict, timeout: int = 60) -> dict:
+def post_json(url: str, token: str, payload: dict, timeout: int = 60, extra_headers: dict | None = None) -> dict:
     data = json.dumps(payload).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "X-Sync-Token": token,
+    }
+    if extra_headers:
+        headers.update(extra_headers)
     request = urlrequest.Request(
         url,
         data=data,
         method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "X-Sync-Token": token,
-        },
+        headers=headers,
     )
     try:
         with urlrequest.urlopen(request, timeout=timeout) as response:
@@ -562,12 +566,12 @@ def get_missing_file_keys(portal_url: str, token: str, timeout: int = 300) -> se
     return {str(key).replace("\\", "/").lstrip("/") for key in missing_keys}
 
 
-def get_fep_payment_updates(portal_url: str, token: str, limit: int = 50, timeout: int = 60) -> list[dict]:
-    endpoint = portal_url.rstrip("/") + f"/api/sync/fep-payment-updates?limit={max(1, min(limit, 100))}"
+def get_fep_payment_updates(portal_url: str, token: str, limit: int = 50, timeout: int = 60, agent_id: str = "frontdesk_dreamz") -> list[dict]:
+    endpoint = portal_url.rstrip("/") + f"/api/sync/fep-payment-updates?limit={max(1, min(limit, 100))}&agent_id={quote(agent_id or 'frontdesk_dreamz')}"
     http_request = urlrequest.Request(
         endpoint,
         method="GET",
-        headers={"X-Sync-Token": token},
+        headers={"X-Sync-Token": token, "X-Sync-Agent": agent_id or "frontdesk_dreamz"},
     )
     try:
         with urlrequest.urlopen(http_request, timeout=timeout) as response:
@@ -582,9 +586,11 @@ def get_fep_payment_updates(portal_url: str, token: str, limit: int = 50, timeou
     return updates if isinstance(updates, list) else []
 
 
-def post_fep_payment_update_result(portal_url: str, token: str, update_id: int, payload: dict, timeout: int = 60) -> dict:
+def post_fep_payment_update_result(portal_url: str, token: str, update_id: int, payload: dict, timeout: int = 60, agent_id: str = "frontdesk_dreamz") -> dict:
     endpoint = portal_url.rstrip("/") + f"/api/sync/fep-payment-updates/{update_id}/result"
-    return post_json(endpoint, token, payload, timeout=timeout)
+    payload = dict(payload or {})
+    payload.setdefault("agent_id", agent_id or "frontdesk_dreamz")
+    return post_json(endpoint, token, payload, timeout=timeout, extra_headers={"X-Sync-Agent": agent_id or "frontdesk_dreamz"})
 
 
 def run_fep_payment_writer(command: str, source_root: Path, update: dict, timeout: int = 300) -> dict:
@@ -634,8 +640,9 @@ def process_fep_payment_updates(
     token: str,
     writer_command: str,
     limit: int = 50,
+    agent_id: str = "frontdesk_dreamz",
 ) -> dict:
-    updates = get_fep_payment_updates(portal_url, token, limit=limit)
+    updates = get_fep_payment_updates(portal_url, token, limit=limit, agent_id=agent_id)
     summary = {"received": len(updates), "applied": 0, "failed": 0, "deferred": 0}
     for update in updates:
         update_id = int(update["id"])
@@ -643,9 +650,10 @@ def process_fep_payment_updates(
             writer_result = run_fep_payment_writer(writer_command, source_root, update)
             if writer_result.get("status") == "deferred":
                 summary["deferred"] += 1
+                post_fep_payment_update_result(portal_url, token, update_id, writer_result, agent_id=agent_id)
                 continue
             writer_result["status"] = "applied"
-            post_fep_payment_update_result(portal_url, token, update_id, writer_result)
+            post_fep_payment_update_result(portal_url, token, update_id, writer_result, agent_id=agent_id)
             summary["applied"] += 1
         except Exception as exc:
             post_fep_payment_update_result(
@@ -653,6 +661,7 @@ def process_fep_payment_updates(
                 token,
                 update_id,
                 {"status": "failed", "error": str(exc)},
+                agent_id=agent_id,
             )
             summary["failed"] += 1
     return summary
@@ -732,6 +741,7 @@ def main() -> None:
     parser.add_argument("--write-manifest", action="store_true", help="Write/update the local manifest after scanning.")
     parser.add_argument("--portal-url", help="Portal base URL, for example http://127.0.0.1:5000.")
     parser.add_argument("--sync-token", default=os.getenv("SYNC_API_TOKEN"), help="Sync API token. Defaults to SYNC_API_TOKEN.")
+    parser.add_argument("--agent-id", default=os.getenv("SYNC_AGENT_ID", "frontdesk_dreamz"), help="Payment queue agent id, for example frontdesk_dreamz or ron_laptop.")
     parser.add_argument("--push-members", action="store_true", help="Push member and document metadata to the portal sync API.")
     parser.add_argument("--process-fep-payments", action="store_true", help="Process queued FEP payment updates before pushing member sync data.")
     parser.add_argument("--fep-payment-writer", default=os.getenv("FEP_PAYMENT_WRITER_COMMAND", ""), help="Local command that writes one FEP payment update to Gym Assistant. Receives JSON on stdin.")
@@ -769,6 +779,7 @@ def main() -> None:
             args.sync_token,
             args.fep_payment_writer,
             limit=args.fep_payment_limit,
+            agent_id=args.agent_id,
         )
         print("FEP payment processing response:")
         print(json.dumps(result, indent=2))

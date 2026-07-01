@@ -1,21 +1,43 @@
 param(
   [int]$Minutes = 30,
   [int]$IntervalSeconds = 10,
-  [int]$Limit = 10,
-  [int]$MaxTotal = 10
+  [int]$Limit = 25,
+  [int]$MaxTotal = 250,
+  [ValidateSet("frontdesk_dreamz", "ron_laptop")]
+  [string]$AgentId = "frontdesk_dreamz",
+  [string]$SourceRoot = "C:\Gym Assistant 2.6",
+  [string]$SyncHome = "C:\DreamzPortalSync",
+  [string]$Root = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 $taskName = "Dreamz Portal Sync"
-$syncHome = "C:\DreamzPortalSync"
-$root = Join-Path $syncHome "dreamz_member_portal-codex-railway-staging"
-$python = Join-Path $root ".venv\Scripts\python.exe"
+$syncHome = $SyncHome
+if (-not $Root) {
+  $defaultRoot = Join-Path $syncHome "dreamz_member_portal-codex-railway-staging"
+  if (Test-Path -LiteralPath $defaultRoot) {
+    $root = $defaultRoot
+  } else {
+    $root = $PSScriptRoot
+  }
+} else {
+  $root = $Root
+}
+if (-not (Test-Path -LiteralPath $syncHome) -and -not $PSBoundParameters.ContainsKey("SyncHome")) {
+  $syncHome = Join-Path $root "instance"
+}
+$venvPython = Join-Path $root ".venv\Scripts\python.exe"
+$python = if (Test-Path -LiteralPath $venvPython) { $venvPython } else { "python.exe" }
 $manifest = Join-Path $syncHome "sync_manifest.json"
 $logDir = Join-Path $syncHome "logs"
 $portalUrl = "https://dreamzmemberportal-production.up.railway.app"
 $bucket = "dreamz-member-files-ku5q4"
-$writerCommand = '.\.venv\Scripts\python.exe gymassistant_payment_writer.py --apply --foreground-ui --timeout 30'
+$writerCommand = if (Test-Path -LiteralPath $venvPython) {
+  '.\.venv\Scripts\python.exe gymassistant_payment_writer.py --apply --foreground-ui --timeout 30'
+} else {
+  'python.exe gymassistant_payment_writer.py --apply --foreground-ui --timeout 30'
+}
 $mutexName = "Global\DreamzPortalSync"
 
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -30,12 +52,12 @@ function Write-SessionLog {
 
 function Get-PendingCount {
   $response = Invoke-RestMethod `
-    -Uri "$portalUrl/api/sync/fep-payment-updates?limit=$Limit" `
-    -Headers @{ "X-Sync-Token" = $token }
+    -Uri "$portalUrl/api/sync/fep-payment-updates?limit=$Limit&agent_id=$AgentId&peek=1" `
+    -Headers @{ "X-Sync-Token" = $token; "X-Sync-Agent" = $AgentId }
   return @($response.updates).Count
 }
 
-if (-not (Test-Path -LiteralPath $python)) {
+if ($python -ne "python.exe" -and -not (Test-Path -LiteralPath $python)) {
   throw "Python venv not found: $python"
 }
 
@@ -68,6 +90,7 @@ try {
   $processedBudget = 0
 
   Write-SessionLog "Process FEP Now started. minutes=$Minutes interval=$IntervalSeconds limit=$Limit max_total=$MaxTotal"
+  Write-SessionLog "Agent: $AgentId; source_root: $SourceRoot"
   Write-SessionLog "Log file: $sessionLog"
 
   while ((Get-Date) -lt $deadline -and $processedBudget -lt $MaxTotal) {
@@ -84,10 +107,11 @@ try {
     Write-SessionLog "Processing up to $runLimit payment(s) now."
 
     & $python "sync_agent.py" `
-      --source-root "C:\Gym Assistant 2.6" `
+      --source-root $SourceRoot `
       --manifest $manifest `
       --portal-url $portalUrl `
       --sync-token $token `
+      --agent-id $AgentId `
       --process-fep-payments `
       --fep-payment-writer $writerCommand `
       --fep-payment-limit $runLimit `

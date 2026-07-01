@@ -23,6 +23,7 @@ from flask import (
 
 from flask_sqlalchemy import SQLAlchemy
 from markupsafe import Markup
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from dateutil.relativedelta import relativedelta
 from datetime import datetime, date, timedelta   # ← bestaande regel uitbreiden
@@ -666,6 +667,10 @@ class FepPaymentUpdate(db.Model):
     new_values_json = db.Column(db.Text)
     result_json = db.Column(db.Text)
     actor = db.Column(db.String)
+    target_agent = db.Column(db.String, default="frontdesk_dreamz", nullable=False, index=True)
+    claimed_by = db.Column(db.String, index=True)
+    claimed_at = db.Column(db.DateTime)
+    claim_expires_at = db.Column(db.DateTime, index=True)
     error = db.Column(db.Text)
     apply_attempts = db.Column(db.Integer, default=0, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
@@ -4554,6 +4559,7 @@ def route_document_type_key(document_type):
 
 FEP_PAYMENT_STATUS_RECEIVED = "received"
 FEP_PAYMENT_STATUS_PENDING = "pending_gym_assistant_apply"
+FEP_PAYMENT_STATUS_PROCESSING = "processing_gym_assistant_apply"
 FEP_PAYMENT_STATUS_APPLIED = "applied_to_gym_assistant"
 FEP_PAYMENT_STATUS_CONFIRMED = "confirmed_by_gym_assistant_sync"
 FEP_PAYMENT_STATUS_REJECTED = "rejected"
@@ -4563,6 +4569,16 @@ FEP_PAYMENT_WRITTEN_STATUSES = {
     FEP_PAYMENT_STATUS_CONFIRMED,
 }
 FEP_PAYMENT_CENT = Decimal("0.01")
+FEP_PAYMENT_AGENT_FRONTDESK = "frontdesk_dreamz"
+FEP_PAYMENT_AGENT_RON_LAPTOP = "ron_laptop"
+FEP_PAYMENT_AGENT_LABELS = {
+    FEP_PAYMENT_AGENT_FRONTDESK: "Frontdesk computer Dreamz",
+    FEP_PAYMENT_AGENT_RON_LAPTOP: "Ron laptop",
+}
+FEP_PAYMENT_QUEUE_STATUSES = {
+    FEP_PAYMENT_STATUS_PENDING,
+    FEP_PAYMENT_STATUS_PROCESSING,
+}
 
 
 class FepPaymentReject(ValueError):
@@ -4574,6 +4590,44 @@ class FepPaymentReject(ValueError):
 def stable_json_hash(payload):
     serialized = json.dumps(payload or {}, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def stable_fep_payment_request_hash(payload):
+    hash_payload = dict(payload or {})
+    hash_payload.pop("target_agent", None)
+    return stable_json_hash(hash_payload)
+
+
+def fep_payment_claim_seconds():
+    try:
+        return max(60, min(int(os.getenv("FEP_PAYMENT_CLAIM_SECONDS", "900")), 3600))
+    except ValueError:
+        return 900
+
+
+def normalize_fep_payment_agent(value, *, default=FEP_PAYMENT_AGENT_FRONTDESK, strict=False):
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "frontdesk": FEP_PAYMENT_AGENT_FRONTDESK,
+        "frontdesk_dreamz": FEP_PAYMENT_AGENT_FRONTDESK,
+        "dreamz_frontdesk": FEP_PAYMENT_AGENT_FRONTDESK,
+        "frontdesk_computer_dreamz": FEP_PAYMENT_AGENT_FRONTDESK,
+        "ron": FEP_PAYMENT_AGENT_RON_LAPTOP,
+        "ron_laptop": FEP_PAYMENT_AGENT_RON_LAPTOP,
+        "laptop_ron": FEP_PAYMENT_AGENT_RON_LAPTOP,
+    }
+    if not text:
+        return default
+    agent = aliases.get(text)
+    if agent:
+        return agent
+    if strict:
+        raise FepPaymentReject("target_agent is unknown.", 400)
+    return default
+
+
+def fep_payment_agent_label(agent_id):
+    return FEP_PAYMENT_AGENT_LABELS.get(agent_id, agent_id or FEP_PAYMENT_AGENT_FRONTDESK)
 
 
 def masked_fep_payload(payload):
@@ -4698,16 +4752,23 @@ def fep_member_payment_snapshot(member):
 
 
 def fep_public_update(record, duplicate=False):
+    target_agent = normalize_fep_payment_agent(getattr(record, "target_agent", None))
     payload = {
         "ok": True,
         "applied": record.status in FEP_PAYMENT_WRITTEN_STATUSES,
         "confirmed": record.status == FEP_PAYMENT_STATUS_CONFIRMED,
         "duplicate": bool(duplicate),
-        "queued": record.status == FEP_PAYMENT_STATUS_PENDING,
+        "queued": record.status in FEP_PAYMENT_QUEUE_STATUSES,
         "status": record.status,
         "member_id": record.member_id,
         "idempotency_key": record.idempotency_key,
+        "target_agent": target_agent,
+        "target_agent_label": fep_payment_agent_label(target_agent),
     }
+    if getattr(record, "claimed_by", None):
+        payload["claimed_by"] = record.claimed_by
+    if getattr(record, "claim_expires_at", None):
+        payload["claim_expires_at"] = record.claim_expires_at.isoformat()
     if record.error:
         payload["error"] = record.error
     return payload
@@ -4736,6 +4797,7 @@ def validate_fep_payment_payload(payload):
         raise FepPaymentReject("member_id is required.", 400)
     if client_number and client_number != member_id:
         raise FepPaymentReject("client_number does not match member_id.", 409)
+    target_agent = normalize_fep_payment_agent(payload.get("target_agent"), strict=True)
 
     membership_period, period_start = parse_fep_membership_period(payload.get("membership_period"))
     transaction_date = parse_fep_yyyymmdd(payload.get("transaction_date"), "transaction_date", required=False)
@@ -4803,6 +4865,7 @@ def validate_fep_payment_payload(payload):
         "member": member,
         "member_id": member_id,
         "member_name": payload.get("member_name") or member.name,
+        "target_agent": target_agent,
         "membership_period": membership_period,
         "upload_id": parse_fep_int(payload.get("upload_id"), "upload_id"),
         "upload_filename": str(payload.get("upload_filename") or "").strip() or None,
@@ -4819,7 +4882,7 @@ def validate_fep_payment_payload(payload):
 
 
 def create_fep_payment_update(payload):
-    payload_hash = stable_json_hash(payload)
+    payload_hash = stable_fep_payment_request_hash(payload)
     idempotency_key = str((payload or {}).get("idempotency_key") or "").strip()
     existing = FepPaymentUpdate.query.filter_by(idempotency_key=idempotency_key).first() if idempotency_key else None
     if existing:
@@ -4834,6 +4897,7 @@ def create_fep_payment_update(payload):
         status=FEP_PAYMENT_STATUS_PENDING,
         member_id=validated["member_id"],
         member_name=validated["member_name"],
+        target_agent=validated["target_agent"],
         membership_period=validated["membership_period"],
         upload_id=validated["upload_id"],
         upload_filename=validated["upload_filename"],
@@ -4883,11 +4947,17 @@ def parse_fep_target_date(value):
 
 def fep_payment_sync_item(record):
     target_values = fep_payment_update_target(record)
+    target_agent = normalize_fep_payment_agent(getattr(record, "target_agent", None))
     return {
         "id": record.id,
         "idempotency_key": record.idempotency_key,
         "source": record.source,
         "status": record.status,
+        "target_agent": target_agent,
+        "target_agent_label": fep_payment_agent_label(target_agent),
+        "claimed_by": getattr(record, "claimed_by", None),
+        "claimed_at": record.claimed_at.isoformat() if getattr(record, "claimed_at", None) else None,
+        "claim_expires_at": record.claim_expires_at.isoformat() if getattr(record, "claim_expires_at", None) else None,
         "member_id": record.member_id,
         "member_name": record.member_name,
         "membership_period": record.membership_period,
@@ -10195,6 +10265,49 @@ def api_sync_member_ids():
     }
 
 
+def sync_request_agent_id():
+    value = (
+        request.args.get("agent_id")
+        or request.headers.get("X-Sync-Agent")
+        or request.headers.get("X-FEP-Agent")
+        or FEP_PAYMENT_AGENT_FRONTDESK
+    )
+    try:
+        return normalize_fep_payment_agent(value, strict=True)
+    except FepPaymentReject:
+        abort(400, "Unknown sync agent.")
+
+
+def release_expired_fep_payment_claims(now=None):
+    now = now or datetime.now()
+    expired_records = (
+        FepPaymentUpdate.query
+        .filter(
+            FepPaymentUpdate.status == FEP_PAYMENT_STATUS_PROCESSING,
+            FepPaymentUpdate.claim_expires_at.isnot(None),
+            FepPaymentUpdate.claim_expires_at < now,
+        )
+        .all()
+    )
+    for record in expired_records:
+        record.status = FEP_PAYMENT_STATUS_PENDING
+        record.claimed_by = None
+        record.claimed_at = None
+        record.claim_expires_at = None
+        record.updated_at = now
+    return len(expired_records)
+
+
+def fep_payment_agent_filter(agent_id):
+    if agent_id == FEP_PAYMENT_AGENT_FRONTDESK:
+        return or_(
+            FepPaymentUpdate.target_agent == FEP_PAYMENT_AGENT_FRONTDESK,
+            FepPaymentUpdate.target_agent.is_(None),
+            FepPaymentUpdate.target_agent == "",
+        )
+    return FepPaymentUpdate.target_agent == agent_id
+
+
 @app.get("/api/sync/fep-payment-updates")
 def api_sync_fep_payment_updates():
     require_sync_access()
@@ -10203,15 +10316,37 @@ def api_sync_fep_payment_updates():
         limit = max(1, min(int(request.args.get("limit", 50)), 100))
     except ValueError:
         limit = 50
+    agent_id = sync_request_agent_id()
+    peek_only = str(request.args.get("peek") or "").strip().lower() in {"1", "true", "yes", "on"}
+    now = datetime.now()
+    claim_until = now + timedelta(seconds=fep_payment_claim_seconds())
+    released = release_expired_fep_payment_claims(now)
     records = (
         FepPaymentUpdate.query
-        .filter_by(status=FEP_PAYMENT_STATUS_PENDING)
+        .filter(
+            FepPaymentUpdate.status == FEP_PAYMENT_STATUS_PENDING,
+            fep_payment_agent_filter(agent_id),
+        )
         .order_by(FepPaymentUpdate.created_at.asc(), FepPaymentUpdate.id.asc())
-        .limit(limit)
-        .all()
     )
+    if db.session.get_bind().dialect.name == "postgresql" and not peek_only:
+        records = records.with_for_update(skip_locked=True)
+    records = records.limit(limit).all()
+    if not peek_only:
+        for record in records:
+            record.status = FEP_PAYMENT_STATUS_PROCESSING
+            record.claimed_by = agent_id
+            record.claimed_at = now
+            record.claim_expires_at = claim_until
+            record.updated_at = now
+    if released or (records and not peek_only):
+        db.session.commit()
     return {
         "status": "success",
+        "agent_id": agent_id,
+        "agent_label": fep_payment_agent_label(agent_id),
+        "peek": peek_only,
+        "released_expired_claims": released,
         "updates": [fep_payment_sync_item(record) for record in records],
     }
 
@@ -10221,12 +10356,28 @@ def api_sync_fep_payment_update_result(update_id):
     require_sync_access()
     ensure_runtime_schema()
     payload = request.get_json(silent=True) or {}
+    agent_id = sync_request_agent_id()
     record = db.session.get(FepPaymentUpdate, update_id)
     if not record:
         return {"ok": False, "error": "payment update was not found."}, 404
     result_status = str(payload.get("status") or "").strip()
-    if result_status not in {"applied", "failed"}:
-        return {"ok": False, "error": "status must be applied or failed."}, 400
+    if result_status not in {"applied", "failed", "deferred"}:
+        return {"ok": False, "error": "status must be applied, failed, or deferred."}, 400
+    if record.status in FEP_PAYMENT_WRITTEN_STATUSES:
+        return {
+            "ok": True,
+            "status": record.status,
+            "duplicate": True,
+            "idempotency_key": record.idempotency_key,
+        }
+    claimed_by = normalize_fep_payment_agent(getattr(record, "claimed_by", None))
+    if record.status == FEP_PAYMENT_STATUS_PROCESSING and claimed_by != agent_id:
+        return {
+            "ok": False,
+            "error": f"payment update is claimed by {fep_payment_agent_label(claimed_by)}.",
+        }, 409
+    if record.status not in {FEP_PAYMENT_STATUS_PENDING, FEP_PAYMENT_STATUS_PROCESSING}:
+        return {"ok": False, "error": f"payment update cannot accept result from status {record.status}."}, 409
 
     now = datetime.now()
     record.apply_attempts = (record.apply_attempts or 0) + 1
@@ -10236,11 +10387,22 @@ def api_sync_fep_payment_update_result(update_id):
         record.status = FEP_PAYMENT_STATUS_APPLIED
         record.applied_at = now
         record.error = None
-    else:
+    elif result_status == "failed":
         record.status = FEP_PAYMENT_STATUS_FAILED
         record.error = str(payload.get("error") or "Gym Assistant write-back failed.")
+    else:
+        record.status = FEP_PAYMENT_STATUS_PENDING
+        record.error = str(payload.get("reason") or payload.get("error") or "Gym Assistant write-back deferred.")
+    record.claimed_by = None
+    record.claimed_at = None
+    record.claim_expires_at = None
     db.session.commit()
-    return {"ok": True, "status": record.status, "idempotency_key": record.idempotency_key}
+    return {
+        "ok": True,
+        "status": record.status,
+        "agent_id": agent_id,
+        "idempotency_key": record.idempotency_key,
+    }
 
 
 @app.get("/api/sync/missing-file-keys")

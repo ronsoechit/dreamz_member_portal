@@ -486,16 +486,17 @@ class SyncAgentTests(unittest.TestCase):
                 patch("sync_agent.run_fep_payment_writer", return_value={"status": "applied", "writer": "unit-test"}) as writer,
                 patch("sync_agent.post_fep_payment_update_result", return_value={"ok": True}) as post_result,
             ):
-                result = process_fep_payment_updates(root, "https://portal.example", "sync-token", "writer-cmd")
+                result = process_fep_payment_updates(root, "https://portal.example", "sync-token", "writer-cmd", agent_id="ron_laptop")
 
         self.assertEqual(result, {"received": 1, "applied": 1, "failed": 0, "deferred": 0})
-        get_updates.assert_called_once()
+        get_updates.assert_called_once_with("https://portal.example", "sync-token", limit=50, agent_id="ron_laptop")
         writer.assert_called_once_with("writer-cmd", root, update)
         post_result.assert_called_once_with(
             "https://portal.example",
             "sync-token",
             7,
             {"status": "applied", "writer": "unit-test"},
+            agent_id="ron_laptop",
         )
 
     def test_process_fep_payment_updates_posts_writer_failure(self):
@@ -516,9 +517,10 @@ class SyncAgentTests(unittest.TestCase):
             "sync-token",
             8,
             {"status": "failed", "error": "writer not configured"},
+            agent_id="frontdesk_dreamz",
         )
 
-    def test_process_fep_payment_updates_leaves_deferred_pending(self):
+    def test_process_fep_payment_updates_reports_deferred_to_release_claim(self):
         update = {"id": 9, "member_id": "34203", "target_values": {"next_payment": "2026-08-01"}}
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "Gym Assistant 2.6"
@@ -531,7 +533,13 @@ class SyncAgentTests(unittest.TestCase):
                 result = process_fep_payment_updates(root, "https://portal.example", "sync-token", "writer-cmd")
 
         self.assertEqual(result, {"received": 1, "applied": 0, "failed": 0, "deferred": 1})
-        post_result.assert_not_called()
+        post_result.assert_called_once_with(
+            "https://portal.example",
+            "sync-token",
+            9,
+            {"status": "deferred", "reason": "desktop_not_idle"},
+            agent_id="frontdesk_dreamz",
+        )
 
     def test_run_fep_payment_writer_uses_json_error_message(self):
         completed = subprocess.CompletedProcess(
