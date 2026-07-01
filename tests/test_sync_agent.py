@@ -6,7 +6,7 @@ import subprocess
 import zipfile
 from unittest.mock import patch
 
-from sync_agent import build_sync_payload, diff_manifest, load_manifest, process_fep_payment_updates, run_fep_payment_writer, save_manifest, scan_source
+from sync_agent import build_sync_payload, diff_manifest, load_manifest, main, process_fep_payment_updates, run_fep_payment_writer, save_manifest, scan_source
 
 
 def write_backup(path: Path, member_id: str = "100") -> None:
@@ -540,6 +540,46 @@ class SyncAgentTests(unittest.TestCase):
             {"status": "deferred", "reason": "desktop_not_idle"},
             agent_id="frontdesk_dreamz",
         )
+
+    def test_main_processes_fep_payments_before_scanning_source(self):
+        calls = []
+
+        def fake_process(*args, **kwargs):
+            calls.append("payments")
+            return {"received": 0, "applied": 0, "failed": 0, "deferred": 0}
+
+        def fake_scan(source_root):
+            calls.append("scan")
+            return object()
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "sync_agent.py",
+                    "--source-root",
+                    r"C:\Gym Assistant 2.6",
+                    "--portal-url",
+                    "https://portal.example",
+                    "--sync-token",
+                    "sync-token",
+                    "--agent-id",
+                    "ron_laptop",
+                    "--process-fep-payments",
+                    "--fep-payment-writer",
+                    "writer-cmd",
+                ],
+            ),
+            patch("sync_agent.process_fep_payment_updates", side_effect=fake_process),
+            patch("sync_agent.scan_source", side_effect=fake_scan),
+            patch("sync_agent.load_manifest", return_value=None),
+            patch("sync_agent.diff_manifest", return_value=object()),
+            patch("sync_agent.print_scan_report"),
+            patch("builtins.print"),
+        ):
+            main()
+
+        self.assertEqual(calls[:2], ["payments", "scan"])
 
     def test_run_fep_payment_writer_uses_json_error_message(self):
         completed = subprocess.CompletedProcess(

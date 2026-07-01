@@ -757,14 +757,6 @@ def main() -> None:
 
     source_root = Path(args.source_root)
     manifest_path = Path(args.manifest)
-    scan = scan_source(source_root)
-    previous = load_manifest(manifest_path)
-    diff = diff_manifest(scan, previous)
-    print_scan_report(scan, diff=diff)
-
-    if args.write_manifest and not args.push_members:
-        save_manifest(scan, manifest_path)
-        print(f"Manifest written: {manifest_path}")
 
     if args.process_fep_payments:
         if not args.portal_url:
@@ -783,6 +775,15 @@ def main() -> None:
         )
         print("FEP payment processing response:")
         print(json.dumps(result, indent=2))
+
+    scan = scan_source(source_root)
+    previous = load_manifest(manifest_path)
+    diff = diff_manifest(scan, previous)
+    print_scan_report(scan, diff=diff)
+
+    if args.write_manifest and not args.push_members:
+        save_manifest(scan, manifest_path)
+        print(f"Manifest written: {manifest_path}")
 
     if args.push_members:
         if not args.portal_url:
