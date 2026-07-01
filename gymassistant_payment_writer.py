@@ -277,6 +277,21 @@ def find_credit_card_result_dialog() -> int | None:
     return None
 
 
+def find_next_payment_due_dialog(member_id: str | None = None) -> int | None:
+    member_fragment = f"for #{member_id}" if member_id else "for #"
+    for info in enum_top_windows():
+        if not info.visible:
+            continue
+        combined = " ".join(dialog_texts(info.hwnd)).casefold()
+        if (
+            "next payment" in combined
+            and "will be due" in combined
+            and member_fragment.casefold() in combined
+        ):
+            return info.hwnd
+    return None
+
+
 def find_dependent_payment_prompt() -> BlockingDialog | None:
     for info in enum_top_windows():
         if not info.visible:
@@ -536,7 +551,12 @@ def cancel_dialog(dialog_hwnd: int) -> None:
     click_button(cancel.hwnd)
 
 
-def apply_payment(dialog_hwnd: int, timeout: float, payment_method: str = "Credit Card") -> None:
+def apply_payment(
+    dialog_hwnd: int,
+    timeout: float,
+    payment_method: str = "Credit Card",
+    member_id: str | None = None,
+) -> None:
     children = enum_children(dialog_hwnd)
     record = find_child(children, text="&Record Payment", class_name_="Button", enabled=True)
     click_button(record.hwnd)
@@ -624,6 +644,23 @@ def apply_payment(dialog_hwnd: int, timeout: float, payment_method: str = "Credi
         "Timed out waiting for Gym Assistant payment dialogs to close after applying payment.",
     )
 
+    next_due_deadline = time.time() + min(timeout, 5.0)
+    next_due_hwnd = None
+    while time.time() < next_due_deadline:
+        next_due_hwnd = find_next_payment_due_dialog(member_id)
+        if next_due_hwnd:
+            break
+        time.sleep(0.1)
+
+    if next_due_hwnd:
+        if not click_dialog_button(next_due_hwnd, {"OK"}):
+            raise RuntimeError("Could not find enabled OK button on next payment due dialog.")
+        wait_until(
+            lambda: not find_next_payment_due_dialog(member_id),
+            timeout,
+            "Timed out waiting for Gym Assistant next payment due dialog to close.",
+        )
+
 
 def run_writer(
     stdin_payload: dict,
@@ -701,7 +738,7 @@ def run_writer(
             "error": "Dry run only. Re-run with --apply to record the Gym Assistant payment.",
         }
 
-    apply_payment(dialog_hwnd, timeout, payment_method=payment_method)
+    apply_payment(dialog_hwnd, timeout, payment_method=payment_method, member_id=member_id)
     return {
         "status": "applied",
         "applied": True,
