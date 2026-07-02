@@ -684,6 +684,45 @@ class SyncAgentTests(unittest.TestCase):
 
         self.assertEqual(calls[:2], ["command", "scan"])
 
+    def test_main_continues_member_sync_when_fep_command_check_fails(self):
+        calls = []
+
+        def fake_scan(source_root):
+            calls.append("scan")
+            return object()
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "sync_agent.py",
+                    "--source-root",
+                    r"C:\Gym Assistant 2.6",
+                    "--portal-url",
+                    "https://portal.example",
+                    "--sync-token",
+                    "sync-token",
+                    "--agent-id",
+                    "frontdesk_dreamz",
+                    "--process-fep-command",
+                    "--fep-payment-writer",
+                    "writer-cmd",
+                ],
+            ),
+            patch("sync_agent.process_fep_payment_command", side_effect=RuntimeError("portal timeout")),
+            patch("sync_agent.scan_source", side_effect=fake_scan),
+            patch("sync_agent.load_manifest", return_value=None),
+            patch("sync_agent.diff_manifest", return_value=object()),
+            patch("sync_agent.print_scan_report"),
+            patch("builtins.print") as printed,
+        ):
+            main()
+
+        self.assertEqual(calls, ["scan"])
+        printed_text = "\n".join(str(call.args[0]) for call in printed.call_args_list if call.args)
+        self.assertIn("FEP payment command response:", printed_text)
+        self.assertIn("skipped", printed_text)
+
     def test_run_fep_payment_writer_uses_json_error_message(self):
         completed = subprocess.CompletedProcess(
             args=["writer"],

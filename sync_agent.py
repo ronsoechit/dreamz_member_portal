@@ -856,22 +856,32 @@ def main() -> None:
     manifest_path = Path(args.manifest)
 
     if args.process_fep_command:
-        if not args.portal_url:
-            raise SystemExit("--portal-url is required with --process-fep-command")
-        if not args.sync_token:
-            raise SystemExit("--sync-token or SYNC_API_TOKEN is required with --process-fep-command")
         if not args.fep_payment_writer:
-            raise SystemExit("--fep-payment-writer or FEP_PAYMENT_WRITER_COMMAND is required with --process-fep-command")
-        result = process_fep_payment_command(
-            source_root,
-            args.portal_url,
-            args.sync_token,
-            args.fep_payment_writer,
-            default_limit=args.fep_payment_limit,
-            agent_id=args.agent_id,
-        )
-        print("FEP payment command response:")
-        print(json.dumps(result, indent=2))
+            print("FEP payment command skipped: --fep-payment-writer or FEP_PAYMENT_WRITER_COMMAND is not configured.")
+        elif not args.portal_url or not args.sync_token:
+            print("FEP payment command skipped: --portal-url and --sync-token/SYNC_API_TOKEN are required.")
+        else:
+            try:
+                result = process_fep_payment_command(
+                    source_root,
+                    args.portal_url,
+                    args.sync_token,
+                    args.fep_payment_writer,
+                    default_limit=args.fep_payment_limit,
+                    agent_id=args.agent_id,
+                )
+            except Exception as exc:
+                result = {
+                    "claimed": False,
+                    "status": "skipped",
+                    "error": str(exc),
+                    "received": 0,
+                    "applied": 0,
+                    "failed": 0,
+                    "deferred": 0,
+                }
+            print("FEP payment command response:")
+            print(json.dumps(result, indent=2))
 
     if args.process_fep_payments:
         if not args.portal_url:
