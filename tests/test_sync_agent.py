@@ -6,7 +6,7 @@ import subprocess
 import zipfile
 from unittest.mock import patch
 
-from sync_agent import build_sync_payload, diff_manifest, load_manifest, main, process_fep_payment_updates, run_fep_payment_writer, save_manifest, scan_source
+from sync_agent import build_sync_payload, diff_manifest, load_manifest, main, process_fep_payment_command, process_fep_payment_updates, run_fep_payment_writer, save_manifest, scan_source
 
 
 def write_backup(path: Path, member_id: str = "100") -> None:
@@ -541,6 +541,69 @@ class SyncAgentTests(unittest.TestCase):
             agent_id="frontdesk_dreamz",
         )
 
+    def test_process_fep_payment_command_claims_and_reports_summary(self):
+        command = {"id": 42, "requested_limit": 2, "target_agent": "frontdesk_dreamz"}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            root.mkdir()
+            with (
+                patch("sync_agent.get_fep_payment_process_command", return_value=command) as get_command,
+                patch("sync_agent.process_fep_payment_updates", return_value={"received": 2, "applied": 2, "failed": 0, "deferred": 0}) as process_updates,
+                patch("sync_agent.post_fep_payment_process_command_result", return_value={"ok": True}) as post_command,
+            ):
+                result = process_fep_payment_command(root, "https://portal.example", "sync-token", "writer-cmd")
+
+        self.assertEqual(result, {"claimed": True, "command_id": 42, "received": 2, "applied": 2, "failed": 0, "deferred": 0})
+        get_command.assert_called_once_with("https://portal.example", "sync-token", agent_id="frontdesk_dreamz")
+        process_updates.assert_called_once_with(
+            root,
+            "https://portal.example",
+            "sync-token",
+            "writer-cmd",
+                limit=2,
+                agent_id="frontdesk_dreamz",
+            )
+        post_command.assert_called_once()
+        self.assertEqual(post_command.call_args.args[:3], ("https://portal.example", "sync-token", 42))
+        self.assertEqual(post_command.call_args.args[3]["status"], "completed")
+
+    def test_process_fep_payment_command_processes_large_command_in_chunks(self):
+        command = {"id": 43, "requested_limit": 150, "target_agent": "frontdesk_dreamz"}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            root.mkdir()
+            with (
+                patch("sync_agent.get_fep_payment_process_command", return_value=command),
+                patch(
+                    "sync_agent.process_fep_payment_updates",
+                    side_effect=[
+                        {"received": 100, "applied": 98, "failed": 1, "deferred": 1},
+                        {"received": 20, "applied": 20, "failed": 0, "deferred": 0},
+                        {"received": 0, "applied": 0, "failed": 0, "deferred": 0},
+                    ],
+                ) as process_updates,
+                patch("sync_agent.post_fep_payment_process_command_result", return_value={"ok": True}) as post_command,
+            ):
+                result = process_fep_payment_command(root, "https://portal.example", "sync-token", "writer-cmd")
+
+        self.assertEqual(result, {"claimed": True, "command_id": 43, "received": 120, "applied": 118, "failed": 1, "deferred": 1})
+        self.assertEqual([call.kwargs["limit"] for call in process_updates.call_args_list], [100, 50, 30])
+        self.assertEqual(post_command.call_args.args[3]["summary"]["received"], 120)
+
+    def test_process_fep_payment_command_noops_without_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            root.mkdir()
+            with (
+                patch("sync_agent.get_fep_payment_process_command", return_value=None),
+                patch("sync_agent.process_fep_payment_updates") as process_updates,
+            ):
+                result = process_fep_payment_command(root, "https://portal.example", "sync-token", "writer-cmd")
+
+        self.assertEqual(result["status"], "idle")
+        self.assertFalse(result["claimed"])
+        process_updates.assert_not_called()
+
     def test_main_processes_fep_payments_before_scanning_source(self):
         calls = []
 
@@ -580,6 +643,46 @@ class SyncAgentTests(unittest.TestCase):
             main()
 
         self.assertEqual(calls[:2], ["payments", "scan"])
+
+    def test_main_processes_fep_command_before_scanning_source(self):
+        calls = []
+
+        def fake_process(*args, **kwargs):
+            calls.append("command")
+            return {"claimed": False, "status": "idle", "received": 0, "applied": 0, "failed": 0, "deferred": 0}
+
+        def fake_scan(source_root):
+            calls.append("scan")
+            return object()
+
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "sync_agent.py",
+                    "--source-root",
+                    r"C:\Gym Assistant 2.6",
+                    "--portal-url",
+                    "https://portal.example",
+                    "--sync-token",
+                    "sync-token",
+                    "--agent-id",
+                    "frontdesk_dreamz",
+                    "--process-fep-command",
+                    "--fep-payment-writer",
+                    "writer-cmd",
+                ],
+            ),
+            patch("sync_agent.process_fep_payment_command", side_effect=fake_process),
+            patch("sync_agent.scan_source", side_effect=fake_scan),
+            patch("sync_agent.load_manifest", return_value=None),
+            patch("sync_agent.diff_manifest", return_value=object()),
+            patch("sync_agent.print_scan_report"),
+            patch("builtins.print"),
+        ):
+            main()
+
+        self.assertEqual(calls[:2], ["command", "scan"])
 
     def test_run_fep_payment_writer_uses_json_error_message(self):
         completed = subprocess.CompletedProcess(

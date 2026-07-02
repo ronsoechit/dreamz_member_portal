@@ -679,6 +679,27 @@ class FepPaymentUpdate(db.Model):
     confirmed_at = db.Column(db.DateTime)
 
 
+class FepPaymentProcessCommand(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    source = db.Column(db.String, nullable=False, index=True)
+    status = db.Column(db.String, default="pending", nullable=False, index=True)
+    target_agent = db.Column(db.String, default="frontdesk_dreamz", nullable=False, index=True)
+    requested_limit = db.Column(db.Integer, default=25, nullable=False)
+    requested_by = db.Column(db.String)
+    upload_id = db.Column(db.Integer, index=True)
+    upload_filename = db.Column(db.String)
+    request_payload_json = db.Column(db.Text)
+    result_json = db.Column(db.Text)
+    claimed_by = db.Column(db.String, index=True)
+    claimed_at = db.Column(db.DateTime)
+    claim_expires_at = db.Column(db.DateTime, index=True)
+    error = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    started_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+
+
 class MemberLoginCode(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     member_id = db.Column(db.String, nullable=False, index=True)
@@ -4579,6 +4600,15 @@ FEP_PAYMENT_QUEUE_STATUSES = {
     FEP_PAYMENT_STATUS_PENDING,
     FEP_PAYMENT_STATUS_PROCESSING,
 }
+FEP_PAYMENT_COMMAND_STATUS_PENDING = "pending"
+FEP_PAYMENT_COMMAND_STATUS_RUNNING = "running"
+FEP_PAYMENT_COMMAND_STATUS_COMPLETED = "completed"
+FEP_PAYMENT_COMMAND_STATUS_FAILED = "failed"
+FEP_PAYMENT_COMMAND_ACTIVE_STATUSES = {
+    FEP_PAYMENT_COMMAND_STATUS_PENDING,
+    FEP_PAYMENT_COMMAND_STATUS_RUNNING,
+}
+FEP_PAYMENT_PROCESS_REQUEST_MAX_LIMIT = 500
 
 
 class FepPaymentReject(ValueError):
@@ -4601,6 +4631,13 @@ def stable_fep_payment_request_hash(payload):
 def fep_payment_claim_seconds():
     try:
         return max(60, min(int(os.getenv("FEP_PAYMENT_CLAIM_SECONDS", "900")), 3600))
+    except ValueError:
+        return 900
+
+
+def fep_payment_command_claim_seconds():
+    try:
+        return max(60, min(int(os.getenv("FEP_PAYMENT_COMMAND_CLAIM_SECONDS", "900")), 3600))
     except ValueError:
         return 900
 
@@ -4628,6 +4665,39 @@ def normalize_fep_payment_agent(value, *, default=FEP_PAYMENT_AGENT_FRONTDESK, s
 
 def fep_payment_agent_label(agent_id):
     return FEP_PAYMENT_AGENT_LABELS.get(agent_id, agent_id or FEP_PAYMENT_AGENT_FRONTDESK)
+
+
+def fep_payment_command_public(command, duplicate=False, pending_payments=None):
+    target_agent = normalize_fep_payment_agent(getattr(command, "target_agent", None))
+    payload = {
+        "ok": True,
+        "duplicate": bool(duplicate),
+        "command_id": command.id,
+        "status": command.status,
+        "target_agent": target_agent,
+        "target_agent_label": fep_payment_agent_label(target_agent),
+        "requested_limit": int(command.requested_limit or 0),
+        "pending_payments": pending_payments,
+        "created_at": command.created_at.isoformat() if command.created_at else None,
+        "updated_at": command.updated_at.isoformat() if command.updated_at else None,
+    }
+    if command.started_at:
+        payload["started_at"] = command.started_at.isoformat()
+    if command.completed_at:
+        payload["completed_at"] = command.completed_at.isoformat()
+    if command.claimed_by:
+        payload["claimed_by"] = command.claimed_by
+    if command.claim_expires_at:
+        payload["claim_expires_at"] = command.claim_expires_at.isoformat()
+    if command.error:
+        payload["error"] = command.error
+    try:
+        result = json.loads(command.result_json or "{}")
+    except json.JSONDecodeError:
+        result = {}
+    if isinstance(result, dict) and result:
+        payload["result"] = result
+    return payload
 
 
 def masked_fep_payload(payload):
@@ -4924,6 +4994,64 @@ def create_fep_payment_update(payload):
             return existing, True
         raise
     return record, False
+
+
+def count_pending_fep_payment_updates_for_agent(agent_id):
+    return (
+        FepPaymentUpdate.query
+        .filter(
+            FepPaymentUpdate.status == FEP_PAYMENT_STATUS_PENDING,
+            fep_payment_agent_filter(agent_id),
+        )
+        .count()
+    )
+
+
+def create_fep_payment_process_command(payload):
+    if not isinstance(payload, dict):
+        raise FepPaymentReject("Expected JSON payment process request payload.", 400)
+
+    source = str(payload.get("source") or "fep_manager_payment_process_request").strip()
+    target_agent = normalize_fep_payment_agent(payload.get("target_agent"), strict=True)
+    requested_limit = parse_fep_int(payload.get("limit"), "limit", required=False) or 25
+    requested_limit = max(1, min(int(requested_limit), FEP_PAYMENT_PROCESS_REQUEST_MAX_LIMIT))
+    requested_by = str(payload.get("requested_by") or payload.get("actor") or "").strip() or "fep_manager"
+    upload_id = parse_fep_int(payload.get("upload_id"), "upload_id", required=False)
+    upload_filename = str(payload.get("upload_filename") or "").strip() or None
+
+    now = datetime.now()
+    release_expired_fep_payment_process_commands(now)
+    pending_payments = count_pending_fep_payment_updates_for_agent(target_agent)
+    active_command = (
+        FepPaymentProcessCommand.query
+        .filter(
+            FepPaymentProcessCommand.target_agent == target_agent,
+            FepPaymentProcessCommand.status.in_(FEP_PAYMENT_COMMAND_ACTIVE_STATUSES),
+        )
+        .order_by(FepPaymentProcessCommand.created_at.asc(), FepPaymentProcessCommand.id.asc())
+        .first()
+    )
+    if active_command:
+        return active_command, True, pending_payments
+
+    if pending_payments <= 0:
+        raise FepPaymentReject("no pending Gym Assistant payment updates for this target agent.", 409)
+
+    command = FepPaymentProcessCommand(
+        source=source,
+        status=FEP_PAYMENT_COMMAND_STATUS_PENDING,
+        target_agent=target_agent,
+        requested_limit=requested_limit,
+        requested_by=requested_by,
+        upload_id=upload_id,
+        upload_filename=upload_filename,
+        request_payload_json=json_text(payload),
+        created_at=now,
+        updated_at=now,
+    )
+    db.session.add(command)
+    db.session.commit()
+    return command, False, pending_payments
 
 
 def fep_payment_update_target(record):
@@ -10229,6 +10357,46 @@ def api_fep_payment_update_status():
     return jsonify(fep_public_update(record))
 
 
+@app.post("/api/fep/payment-process-request")
+def api_fep_payment_process_request():
+    require_fep_access()
+    ensure_runtime_schema()
+    payload = request.get_json(silent=True) or {}
+    try:
+        command, duplicate, pending_payments = create_fep_payment_process_command(payload)
+    except FepPaymentReject as exc:
+        db.session.rollback()
+        return fep_error_response(str(exc), exc.status_code)
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.exception("FEP payment-process-request failed.")
+        return fep_error_response(str(exc), 500)
+    return jsonify(fep_payment_command_public(command, duplicate=duplicate, pending_payments=pending_payments))
+
+
+@app.get("/api/fep/payment-process-request")
+def api_fep_payment_process_request_status():
+    require_fep_access()
+    ensure_runtime_schema()
+    try:
+        command_id = parse_fep_int(request.args.get("command_id"), "command_id", required=False)
+        target_agent = normalize_fep_payment_agent(request.args.get("target_agent"), strict=False)
+    except FepPaymentReject as exc:
+        return fep_error_response(str(exc), exc.status_code)
+    query = FepPaymentProcessCommand.query
+    if command_id:
+        query = query.filter(FepPaymentProcessCommand.id == command_id)
+    else:
+        query = query.filter(FepPaymentProcessCommand.target_agent == target_agent)
+    command = query.order_by(FepPaymentProcessCommand.created_at.desc(), FepPaymentProcessCommand.id.desc()).first()
+    if not command:
+        return fep_error_response("payment process request was not found.", 404)
+    return jsonify(fep_payment_command_public(
+        command,
+        pending_payments=count_pending_fep_payment_updates_for_agent(normalize_fep_payment_agent(command.target_agent)),
+    ))
+
+
 def safe_storage_upload_key(raw_key):
     key = (raw_key or "").replace("\\", "/").strip("/")
     if not key or key.startswith("/") or ".." in key.split("/"):
@@ -10298,6 +10466,27 @@ def release_expired_fep_payment_claims(now=None):
     return len(expired_records)
 
 
+def release_expired_fep_payment_process_commands(now=None):
+    now = now or datetime.now()
+    expired_commands = (
+        FepPaymentProcessCommand.query
+        .filter(
+            FepPaymentProcessCommand.status == FEP_PAYMENT_COMMAND_STATUS_RUNNING,
+            FepPaymentProcessCommand.claim_expires_at.isnot(None),
+            FepPaymentProcessCommand.claim_expires_at < now,
+        )
+        .all()
+    )
+    for command in expired_commands:
+        command.status = FEP_PAYMENT_COMMAND_STATUS_PENDING
+        command.claimed_by = None
+        command.claimed_at = None
+        command.claim_expires_at = None
+        command.error = "Previous command claim expired before the agent reported a result."
+        command.updated_at = now
+    return len(expired_commands)
+
+
 def fep_payment_agent_filter(agent_id):
     if agent_id == FEP_PAYMENT_AGENT_FRONTDESK:
         return or_(
@@ -10306,6 +10495,107 @@ def fep_payment_agent_filter(agent_id):
             FepPaymentUpdate.target_agent == "",
         )
     return FepPaymentUpdate.target_agent == agent_id
+
+
+def fep_payment_process_command_sync_item(command):
+    target_agent = normalize_fep_payment_agent(getattr(command, "target_agent", None))
+    return {
+        "id": command.id,
+        "source": command.source,
+        "status": command.status,
+        "target_agent": target_agent,
+        "target_agent_label": fep_payment_agent_label(target_agent),
+        "requested_limit": int(command.requested_limit or 0),
+        "requested_by": command.requested_by or "",
+        "upload_id": command.upload_id,
+        "upload_filename": command.upload_filename or "",
+        "claimed_by": command.claimed_by,
+        "claimed_at": command.claimed_at.isoformat() if command.claimed_at else None,
+        "claim_expires_at": command.claim_expires_at.isoformat() if command.claim_expires_at else None,
+        "created_at": command.created_at.isoformat() if command.created_at else None,
+        "updated_at": command.updated_at.isoformat() if command.updated_at else None,
+    }
+
+
+@app.get("/api/sync/fep-payment-process-commands")
+def api_sync_fep_payment_process_commands():
+    require_sync_access()
+    ensure_runtime_schema()
+    agent_id = sync_request_agent_id()
+    now = datetime.now()
+    claim_until = now + timedelta(seconds=fep_payment_command_claim_seconds())
+    released = release_expired_fep_payment_process_commands(now)
+    commands = (
+        FepPaymentProcessCommand.query
+        .filter(
+            FepPaymentProcessCommand.status == FEP_PAYMENT_COMMAND_STATUS_PENDING,
+            FepPaymentProcessCommand.target_agent == agent_id,
+        )
+        .order_by(FepPaymentProcessCommand.created_at.asc(), FepPaymentProcessCommand.id.asc())
+    )
+    if db.session.get_bind().dialect.name == "postgresql":
+        commands = commands.with_for_update(skip_locked=True)
+    command = commands.first()
+    if command:
+        command.status = FEP_PAYMENT_COMMAND_STATUS_RUNNING
+        command.claimed_by = agent_id
+        command.claimed_at = now
+        command.claim_expires_at = claim_until
+        command.started_at = command.started_at or now
+        command.updated_at = now
+        db.session.commit()
+    elif released:
+        db.session.commit()
+    return {
+        "status": "success",
+        "agent_id": agent_id,
+        "agent_label": fep_payment_agent_label(agent_id),
+        "released_expired_commands": released,
+        "commands": [fep_payment_process_command_sync_item(command)] if command else [],
+    }
+
+
+@app.post("/api/sync/fep-payment-process-commands/<int:command_id>/result")
+def api_sync_fep_payment_process_command_result(command_id):
+    require_sync_access()
+    ensure_runtime_schema()
+    payload = request.get_json(silent=True) or {}
+    agent_id = sync_request_agent_id()
+    command = db.session.get(FepPaymentProcessCommand, command_id)
+    if not command:
+        return {"ok": False, "error": "payment process command was not found."}, 404
+    result_status = str(payload.get("status") or "").strip()
+    if result_status not in {"completed", "failed"}:
+        return {"ok": False, "error": "status must be completed or failed."}, 400
+    claimed_by = normalize_fep_payment_agent(getattr(command, "claimed_by", None))
+    if command.status == FEP_PAYMENT_COMMAND_STATUS_RUNNING and claimed_by != agent_id:
+        return {
+            "ok": False,
+            "error": f"payment process command is claimed by {fep_payment_agent_label(claimed_by)}.",
+        }, 409
+    if command.status not in FEP_PAYMENT_COMMAND_ACTIVE_STATUSES:
+        return {"ok": False, "error": f"payment process command cannot accept result from status {command.status}."}, 409
+
+    now = datetime.now()
+    command.status = (
+        FEP_PAYMENT_COMMAND_STATUS_COMPLETED
+        if result_status == "completed"
+        else FEP_PAYMENT_COMMAND_STATUS_FAILED
+    )
+    command.result_json = json_text(payload)
+    command.error = None if result_status == "completed" else str(payload.get("error") or "Payment process command failed.")
+    command.claimed_by = None
+    command.claimed_at = None
+    command.claim_expires_at = None
+    command.completed_at = now
+    command.updated_at = now
+    db.session.commit()
+    return {
+        "ok": True,
+        "status": command.status,
+        "command_id": command.id,
+        "agent_id": agent_id,
+    }
 
 
 @app.get("/api/sync/fep-payment-updates")

@@ -73,7 +73,20 @@ FEP payment updates are accepted by the portal at `/api/fep/payment-update` with
 
 Linked GymAssistant memberships are excluded from automatic write-back. If a member is a dependent of another member, or has dependents linked to the account, the portal returns `409` for manual review. The guarded UI writer also cancels GymAssistant's dependent-member prompt instead of choosing a responsible member automatically.
 
-The frontdesk sync agent can process queued FEP updates before pushing normal member sync data:
+The frontdesk sync agent can listen for an explicit FEP command before pushing normal member sync data. This is the preferred production mode: normal syncs do not book payments unless FEP has first sent a `payment-process-request` for that target agent.
+
+```powershell
+$env:SYNC_API_TOKEN="<same token as Railway>"
+$env:FEP_PAYMENT_WRITER_COMMAND="<local command that writes one payment update to GymAssistant>"
+.\.venv\Scripts\python.exe sync_agent.py `
+  --source-root "D:\Dreamz Fitness\Gym Assistant 2.6" `
+  --portal-url "https://<railway-app-url>" `
+  --agent-id "frontdesk_dreamz" `
+  --process-fep-command `
+  --push-members
+```
+
+For controlled/manual sessions, the frontdesk sync agent can also process queued FEP updates directly before pushing normal member sync data:
 
 ```powershell
 $env:SYNC_API_TOKEN="<same token as Railway>"

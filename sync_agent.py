@@ -593,6 +593,36 @@ def post_fep_payment_update_result(portal_url: str, token: str, update_id: int, 
     return post_json(endpoint, token, payload, timeout=timeout, extra_headers={"X-Sync-Agent": agent_id or "frontdesk_dreamz"})
 
 
+def get_fep_payment_process_command(portal_url: str, token: str, timeout: int = 60, agent_id: str = "frontdesk_dreamz") -> dict | None:
+    endpoint = portal_url.rstrip("/") + f"/api/sync/fep-payment-process-commands?agent_id={quote(agent_id or 'frontdesk_dreamz')}"
+    http_request = urlrequest.Request(
+        endpoint,
+        method="GET",
+        headers={"X-Sync-Token": token, "X-Sync-Agent": agent_id or "frontdesk_dreamz"},
+    )
+    try:
+        with urlrequest.urlopen(http_request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+            payload = json.loads(raw) if raw else {}
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"FEP payment process command API returned HTTP {exc.code}: {detail}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Could not reach FEP payment process command API: {exc}") from exc
+    commands = payload.get("commands")
+    if isinstance(commands, list) and commands:
+        command = commands[0]
+        return command if isinstance(command, dict) else None
+    return None
+
+
+def post_fep_payment_process_command_result(portal_url: str, token: str, command_id: int, payload: dict, timeout: int = 60, agent_id: str = "frontdesk_dreamz") -> dict:
+    endpoint = portal_url.rstrip("/") + f"/api/sync/fep-payment-process-commands/{command_id}/result"
+    payload = dict(payload or {})
+    payload.setdefault("agent_id", agent_id or "frontdesk_dreamz")
+    return post_json(endpoint, token, payload, timeout=timeout, extra_headers={"X-Sync-Agent": agent_id or "frontdesk_dreamz"})
+
+
 def run_fep_payment_writer(command: str, source_root: Path, update: dict, timeout: int = 300) -> dict:
     if not command:
         raise RuntimeError("FEP payment writer command is not configured. Refusing to fake Gym Assistant payment state.")
@@ -665,6 +695,72 @@ def process_fep_payment_updates(
             )
             summary["failed"] += 1
     return summary
+
+
+def process_fep_payment_command(
+    source_root: Path,
+    portal_url: str,
+    token: str,
+    writer_command: str,
+    default_limit: int = 25,
+    agent_id: str = "frontdesk_dreamz",
+) -> dict:
+    command = get_fep_payment_process_command(portal_url, token, agent_id=agent_id)
+    if not command:
+        return {"claimed": False, "status": "idle", "received": 0, "applied": 0, "failed": 0, "deferred": 0}
+
+    command_id = int(command["id"])
+    requested_limit = command.get("requested_limit") or default_limit
+    try:
+        limit = max(1, min(int(requested_limit), 500))
+    except (TypeError, ValueError):
+        limit = max(1, min(int(default_limit), 500))
+
+    try:
+        summary = {"received": 0, "applied": 0, "failed": 0, "deferred": 0}
+        remaining = limit
+        while remaining > 0:
+            batch_limit = min(remaining, 100)
+            batch_summary = process_fep_payment_updates(
+                source_root,
+                portal_url,
+                token,
+                writer_command,
+                limit=batch_limit,
+                agent_id=agent_id,
+            )
+            batch_received = int(batch_summary.get("received") or 0)
+            for key in summary:
+                summary[key] += int(batch_summary.get(key) or 0)
+            if batch_received <= 0:
+                break
+            remaining -= batch_received
+        result_payload = {
+            "status": "completed",
+            "summary": summary,
+            "command": {
+                "id": command_id,
+                "requested_limit": limit,
+                "target_agent": agent_id,
+            },
+        }
+        post_fep_payment_process_command_result(portal_url, token, command_id, result_payload, agent_id=agent_id)
+        return {"claimed": True, "command_id": command_id, **summary}
+    except Exception as exc:
+        error_payload = {
+            "status": "failed",
+            "error": str(exc),
+            "command": {
+                "id": command_id,
+                "requested_limit": limit,
+                "target_agent": agent_id,
+            },
+        }
+        try:
+            post_fep_payment_process_command_result(portal_url, token, command_id, error_payload, agent_id=agent_id)
+        finally:
+            pass
+        return {"claimed": True, "command_id": command_id, "received": 0, "applied": 0, "failed": 1, "deferred": 0, "error": str(exc)}
 
 
 def load_manifest(path: Path) -> dict | None:
@@ -743,6 +839,7 @@ def main() -> None:
     parser.add_argument("--sync-token", default=os.getenv("SYNC_API_TOKEN"), help="Sync API token. Defaults to SYNC_API_TOKEN.")
     parser.add_argument("--agent-id", default=os.getenv("SYNC_AGENT_ID", "frontdesk_dreamz"), help="Payment queue agent id, for example frontdesk_dreamz or ron_laptop.")
     parser.add_argument("--push-members", action="store_true", help="Push member and document metadata to the portal sync API.")
+    parser.add_argument("--process-fep-command", action="store_true", help="Process one FEP-triggered payment command for this agent before pushing member sync data.")
     parser.add_argument("--process-fep-payments", action="store_true", help="Process queued FEP payment updates before pushing member sync data.")
     parser.add_argument("--fep-payment-writer", default=os.getenv("FEP_PAYMENT_WRITER_COMMAND", ""), help="Local command that writes one FEP payment update to Gym Assistant. Receives JSON on stdin.")
     parser.add_argument("--fep-payment-limit", type=int, default=50, help="Maximum queued FEP payment updates to process per run.")
@@ -757,6 +854,24 @@ def main() -> None:
 
     source_root = Path(args.source_root)
     manifest_path = Path(args.manifest)
+
+    if args.process_fep_command:
+        if not args.portal_url:
+            raise SystemExit("--portal-url is required with --process-fep-command")
+        if not args.sync_token:
+            raise SystemExit("--sync-token or SYNC_API_TOKEN is required with --process-fep-command")
+        if not args.fep_payment_writer:
+            raise SystemExit("--fep-payment-writer or FEP_PAYMENT_WRITER_COMMAND is required with --process-fep-command")
+        result = process_fep_payment_command(
+            source_root,
+            args.portal_url,
+            args.sync_token,
+            args.fep_payment_writer,
+            default_limit=args.fep_payment_limit,
+            agent_id=args.agent_id,
+        )
+        print("FEP payment command response:")
+        print(json.dumps(result, indent=2))
 
     if args.process_fep_payments:
         if not args.portal_url:
