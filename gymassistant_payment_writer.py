@@ -314,6 +314,23 @@ def find_dependent_payment_prompt() -> BlockingDialog | None:
     return None
 
 
+def find_member_activation_prompt(member_id: str | None = None) -> BlockingDialog | None:
+    member_fragment = f"#{member_id}" if member_id else "#"
+    for info in enum_top_windows():
+        if not info.visible:
+            continue
+        texts = dialog_texts(info.hwnd)
+        combined = " ".join(texts)
+        lower = combined.casefold()
+        if "currently inactive" not in lower or "do you want to activate" not in lower:
+            continue
+        if member_fragment.casefold() not in lower:
+            continue
+        reason = "Gym Assistant member was inactive; activation prompt was accepted before recording payment."
+        return BlockingDialog(info.hwnd, reason, texts)
+    return None
+
+
 def click_dialog_button(dialog_hwnd: int, button_names: set[str]) -> bool:
     normalized = {name.casefold() for name in button_names}
     for child in enum_children(dialog_hwnd):
@@ -328,6 +345,11 @@ def click_dialog_button(dialog_hwnd: int, button_names: set[str]) -> bool:
 
 def cancel_blocking_dialog(dialog: BlockingDialog) -> None:
     click_dialog_button(dialog.hwnd, {"Cancel"})
+
+
+def accept_activation_dialog(dialog: BlockingDialog) -> None:
+    if not click_dialog_button(dialog.hwnd, {"Yes"}):
+        raise RuntimeError("Could not find enabled Yes button on Gym Assistant inactive-member activation prompt.")
 
 
 def member_view_blocking_reason(main_hwnd: int) -> str | None:
@@ -350,7 +372,7 @@ def member_view_blocking_reason(main_hwnd: int) -> str | None:
     return None
 
 
-def wait_for_payment_dialog(member_id: str, timeout: float) -> int:
+def wait_for_payment_dialog(member_id: str, timeout: float, activation_events: list[str] | None = None) -> int:
     deadline = time.time() + timeout
     while time.time() < deadline:
         hwnd = find_open_payment_dialog(member_id)
@@ -360,6 +382,13 @@ def wait_for_payment_dialog(member_id: str, timeout: float) -> int:
         if blocking_dialog:
             cancel_blocking_dialog(blocking_dialog)
             raise RuntimeError(blocking_dialog.reason)
+        activation_dialog = find_member_activation_prompt(member_id)
+        if activation_dialog:
+            accept_activation_dialog(activation_dialog)
+            if activation_events is not None:
+                activation_events.append(activation_dialog.reason)
+            time.sleep(0.3)
+            continue
         time.sleep(0.2)
     raise RuntimeError(f"Timed out waiting for Member Payment dialog for #{member_id}.")
 
@@ -476,7 +505,7 @@ def select_member(main_hwnd: int, member_id: str, timeout: float) -> None:
     wait_until(payment_button_enabled, timeout, f"Timed out selecting Gym Assistant member #{member_id}.")
 
 
-def open_payment_dialog(main_hwnd: int, member_id: str, timeout: float) -> int:
+def open_payment_dialog(main_hwnd: int, member_id: str, timeout: float, activation_events: list[str] | None = None) -> int:
     user32.SetForegroundWindow(main_hwnd)
     button = wait_until(
         lambda: find_record_payment_button(main_hwnd),
@@ -485,15 +514,15 @@ def open_payment_dialog(main_hwnd: int, member_id: str, timeout: float) -> int:
     )
     click_button(button.hwnd)
     try:
-        return wait_for_payment_dialog(member_id, min(timeout, 2.0))
+        return wait_for_payment_dialog(member_id, min(timeout, 2.0), activation_events)
     except RuntimeError:
         post_command(main_hwnd, GA_COMMAND_RECORD_PAYMENT)
     try:
-        return wait_for_payment_dialog(member_id, min(timeout, 2.0))
+        return wait_for_payment_dialog(member_id, min(timeout, 2.0), activation_events)
     except RuntimeError:
         user32.SetForegroundWindow(main_hwnd)
         click_window_center(button)
-        return wait_for_payment_dialog(member_id, timeout)
+        return wait_for_payment_dialog(member_id, timeout, activation_events)
 
 
 def inspect_payment_dialog(dialog_hwnd: int, update: dict) -> dict:
@@ -721,7 +750,8 @@ def run_writer(
     blocking_reason = member_view_blocking_reason(main_hwnd)
     if blocking_reason:
         raise RuntimeError(blocking_reason)
-    dialog_hwnd = open_payment_dialog(main_hwnd, member_id, timeout)
+    activation_events: list[str] = []
+    dialog_hwnd = open_payment_dialog(main_hwnd, member_id, timeout, activation_events)
     try:
         observed = inspect_payment_dialog(dialog_hwnd, update)
     except Exception:
@@ -739,12 +769,16 @@ def run_writer(
         }
 
     apply_payment(dialog_hwnd, timeout, payment_method=payment_method, member_id=member_id)
-    return {
+    result = {
         "status": "applied",
         "applied": True,
         "member_id": member_id,
         "observed": observed,
     }
+    if activation_events:
+        result["activation_prompt_accepted"] = True
+        result["activation_events"] = activation_events
+    return result
 
 
 def main() -> int:
