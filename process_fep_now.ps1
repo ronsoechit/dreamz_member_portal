@@ -1,7 +1,7 @@
 param(
   [int]$Minutes = 30,
   [int]$IntervalSeconds = 10,
-  [int]$Limit = 25,
+  [int]$Limit = 500,
   [int]$MaxTotal = 250,
   [ValidateSet("frontdesk_dreamz", "ron_laptop")]
   [string]$AgentId = "frontdesk_dreamz",
@@ -50,13 +50,6 @@ function Write-SessionLog {
   $line | Out-File -FilePath $sessionLog -Append -Encoding utf8
 }
 
-function Get-PendingCount {
-  $response = Invoke-RestMethod `
-    -Uri "$portalUrl/api/sync/fep-payment-updates?limit=$Limit&agent_id=$AgentId&peek=1" `
-    -Headers @{ "X-Sync-Token" = $token; "X-Sync-Agent" = $AgentId }
-  return @($response.updates).Count
-}
-
 if ($python -ne "python.exe" -and -not (Test-Path -LiteralPath $python)) {
   throw "Python venv not found: $python"
 }
@@ -87,24 +80,14 @@ try {
 
   Set-Location $root
   $deadline = (Get-Date).AddMinutes($Minutes)
-  $processedBudget = 0
 
-  Write-SessionLog "Process FEP Now started. minutes=$Minutes interval=$IntervalSeconds limit=$Limit max_total=$MaxTotal"
+  Write-SessionLog "Process FEP Now started. minutes=$Minutes interval=$IntervalSeconds limit=$Limit"
   Write-SessionLog "Agent: $AgentId; source_root: $SourceRoot"
   Write-SessionLog "Log file: $sessionLog"
+  Write-SessionLog "Only explicit FEP payment process commands will be handled; plain pending payments are not processed directly."
 
-  while ((Get-Date) -lt $deadline -and $processedBudget -lt $MaxTotal) {
-    $pending = Get-PendingCount
-    Write-SessionLog "Pending FEP payments: $pending"
-
-    if ($pending -le 0) {
-      Start-Sleep -Seconds $IntervalSeconds
-      continue
-    }
-
-    $remaining = [Math]::Max(1, $MaxTotal - $processedBudget)
-    $runLimit = [Math]::Min($Limit, [Math]::Min($pending, $remaining))
-    Write-SessionLog "Processing up to $runLimit payment(s) now."
+  while ((Get-Date) -lt $deadline) {
+    Write-SessionLog "Checking for an explicit FEP payment command."
 
     & $python "sync_agent.py" `
       --source-root $SourceRoot `
@@ -112,9 +95,9 @@ try {
       --portal-url $portalUrl `
       --sync-token $token `
       --agent-id $AgentId `
-      --process-fep-payments `
+      --process-fep-command `
       --fep-payment-writer $writerCommand `
-      --fep-payment-limit $runLimit `
+      --fep-payment-limit $Limit `
       --push-members `
       --upload-files `
       --upload-via-portal `
@@ -127,8 +110,7 @@ try {
       throw "sync_agent.py failed with exit code $LASTEXITCODE. See $sessionLog"
     }
 
-    $processedBudget += $runLimit
-    Write-SessionLog "Processed budget used: $processedBudget / $MaxTotal"
+    Start-Sleep -Seconds $IntervalSeconds
   }
 
   Write-SessionLog "Process FEP Now finished."
