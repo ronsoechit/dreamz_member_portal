@@ -23,7 +23,7 @@ from flask import (
 
 from flask_sqlalchemy import SQLAlchemy
 from markupsafe import Markup
-from sqlalchemy import or_
+from sqlalchemy import inspect, or_
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from dateutil.relativedelta import relativedelta
 from datetime import datetime, date, timedelta   # ← bestaande regel uitbreiden
@@ -1992,6 +1992,23 @@ def runtime_column_definition(column):
 
 
 def ensure_runtime_model_columns():
+    if db.engine.dialect.name == "postgresql":
+        inspector = inspect(db.engine)
+        existing_columns_by_table = {}
+        for mapper in db.Model.registry.mappers:
+            table = mapper.local_table
+            if table.name not in existing_columns_by_table:
+                existing_columns_by_table[table.name] = {
+                    column["name"] for column in inspector.get_columns(table.name)
+                }
+            existing_columns = existing_columns_by_table[table.name]
+            for column in table.columns:
+                if column.primary_key or column.name in existing_columns:
+                    continue
+                ensure_model_column(table.name, column.name, runtime_column_definition(column))
+                existing_columns.add(column.name)
+        return
+
     for mapper in db.Model.registry.mappers:
         table = mapper.local_table
         for column in table.columns:
@@ -4408,6 +4425,8 @@ def coach_today_group_class_context(member, now=None):
 
 @app.before_request
 def prepare_runtime_schema():
+    if can_skip_runtime_schema_prepare():
+        return None
     try:
         ensure_runtime_schema()
     except Exception:
@@ -4415,6 +4434,23 @@ def prepare_runtime_schema():
         app.logger.exception("Runtime schema preparation failed; continuing with existing schema.")
         if app.config.get("TESTING") or os.getenv("RUNTIME_SCHEMA_STRICT", "").lower() in ("1", "true", "yes"):
             raise
+
+
+def can_skip_runtime_schema_prepare():
+    endpoint = request.endpoint or ""
+    if endpoint in {"static", "web_manifest", "service_worker"}:
+        return True
+    if endpoint == "staff_login" and request.method == "GET":
+        return True
+    if endpoint in {"staff_home", "admin_dashboard"} and request.method == "GET":
+        return not session.get("staff_role") and not staff_access_from_token()
+    if endpoint.startswith("api_") and not (
+        request.headers.get("X-Sync-Token")
+        or request.headers.get("X-FEP-Token")
+        or request.headers.get("Authorization")
+    ):
+        return True
+    return False
 
 
 def staff_data_warning(section_key="staff"):

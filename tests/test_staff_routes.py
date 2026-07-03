@@ -803,6 +803,25 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn('action="/staff/login"', body)
         self.assertNotIn("FEP Manager", body)
 
+    def test_public_staff_entry_pages_skip_runtime_schema_prepare(self):
+        with patch("dreamz_portal.ensure_runtime_schema", side_effect=RuntimeError("should skip")):
+            staff_login = self.client.get("/staff/login")
+            staff_home = self.client.get("/staff")
+            admin_home = self.client.get("/admin")
+
+        self.assertEqual(staff_login.status_code, 200)
+        self.assertEqual(staff_home.status_code, 200)
+        self.assertEqual(admin_home.status_code, 200)
+        self.assertIn("Staff Login", staff_login.get_data(as_text=True))
+        self.assertIn("Staff Login", staff_home.get_data(as_text=True))
+        self.assertIn("Staff Login", admin_home.get_data(as_text=True))
+
+    def test_unauthorized_sync_api_skips_runtime_schema_prepare(self):
+        with patch("dreamz_portal.ensure_runtime_schema", side_effect=RuntimeError("should skip")):
+            response = self.client.post("/api/sync/members", json={})
+
+        self.assertEqual(response.status_code, 403)
+
     def test_staff_home_trailing_slash_redirects(self):
         response = self.client.get("/staff/")
 
