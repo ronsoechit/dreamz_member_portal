@@ -18,7 +18,7 @@
       <div class="flex items-start justify-between gap-3">
         <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Fitness" class="auth-logo h-16">
         <form class="auth-language-form text-right text-xs" action="{{ url_for('set_language') }}" method="get">
-          <input type="hidden" name="next" value="{{ request.path }}">
+          <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
           <label class="mb-1 block font-semibold text-gray-400" for="staff-login-language">{{ t('language') }}</label>
           <select id="staff-login-language" name="lang" class="rounded border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-white" onchange="this.form.submit()">
             {% for code, label in available_languages.items() %}
@@ -40,6 +40,7 @@
 
     <form method="POST" action="{{ form_action or url_for('staff_login') }}" class="space-y-4" data-loading-form>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="next" value="{{ next_url or request.args.get('next', '') }}">
       <label class="block">
         <span class="mb-1 block text-sm font-semibold text-gray-200">{{ t('username') }}</span>
         <input

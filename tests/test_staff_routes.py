@@ -819,13 +819,76 @@ class StaffRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
         self.assertIn("Dreamz Fitness Staff", body)
-        self.assertIn("Member Info Staff/Admin", body)
+        self.assertIn("Member Portal Staff/Admin", body)
         self.assertIn("/staff/data-audit", body)
-        self.assertIn("FEP Manager", body)
-        self.assertIn("https://dreamz-fep.onrender.com/login", body)
+        self.assertIn("FEP GUI", body)
+        self.assertIn("https://fep.dreamzfitness.app", body)
+        self.assertIn("/admin", body)
         self.assertNotIn(">Audit</a>", body)
         self.assertNotIn(">Sync</a>", body)
         self.assertIn("/staff/logout", body)
+
+    def test_admin_dashboard_is_private_owner_cockpit(self):
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+
+        response = self.client.get("/admin")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Dreamz Master Dashboard", body)
+        self.assertIn("financial.dreamzfitness.app", body)
+        self.assertIn("invoices.dreamzfitness.app", body)
+        self.assertIn("cash.dreamzfitness.app", body)
+        self.assertIn("dreamzfitness.app/staff", body)
+        self.assertIn("fep.dreamzfitness.app", body)
+        self.assertIn('href="/staff"', body)
+        self.assertIn(">Admin</a>", body)
+
+    def test_admin_dashboard_shows_login_when_not_authenticated(self):
+        response = self.client.get("/admin")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn("Staff Login", body)
+        self.assertIn('action="/staff/login?next=/admin"', body)
+        self.assertIn('name="next" value="/admin"', body)
+
+    def test_staff_login_can_redirect_to_admin_dashboard(self):
+        app.config["STAFF_ADMIN_USERNAME"] = "ron"
+        app.config["STAFF_ADMIN_PASSWORD"] = "admin-pass"
+
+        with self.client.session_transaction() as sess:
+            sess["_csrf_token"] = "token"
+            sess["language"] = "en"
+        response = self.client.post(
+            "/staff/login?next=/admin",
+            data={"username": "ron", "password": "admin-pass", "csrf_token": "token", "next": "/admin"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Dreamz Master Dashboard", response.get_data(as_text=True))
+
+    def test_admin_dashboard_rejects_manager_access(self):
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "manager"
+
+        response = self.client.get("/admin")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_legacy_staff_master_dashboard_redirects_to_admin(self):
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+
+        response = self.client.get("/staff/master-dashboard")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/admin")
 
     def test_staff_login_username_is_case_insensitive(self):
         app.config["STAFF_MANAGER_USERNAME"] = "manager"
@@ -1115,7 +1178,7 @@ class StaffRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Dreamz Fitness Staff", response.get_data(as_text=True))
-        self.assertIn("Member Info Staff/Admin", response.get_data(as_text=True))
+        self.assertIn("Member Portal Staff/Admin", response.get_data(as_text=True))
 
     def test_staff_settings_updates_notifications_and_staff_user(self):
         with self.client.session_transaction() as sess:

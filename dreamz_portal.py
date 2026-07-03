@@ -109,7 +109,10 @@ app.config["STAFF_ADMIN_PASSWORD"] = os.getenv("STAFF_ADMIN_PASSWORD", "dreamz-a
 app.config["STAFF_MANAGER_USERNAME"] = os.getenv("STAFF_MANAGER_USERNAME", "manager")
 app.config["STAFF_MANAGER_PASSWORD"] = os.getenv("STAFF_MANAGER_PASSWORD", "dreamz-manager-dev")
 app.config["STAFF_ADMIN_EMAIL"] = os.getenv("STAFF_ADMIN_EMAIL", "ron@dreamzfitness.com")
-app.config["FEP_MANAGER_URL"] = os.getenv("FEP_MANAGER_URL", "https://dreamz-fep.onrender.com/login")
+app.config["FINANCIAL_OVERVIEW_URL"] = os.getenv("FINANCIAL_OVERVIEW_URL", "https://financial.dreamzfitness.app")
+app.config["INVOICES_PORTAL_URL"] = os.getenv("INVOICES_PORTAL_URL", "https://invoices.dreamzfitness.app")
+app.config["CASH_CONTROL_URL"] = os.getenv("CASH_CONTROL_URL", "https://cash.dreamzfitness.app")
+app.config["FEP_MANAGER_URL"] = os.getenv("FEP_MANAGER_URL", "https://fep.dreamzfitness.app")
 app.config["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY", "")
 app.config["COACH_AI_MODE"] = os.getenv("COACH_AI_MODE") or ("openai" if app.config["OPENAI_API_KEY"] else "fallback")
 app.config["OPENAI_MODEL"] = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
@@ -9088,7 +9091,8 @@ def t(key):
 
 
 def safe_local_next_url(value, fallback=None):
-    fallback = fallback or url_for("login")
+    if fallback is None:
+        fallback = url_for("login")
     if value and value.startswith("/") and not value.startswith("//"):
         return value
     return fallback
@@ -10184,6 +10188,7 @@ def member_dashboard_context(member, staff_admin_view=False):
 def staff_login():
     if request.method == "POST":
         validate_csrf_token()
+        next_target = safe_local_next_url(request.form.get("next") or request.args.get("next"), url_for("staff_home"))
         username = request.form.get("username", "").strip().lower()
         password = request.form.get("password", "")
         user = configured_staff_users().get(username)
@@ -10198,11 +10203,13 @@ def staff_login():
             session["staff_username"] = username
             session["staff_role"] = user.role
             session.permanent = True
-            return redirect(url_for("staff_home"))
+            return redirect(next_target)
         flash("Invalid staff login.")
+        if next_target and next_target != url_for("staff_home"):
+            return redirect(url_for("staff_login", next=next_target))
         return redirect(url_for("staff_login"))
 
-    return render_template("staff_login.html")
+    return render_template("staff_login.html", next_url=safe_local_next_url(request.args.get("next"), ""))
 
 
 @app.get("/staff/logout")
@@ -10231,6 +10238,84 @@ def staff_home():
         staff_is_authenticated=bool(staff_role or token_access),
         fep_manager_url=app.config["FEP_MANAGER_URL"],
     )
+
+
+@app.get("/admin")
+def admin_dashboard():
+    staff_role = current_staff_role()
+    if not staff_role:
+        return render_template(
+            "staff_login.html",
+            form_action=url_for("staff_login", next=url_for("admin_dashboard")),
+            next_url=url_for("admin_dashboard"),
+        )
+    if staff_role != "admin":
+        abort(403)
+    master_apps = [
+        {
+            "label_key": "staff_master_financial_label",
+            "title_key": "staff_master_financial_title",
+            "description_key": "staff_master_financial_desc",
+            "href": app.config["FINANCIAL_OVERVIEW_URL"],
+            "url_label": "financial.dreamzfitness.app",
+            "external": True,
+        },
+        {
+            "label_key": "staff_master_invoices_label",
+            "title_key": "staff_master_invoices_title",
+            "description_key": "staff_master_invoices_desc",
+            "href": app.config["INVOICES_PORTAL_URL"],
+            "url_label": "invoices.dreamzfitness.app",
+            "external": True,
+        },
+        {
+            "label_key": "staff_master_cash_label",
+            "title_key": "staff_master_cash_title",
+            "description_key": "staff_master_cash_desc",
+            "href": app.config["CASH_CONTROL_URL"],
+            "url_label": "cash.dreamzfitness.app",
+            "external": True,
+        },
+        {
+            "label_key": "staff_master_member_label",
+            "title_key": "staff_master_member_title",
+            "description_key": "staff_master_member_desc",
+            "href": url_for("staff_home"),
+            "url_label": "dreamzfitness.app/staff",
+            "external": False,
+        },
+        {
+            "label_key": "staff_master_fep_label",
+            "title_key": "staff_master_fep_title",
+            "description_key": "staff_master_fep_desc",
+            "href": app.config["FEP_MANAGER_URL"],
+            "url_label": "fep.dreamzfitness.app",
+            "external": True,
+        },
+    ]
+    staff_tools = [
+        {"title": t("staff_home_nav"), "href": url_for("staff_home")},
+        {"title": t("staff_audit_nav"), "href": url_for("staff_data_audit")},
+        {"title": t("staff_changes_nav"), "href": url_for("staff_daily_changes")},
+        {"title": t("staff_sync_nav"), "href": url_for("staff_sync_status")},
+        {"title": t("staff_group_classes_nav"), "href": url_for("staff_group_classes")},
+        {"title": t("staff_pricing_nav"), "href": url_for("staff_pricing_products")},
+        {"title": t("staff_equipment_nav"), "href": url_for("staff_equipment")},
+        {"title": t("staff_terms_nav"), "href": url_for("staff_terms_agreements")},
+        {"title": t("staff_cancellations_nav"), "href": url_for("staff_cancellations")},
+        {"title": t("staff_email_log_nav"), "href": url_for("staff_email_log")},
+        {"title": t("staff_whatsapp_login_nav"), "href": url_for("staff_whatsapp_login_status")},
+        {"title": t("staff_coach_nav"), "href": url_for("staff_coach_activity")},
+        {"title": t("staff_settings_nav"), "href": url_for("staff_settings")},
+    ]
+    return render_template("staff_master_dashboard.html", master_apps=master_apps, staff_tools=staff_tools)
+
+
+@app.get("/staff/master-dashboard")
+def staff_master_dashboard():
+    if current_staff_role() != "admin":
+        abort(403)
+    return redirect(url_for("admin_dashboard"))
 
 
 @app.get("/staff/")

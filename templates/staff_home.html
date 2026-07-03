@@ -1,16 +1,33 @@
 {% extends "base.html" %}
-{% block title %}Dreamz Fitness Staff | Dreamz Fitness{% endblock %}
+{% block title %}{{ t('staff_home_title') }} | Dreamz Fitness{% endblock %}
 
 {% block content %}
 <div class="mb-8">
   <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">
-    {% if staff_role %}{{ staff_role|title }} Access{% else %}Staff Tools{% endif %}
+    {{ t('staff_home_label') }}
   </div>
-  <h2 class="text-2xl font-semibold">Dreamz Fitness Staff</h2>
+  <h2 class="text-2xl font-semibold">{{ t('staff_home_title') }}</h2>
   <p class="mt-1 max-w-3xl text-sm text-gray-400">
-    Choose a management tool to continue. Member Info requires a staff login; FEP Manager uses its own existing login.
+    {{ t('staff_home_intro') }}
   </p>
 </div>
+
+{% if current_staff_role == 'admin' %}
+  <a
+    href="{{ url_for('admin_dashboard') }}"
+    class="mb-6 block rounded border border-yellow-500/40 bg-yellow-500/10 p-5 transition hover:border-yellow-300 hover:bg-yellow-500/15"
+  >
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <div class="text-sm font-semibold uppercase tracking-wide text-yellow-300">{{ t('staff_home_admin_cockpit_label') }}</div>
+        <p class="mt-2 max-w-3xl text-sm leading-6 text-yellow-50">{{ t('staff_home_admin_cockpit_desc') }}</p>
+      </div>
+      <span class="inline-flex w-fit rounded bg-yellow-500 px-4 py-2 text-sm font-semibold text-black">
+        {{ t('staff_home_admin_cockpit_action') }}
+      </span>
+    </div>
+  </a>
+{% endif %}
 
 <div class="grid gap-5 lg:grid-cols-3">
   <a
@@ -19,17 +36,17 @@
   >
     <div class="flex items-start justify-between gap-4">
       <div>
-        <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">Member Portal</div>
-        <h3 class="mt-2 text-xl font-semibold text-white">Member Info Staff/Admin</h3>
+        <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('staff_master_member_label') }}</div>
+        <h3 class="mt-2 text-xl font-semibold text-white">{{ t('staff_master_member_title') }}</h3>
       </div>
-      <span class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition group-hover:bg-yellow-400">Open</span>
+      <span class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition group-hover:bg-yellow-400">{{ t('staff_master_open') }}</span>
     </div>
     <p class="mt-4 text-sm leading-6 text-gray-300">
-      Review member data, documents, missing information, cancellation requests, e-mail logs and GymAssistant sync activity.
+      {{ t('staff_master_member_desc') }}
     </p>
     {% if not staff_is_authenticated %}
       <p class="mt-3 rounded border border-gray-700 bg-gray-900/50 p-3 text-xs leading-5 text-gray-300">
-        Staff login is required before opening the member portal admin environment.
+        {{ t('staff_home_login_required_note') }}
       </p>
     {% endif %}
   </a>
@@ -44,7 +61,7 @@
           <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('staff_pricing_label') }}</div>
           <h3 class="mt-2 text-xl font-semibold text-white">{{ t('staff_pricing_title') }}</h3>
         </div>
-        <span class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition group-hover:bg-yellow-400">{{ t('open') }}</span>
+        <span class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition group-hover:bg-yellow-400">{{ t('staff_master_open') }}</span>
       </div>
       <p class="mt-4 text-sm leading-6 text-gray-300">
         {{ t('staff_pricing_intro') }}
@@ -60,7 +77,7 @@
           <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('staff_group_classes_label') }}</div>
           <h3 class="mt-2 text-xl font-semibold text-white">{{ t('staff_group_classes_title') }}</h3>
         </div>
-        <span class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition group-hover:bg-yellow-400">{{ t('open') }}</span>
+        <span class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition group-hover:bg-yellow-400">{{ t('staff_master_open') }}</span>
       </div>
       <p class="mt-4 text-sm leading-6 text-gray-300">
         {{ t('staff_group_classes_intro') }}
@@ -76,7 +93,7 @@
           <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('staff_equipment_label') }}</div>
           <h3 class="mt-2 text-xl font-semibold text-white">{{ t('staff_equipment_title') }}</h3>
         </div>
-        <span class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition group-hover:bg-yellow-400">{{ t('open') }}</span>
+        <span class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition group-hover:bg-yellow-400">{{ t('staff_master_open') }}</span>
       </div>
       <p class="mt-4 text-sm leading-6 text-gray-300">
         {{ t('staff_equipment_intro') }}
@@ -92,7 +109,7 @@
           <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('staff_whatsapp_login_label') }}</div>
           <h3 class="mt-2 text-xl font-semibold text-white">{{ t('staff_whatsapp_login_title') }}</h3>
         </div>
-        <span class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition group-hover:bg-yellow-400">{{ t('open') }}</span>
+        <span class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition group-hover:bg-yellow-400">{{ t('staff_master_open') }}</span>
       </div>
       <p class="mt-4 text-sm leading-6 text-gray-300">
         {{ t('staff_whatsapp_login_intro') }}
@@ -106,16 +123,16 @@
   >
     <div class="flex items-start justify-between gap-4">
       <div>
-        <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">Direct Debit</div>
-        <h3 class="mt-2 text-xl font-semibold text-white">FEP Manager</h3>
+        <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('staff_master_fep_label') }}</div>
+        <h3 class="mt-2 text-xl font-semibold text-white">{{ t('staff_master_fep_title') }}</h3>
       </div>
-      <span class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition group-hover:bg-yellow-400">Open</span>
+      <span class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition group-hover:bg-yellow-400">{{ t('staff_master_open') }}</span>
     </div>
     <p class="mt-4 text-sm leading-6 text-gray-300">
-      Open the existing FEP Manager used to prepare direct debit export files for MCB Online Banking.
+      {{ t('staff_master_fep_desc') }}
     </p>
     <p class="mt-3 rounded border border-yellow-500/30 bg-yellow-500/10 p-3 text-xs leading-5 text-yellow-100">
-      This opens the existing production FEP app. The member portal does not change or import FEP data.
+      {{ t('staff_home_fep_note') }}
     </p>
   </a>
 </div>

@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}{{ t('staff_master_title') }} | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<div class="mb-8 grid gap-6 lg:grid-cols-[1.7fr_1fr] lg:items-end">
+  <div>
+    <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('staff_master_label') }}</div>
+    <h2 class="mt-2 text-3xl font-semibold text-white">{{ t('staff_master_title') }}</h2>
+    <p class="mt-3 max-w-3xl text-sm leading-6 text-gray-300">
+      {{ t('staff_master_intro') }}
+    </p>
+  </div>
+  <div class="rounded border border-gray-700 bg-gray-900/70 p-4">
+    <div class="text-sm font-semibold text-white">{{ t('staff_master_scope_title') }}</div>
+    <p class="mt-2 text-sm leading-6 text-gray-400">{{ t('staff_master_scope_body') }}</p>
+  </div>
+</div>
+
+<section class="mb-10">
+  <div class="mb-4 flex items-center justify-between gap-4">
+    <h3 class="text-lg font-semibold text-white">{{ t('staff_master_apps_heading') }}</h3>
+  </div>
+  <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+    {% for item in master_apps %}
+      <a
+        href="{{ item.href }}"
+        {% if item.external %}target="_blank" rel="noopener noreferrer"{% endif %}
+        class="group flex min-h-64 flex-col justify-between rounded border border-gray-700 bg-gray-800/50 p-5 transition hover:border-yellow-400 hover:bg-gray-800"
+      >
+        <div>
+          <div class="flex items-start justify-between gap-3">
+            <div class="text-xs font-semibold uppercase tracking-wide text-yellow-400">{{ t(item.label_key) }}</div>
+            <span class="rounded border border-gray-600 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-gray-300">
+              {{ t('staff_master_external_badge') if item.external else t('staff_master_internal_badge') }}
+            </span>
+          </div>
+          <h4 class="mt-3 text-xl font-semibold leading-tight text-white">{{ t(item.title_key) }}</h4>
+          <p class="mt-3 text-sm leading-6 text-gray-300">{{ t(item.description_key) }}</p>
+        </div>
+        <div class="mt-5">
+          <div class="truncate text-xs text-gray-500">{{ item.url_label }}</div>
+          <span class="mt-3 inline-flex rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition group-hover:bg-yellow-400">
+            {{ t('staff_master_open') }}
+          </span>
+        </div>
+      </a>
+    {% endfor %}
+  </div>
+</section>
+
+<section>
+  <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div>
+      <h3 class="text-lg font-semibold text-white">{{ t('staff_master_tools_heading') }}</h3>
+      <p class="mt-1 max-w-3xl text-sm text-gray-400">{{ t('staff_master_tools_intro') }}</p>
+    </div>
+    <a class="w-fit rounded border border-gray-700 px-3 py-2 text-sm text-yellow-400 hover:bg-gray-800 hover:text-yellow-300" href="{{ url_for('staff_logout') }}">
+      {{ t('staff_logout_nav') }}
+    </a>
+  </div>
+  <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    {% for tool in staff_tools %}
+      <a
+        href="{{ tool.href }}"
+        class="rounded border border-gray-800 bg-gray-900/70 px-4 py-3 text-sm font-semibold text-gray-200 transition hover:border-yellow-400 hover:text-yellow-300"
+      >
+        {{ tool.title }}
+      </a>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

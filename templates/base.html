@@ -52,6 +52,9 @@
       <div class="app-header-actions flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-end">
         {% if current_staff_role and request.endpoint != 'staff_home' %}
           <nav class="app-nav staff-nav flex flex-wrap items-center gap-1 rounded border border-gray-700 bg-gray-900/40 p-1 text-sm">
+            {% if current_staff_role == 'admin' %}
+              <a class="rounded px-3 py-2 {% if request.endpoint == 'admin_dashboard' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('admin_dashboard') }}">{{ t('staff_master_nav') }}</a>
+            {% endif %}
             <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_home' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_home') }}">{{ t('staff_home_nav') }}</a>
             <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_data_audit' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_data_audit') }}">{{ t('staff_audit_nav') }}</a>
             <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_daily_changes' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_daily_changes') }}">{{ t('staff_changes_nav') }}</a>
