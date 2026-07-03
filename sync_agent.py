@@ -419,6 +419,7 @@ def build_sync_payload(
     client = None if upload_via_portal else (s3_client() if upload_files else None)
     portal_upload_uris = {}
     changed_file_paths = changed_file_paths or set()
+    existing_member_ids_known = existing_member_ids is not None
     existing_member_ids = {str(member_id) for member_id in (existing_member_ids or set())}
     missing_file_keys = {str(key).replace("\\", "/").lstrip("/") for key in (missing_file_keys or set())}
 
@@ -428,7 +429,7 @@ def build_sync_payload(
     def should_upload(path: Path, member_id: str | None = None) -> bool:
         if not upload_changed_only:
             return True
-        if member_id and member_id not in existing_member_ids:
+        if member_id and existing_member_ids_known and member_id not in existing_member_ids:
             return True
         if file_storage_key(path) in missing_file_keys:
             return True
@@ -848,6 +849,7 @@ def main() -> None:
     parser.add_argument("--upload-via-portal", action="store_true", help="Upload files through the portal API so S3 credentials stay on Railway.")
     parser.add_argument("--upload-workers", type=int, default=4, help="Concurrent file uploads when using --upload-via-portal.")
     parser.add_argument("--upload-changed-only", action="store_true", help="Upload only files added or changed since the local manifest.")
+    parser.add_argument("--upload-missing-files", action="store_true", help="Also backfill files that the portal reports as missing. Use manually, not for normal scheduled syncs.")
     parser.add_argument("--storage-bucket", default=os.getenv("AWS_S3_BUCKET_NAME"), help="S3 bucket name used to build URIs for unchanged uploaded files.")
     parser.add_argument("--storage-prefix", default=os.getenv("S3_PREFIX", DEFAULT_STORAGE_PREFIX), help="Object key prefix for uploaded files.")
     args = parser.parse_args()
@@ -919,7 +921,8 @@ def main() -> None:
         missing_file_keys = set()
         if args.upload_files and args.upload_via_portal and args.upload_changed_only:
             existing_member_ids = get_existing_member_ids(args.portal_url, args.sync_token)
-            missing_file_keys = get_missing_file_keys(args.portal_url, args.sync_token)
+            if args.upload_missing_files:
+                missing_file_keys = get_missing_file_keys(args.portal_url, args.sync_token)
         payload = build_sync_payload(
             source_root,
             member_limit=args.member_limit,
