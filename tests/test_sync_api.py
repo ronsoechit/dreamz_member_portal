@@ -295,6 +295,33 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(photo_change["old"], "Photo on file")
         self.assertEqual(photo_change["new"], "Updated photo")
 
+    def test_sync_api_does_not_replace_versioned_photo_with_legacy_agent_path(self):
+        versioned_path = "s3://bucket/gymassistant/Data/Pictures/0033159-9a83afe8a7309011.jpg"
+        db.session.add(Member(
+            member_id="33159",
+            name="Martina, Ist",
+            photo_path=versioned_path,
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            "/api/sync/members",
+            json={
+                "source": "legacy-frontdesk-agent",
+                "members": [{
+                    "member_id": "33159",
+                    "photo_path": "s3://bucket/gymassistant/Data/Pictures/0033159.jpg",
+                }],
+            },
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["members_updated"], 0)
+        self.assertEqual(Member.query.filter_by(member_id="33159").one().photo_path, versioned_path)
+        summary = json.loads(SyncRun.query.one().change_summary)
+        self.assertEqual(summary["changed_members"], [])
+
     def test_sync_api_does_not_count_unchanged_member_as_updated(self):
         db.session.add(Member(member_id="1206", name="Same Name", email="same@example.com"))
         db.session.commit()

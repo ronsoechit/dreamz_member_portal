@@ -5426,6 +5426,19 @@ def member_change_summary(member_id, name=None, email=None, plan_type=None, chan
     }
 
 
+def legacy_gymassistant_photo_regression(existing_path, incoming_path):
+    existing_name = str(existing_path or "").replace("\\", "/").rsplit("/", 1)[-1]
+    incoming_name = str(incoming_path or "").replace("\\", "/").rsplit("/", 1)[-1]
+    versioned = re.fullmatch(r"(?P<stem>\d{7})-[0-9a-f]{16}(?P<ext>\.[a-z0-9]+)", existing_name, re.IGNORECASE)
+    legacy = re.fullmatch(r"(?P<stem>\d{7})(?P<ext>\.[a-z0-9]+)", incoming_name, re.IGNORECASE)
+    return bool(
+        versioned
+        and legacy
+        and versioned.group("stem") == legacy.group("stem")
+        and versioned.group("ext").lower() == legacy.group("ext").lower()
+    )
+
+
 def member_field_changes(existing, member_data):
     changes = []
     for field in SYNC_CHANGE_FIELDS:
@@ -5737,6 +5750,8 @@ def apply_sync_payload(payload):
                         source,
                     ))
                     member_data.pop("name", None)
+                if legacy_gymassistant_photo_regression(existing.photo_path, member_data.get("photo_path")):
+                    member_data.pop("photo_path", None)
                 changes = member_field_changes(existing, member_data)
                 if changes:
                     updated += 1
