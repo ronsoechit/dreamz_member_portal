@@ -4,6 +4,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -264,6 +265,21 @@ def stored_s3_uri(bucket: str, key: str) -> str:
     return f"s3://{bucket}/{key}"
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def versioned_photo_storage_key(source_root: Path, path: Path, prefix: str) -> str:
+    relative = Path(relative_path(path.resolve(), source_root.resolve()))
+    version = file_sha256(path)[:16]
+    versioned_name = f"{relative.stem}-{version}{relative.suffix.lower()}"
+    return storage_key(prefix, relative.with_name(versioned_name).as_posix())
+
+
 def member_photo_path(member_id: str, source_root: Path) -> Path | None:
     root = photos_root(source_root)
     if not root.exists():
@@ -418,6 +434,7 @@ def build_sync_payload(
         raise ValueError("storage_bucket is required when upload_changed_only is enabled with upload_via_portal.")
     client = None if upload_via_portal else (s3_client() if upload_files else None)
     portal_upload_uris = {}
+    photo_upload_keys: dict[str, str] = {}
     changed_file_paths = changed_file_paths or set()
     existing_member_ids_known = existing_member_ids is not None
     existing_member_ids = {str(member_id) for member_id in (existing_member_ids or set())}
@@ -435,6 +452,19 @@ def build_sync_payload(
             return True
         return relative_path(path.resolve(), source_root) in changed_file_paths
 
+    def should_upload_photo(path: Path, member_id: str) -> bool:
+        if not upload_changed_only:
+            return True
+        if existing_member_ids_known and member_id not in existing_member_ids:
+            return True
+        if relative_path(path.resolve(), source_root) in changed_file_paths:
+            return True
+        if not missing_file_keys:
+            return False
+        legacy_key = file_storage_key(path)
+        versioned_key = versioned_photo_storage_key(source_root, path, storage_prefix)
+        return legacy_key in missing_file_keys or versioned_key in missing_file_keys
+
     def portal_uri_for_key(key: str) -> str:
         return portal_upload_uris.get(key) or stored_s3_uri(storage_bucket or "", key)
 
@@ -450,10 +480,10 @@ def build_sync_payload(
                     if should_upload(path, member_id=member_id):
                         upload_task_map[key] = path
             photo = member_photo_path(member_id, source_root)
-            if photo:
-                key = file_storage_key(photo)
-                if should_upload(photo, member_id=member_id):
-                    upload_task_map[key] = photo
+            if photo and should_upload_photo(photo, member_id):
+                key = versioned_photo_storage_key(source_root, photo, storage_prefix)
+                upload_task_map[key] = photo
+                photo_upload_keys[member_id] = key
 
         print(f"Uploading {len(upload_task_map)} files through portal API...")
         portal_upload_uris = upload_files_parallel(
@@ -484,14 +514,19 @@ def build_sync_payload(
                         if upload_files else records
                     )
 
-            if upload_files:
-                photo = member_photo_path(member_id, source_root)
-                if photo:
-                    if upload_via_portal:
-                        key = file_storage_key(photo)
-                        member["photo_path"] = portal_uri_for_key(key)
-                    else:
-                        member["photo_path"] = upload_source_file(source_root, photo, storage_prefix, client=client)
+    if upload_files:
+        for member in members:
+            member_id = str(member["member_id"])
+            photo = member_photo_path(member_id, source_root)
+            if not photo:
+                continue
+            if upload_via_portal:
+                key = photo_upload_keys.get(member_id)
+                if key and key in portal_upload_uris:
+                    member["photo_path"] = portal_upload_uris[key]
+            elif should_upload_photo(photo, member_id):
+                key = versioned_photo_storage_key(source_root, photo, storage_prefix)
+                member["photo_path"] = upload_file_to_s3(photo, key, client=client)
 
     return {
         "source": str(source_root),

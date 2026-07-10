@@ -1924,7 +1924,7 @@ class PortalRouteTests(unittest.TestCase):
             response = self.client.get("/dashboard?id=1206")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("/member-photo/1206", response.get_data(as_text=True))
+        self.assertIn("/member-photo/1206?v=", response.get_data(as_text=True))
 
     def test_dashboard_shows_s3_member_photo_when_available(self):
         self.add_member(member_id="1206", photo_path="s3://dreamz-test/portal/Data/Pictures/0001206.jpg")
@@ -1933,7 +1933,7 @@ class PortalRouteTests(unittest.TestCase):
         response = self.client.get("/dashboard?id=1206")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("/member-photo/1206", response.get_data(as_text=True))
+        self.assertIn("/member-photo/1206?v=", response.get_data(as_text=True))
 
     def test_member_photo_serves_image_for_logged_in_owner(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1948,6 +1948,7 @@ class PortalRouteTests(unittest.TestCase):
             response.close()
 
         self.assertEqual(response.status_code, 200)
+        self.assertIn("no-store", response.headers["Cache-Control"])
 
     def test_member_photo_serves_s3_image_for_logged_in_owner(self):
         self.add_member(member_id="1206", photo_path="s3://dreamz-test/portal/Data/Pictures/0001206.jpg")
@@ -1958,6 +1959,7 @@ class PortalRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_data(), b"photo")
+        self.assertIn("no-store", response.headers["Cache-Control"])
 
     def test_member_photo_rejects_other_member(self):
         self.add_member(member_id="1206")

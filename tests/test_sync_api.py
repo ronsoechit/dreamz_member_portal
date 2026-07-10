@@ -266,6 +266,35 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(summary["changed_members"][0]["changes"][0]["old"], "Old Name")
         self.assertEqual(summary["changed_members"][0]["changes"][0]["new"], "New Name")
 
+    def test_sync_api_records_photo_update_without_exposing_storage_uri(self):
+        db.session.add(Member(
+            member_id="33159",
+            name="Martina, Ist",
+            photo_path="s3://bucket/gymassistant/Data/Pictures/0033159-old.jpg",
+        ))
+        db.session.commit()
+
+        response = self.client.post(
+            "/api/sync/members",
+            json={
+                "source": "unit-test",
+                "members": [{
+                    "member_id": "33159",
+                    "photo_path": "s3://bucket/gymassistant/Data/Pictures/0033159-new.jpg",
+                }],
+            },
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["members_updated"], 1)
+        summary = json.loads(SyncRun.query.one().change_summary)
+        photo_change = summary["changed_members"][0]["changes"][0]
+        self.assertEqual(photo_change["field"], "photo_path")
+        self.assertEqual(photo_change["label"], "Photo")
+        self.assertEqual(photo_change["old"], "Photo on file")
+        self.assertEqual(photo_change["new"], "Updated photo")
+
     def test_sync_api_does_not_count_unchanged_member_as_updated(self):
         db.session.add(Member(member_id="1206", name="Same Name", email="same@example.com"))
         db.session.commit()

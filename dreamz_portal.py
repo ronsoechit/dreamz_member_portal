@@ -5434,11 +5434,20 @@ def member_field_changes(existing, member_data):
         before = change_value(getattr(existing, field, None))
         after = change_value(member_data.get(field))
         if before != after:
+            if field == "photo_path":
+                display_before = "Photo on file" if before else "No photo"
+                if after:
+                    display_after = "Updated photo" if before else "Added photo"
+                else:
+                    display_after = "Removed photo"
+            else:
+                display_before = before
+                display_after = after
             changes.append({
                 "field": field,
                 "label": SYNC_CHANGE_LABELS.get(field, field),
-                "old": before,
-                "new": after,
+                "old": display_before,
+                "new": display_after,
             })
     return changes
 
@@ -9280,6 +9289,11 @@ def format_date(value, fmt=None):
     return fmt_policy_date(value, current_language())
 
 
+@app.template_filter("photo_version")
+def photo_version(value):
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()[:12]
+
+
 @app.template_filter("coach_message_html")
 def coach_message_html(value):
     escaped = escape_html(value or "")
@@ -12245,6 +12259,13 @@ def storage_file_response(uri, download_name=None, mimetype=None, as_attachment=
     return Response(body.iter_chunks(), mimetype=mimetype, headers=headers)
 
 
+def private_no_cache_response(response):
+    response.headers["Cache-Control"] = "private, no-store, no-cache, max-age=0, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
 def allowed_progress_photo(filename):
     extension = Path(filename or "").suffix.lower()
     return extension in {".jpg", ".jpeg", ".png", ".webp"}
@@ -12382,13 +12403,13 @@ def member_photo(member_id):
 
     member = Member.query.filter_by(member_id=member_id).first_or_404()
     if is_s3_uri(member.photo_path):
-        return storage_file_response(member.photo_path, mimetype="image/jpeg")
+        return private_no_cache_response(storage_file_response(member.photo_path, mimetype="image/jpeg"))
 
     resolved_path = resolved_photo_path(member.photo_path)
     if not resolved_path:
         abort(404, "Photo not found.")
 
-    return send_file(resolved_path)
+    return private_no_cache_response(send_file(resolved_path))
 
 
 @app.get("/coach/progress-photo/<int:entry_id>")

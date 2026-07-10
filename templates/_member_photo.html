@@ -1,7 +1,7 @@
 <div class="member-photo-frame h-28 w-28 shrink-0 overflow-hidden rounded-md border border-gray-600 bg-gray-900 sm:h-32 sm:w-32">
   {% if member_photo_available %}
     <img
-      src="{{ url_for('member_photo', member_id=member.member_id) }}"
+      src="{{ url_for('member_photo', member_id=member.member_id, v=member.photo_path|photo_version) }}"
       alt=""
       decoding="async"
       class="h-full w-full object-cover"

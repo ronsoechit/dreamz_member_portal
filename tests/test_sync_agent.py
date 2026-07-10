@@ -9,6 +9,9 @@ from unittest.mock import patch
 from sync_agent import build_sync_payload, diff_manifest, load_manifest, main, process_fep_payment_command, process_fep_payment_updates, run_fep_payment_writer, save_manifest, scan_source
 
 
+PHOTO_VERSIONED_KEY = "portal/Data/Pictures/0000100-55c64d0fcd6f9d5f.jpg"
+
+
 def write_backup(path: Path, member_id: str = "100") -> None:
     members_text = "\n".join([
         f"MN={member_id}",
@@ -335,9 +338,9 @@ class SyncAgentTests(unittest.TestCase):
                 payload = build_sync_payload(root, upload_files=True, storage_prefix="portal")
 
         self.assertIn(("contract.pdf", "portal/Data/Attachments/0000100/contract.pdf"), uploaded)
-        self.assertIn(("0000100.jpg", "portal/Data/Pictures/0000100.jpg"), uploaded)
+        self.assertIn(("0000100.jpg", PHOTO_VERSIONED_KEY), uploaded)
         self.assertEqual(payload["documents"]["100"][0]["path"], "s3://dreamz-test/portal/Data/Attachments/0000100/contract.pdf")
-        self.assertEqual(payload["members"][0]["photo_path"], "s3://dreamz-test/portal/Data/Pictures/0000100.jpg")
+        self.assertEqual(payload["members"][0]["photo_path"], f"s3://dreamz-test/{PHOTO_VERSIONED_KEY}")
 
     def test_build_sync_payload_can_upload_files_through_portal(self):
         uploaded = []
@@ -369,8 +372,9 @@ class SyncAgentTests(unittest.TestCase):
                 )
 
         self.assertIn(("https://portal.example/api/sync/files", "sync-token", "contract.pdf", "portal/Data/Attachments/0000100/contract.pdf"), uploaded)
-        self.assertIn(("https://portal.example/api/sync/files", "sync-token", "0000100.jpg", "portal/Data/Pictures/0000100.jpg"), uploaded)
+        self.assertIn(("https://portal.example/api/sync/files", "sync-token", "0000100.jpg", PHOTO_VERSIONED_KEY), uploaded)
         self.assertEqual(payload["documents"]["100"][0]["path"], "s3://dreamz-test/portal/Data/Attachments/0000100/contract.pdf")
+        self.assertEqual(payload["members"][0]["photo_path"], f"s3://dreamz-test/{PHOTO_VERSIONED_KEY}")
 
     def test_build_sync_payload_can_upload_only_changed_files_through_portal(self):
         uploaded = []
@@ -405,9 +409,71 @@ class SyncAgentTests(unittest.TestCase):
                     storage_prefix="portal",
                 )
 
-        self.assertEqual(uploaded, [("0000100.jpg", "portal/Data/Pictures/0000100.jpg")])
+        self.assertEqual(uploaded, [("0000100.jpg", PHOTO_VERSIONED_KEY)])
         self.assertEqual(payload["documents"]["100"][0]["path"], "s3://dreamz-test/portal/Data/Attachments/0000100/contract.pdf")
-        self.assertEqual(payload["members"][0]["photo_path"], "s3://dreamz-test/portal/Data/Pictures/0000100.jpg")
+        self.assertEqual(payload["members"][0]["photo_path"], f"s3://dreamz-test/{PHOTO_VERSIONED_KEY}")
+
+    def test_build_sync_payload_omits_unchanged_existing_photo_path(self):
+        uploaded = []
+
+        def fake_post_file(url, token, path, key):
+            uploaded.append((Path(path).name, key))
+            return {"uri": f"s3://dreamz-test/{key}"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            backup_dir = root / "Data" / "Backup"
+            photo_dir = root / "Data" / "Pictures"
+            backup_dir.mkdir(parents=True)
+            photo_dir.mkdir(parents=True)
+            write_backup(backup_dir / "GABackup-test.gbu")
+            (photo_dir / "0000100.jpg").write_bytes(b"photo")
+
+            with patch("sync_agent.post_file", side_effect=fake_post_file):
+                payload = build_sync_payload(
+                    root,
+                    upload_files=True,
+                    upload_via_portal=True,
+                    upload_changed_only=True,
+                    changed_file_paths=set(),
+                    existing_member_ids={"100"},
+                    storage_bucket="dreamz-test",
+                    portal_url="https://portal.example",
+                    sync_token="sync-token",
+                    storage_prefix="portal",
+                )
+
+        self.assertEqual(uploaded, [])
+        self.assertNotIn("photo_path", payload["members"][0])
+
+    def test_build_sync_payload_uploads_photo_without_attachments_directory(self):
+        uploaded = []
+
+        def fake_post_file(url, token, path, key):
+            uploaded.append((Path(path).name, key))
+            return {"uri": f"s3://dreamz-test/{key}"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            backup_dir = root / "Data" / "Backup"
+            photo_dir = root / "Data" / "Pictures"
+            backup_dir.mkdir(parents=True)
+            photo_dir.mkdir(parents=True)
+            write_backup(backup_dir / "GABackup-test.gbu")
+            (photo_dir / "0000100.jpg").write_bytes(b"photo")
+
+            with patch("sync_agent.post_file", side_effect=fake_post_file):
+                payload = build_sync_payload(
+                    root,
+                    upload_files=True,
+                    upload_via_portal=True,
+                    portal_url="https://portal.example",
+                    sync_token="sync-token",
+                    storage_prefix="portal",
+                )
+
+        self.assertEqual(uploaded, [("0000100.jpg", PHOTO_VERSIONED_KEY)])
+        self.assertEqual(payload["members"][0]["photo_path"], f"s3://dreamz-test/{PHOTO_VERSIONED_KEY}")
 
     def test_build_sync_payload_uploads_new_member_files_even_when_unchanged_only(self):
         uploaded = []
