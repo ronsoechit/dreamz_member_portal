@@ -552,7 +552,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("If this email is registered, we sent a login code.", body)
         self.assertIn("text-green-200", body)
 
-    def test_unknown_email_message_uses_error_style(self):
+    def test_unknown_email_message_uses_same_neutral_success_style(self):
         token = self.get_login_csrf_token()
 
         response = self.client.post(
@@ -562,8 +562,9 @@ class PortalRouteTests(unittest.TestCase):
         )
 
         body = response.get_data(as_text=True)
-        self.assertIn("We could not verify this login. Please contact Dreamz Fitness.", body)
-        self.assertIn("text-red-200", body)
+        self.assertIn("If this email is registered, we sent a login code.", body)
+        self.assertIn("text-green-200", body)
+        self.assertNotIn("We could not verify this login. Please contact Dreamz Fitness.", body)
 
     def test_member_account_shows_logout_link(self):
         self.add_member(member_id="13659", name="Ron Soechit")
@@ -1748,7 +1749,7 @@ class PortalRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        email = EmailLog.query.one()
+        email = EmailLog.query.filter_by(to_addresses="member@example.com").one()
         self.assertIn("kodigo di login", email.subject)
         self.assertIn("Estima Ron Soechit", email.body)
         self.assertIn("portal di miembro", email.html_body)
@@ -1759,8 +1760,25 @@ class PortalRouteTests(unittest.TestCase):
         response = self.client.post("/login", data={"step": "email", "email": "unknown@example.com", "csrf_token": token})
 
         self.assertEqual(response.status_code, 302)
+        self.assertIn("step=code", response.headers["Location"])
         with self.client.session_transaction() as sess:
-            self.assertNotIn("pending_login_email", sess)
+            self.assertEqual(sess.get("pending_login_email"), "unknown@example.com")
+            self.assertNotIn("dev_login_code", sess)
+
+    def test_login_with_duplicate_member_email_fails_closed(self):
+        self.add_member(member_id="1206", email="shared@example.com")
+        self.add_member(member_id="1207", email="SHARED@example.com")
+        token = self.get_login_csrf_token()
+
+        response = self.client.post(
+            "/login",
+            data={"step": "email", "email": "shared@example.com", "csrf_token": token},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("step=code", response.headers["Location"])
+        self.assertEqual(MemberLoginCode.query.count(), 0)
+        self.assertEqual(EmailLog.query.count(), 0)
 
     def test_login_rejects_invalid_code(self):
         self.add_member(member_id="1206", email="member@example.com")

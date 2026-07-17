@@ -103,6 +103,7 @@ app.config["SQLALCHEMY_DATABASE_URI"] = normalize_database_uri(
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["STAFF_TOKEN"] = os.getenv("STAFF_TOKEN")
 app.config["SYNC_API_TOKEN"] = os.getenv("SYNC_API_TOKEN")
+app.config["SIGNUP_PORTAL_INTEGRATION_TOKEN"] = os.getenv("SIGNUP_PORTAL_INTEGRATION_TOKEN")
 app.config["FEP_API_TOKEN"] = os.getenv("FEP_API_TOKEN")
 app.config["STAFF_ADMIN_USERNAME"] = os.getenv("STAFF_ADMIN_USERNAME", "ron")
 app.config["STAFF_ADMIN_PASSWORD"] = os.getenv("STAFF_ADMIN_PASSWORD", "dreamz-admin-dev")
@@ -113,6 +114,7 @@ app.config["FINANCIAL_OVERVIEW_URL"] = os.getenv("FINANCIAL_OVERVIEW_URL", "http
 app.config["INVOICES_PORTAL_URL"] = os.getenv("INVOICES_PORTAL_URL", "https://invoices.dreamzfitness.app")
 app.config["CASH_CONTROL_URL"] = os.getenv("CASH_CONTROL_URL", "https://cash.dreamzfitness.app")
 app.config["FEP_MANAGER_URL"] = os.getenv("FEP_MANAGER_URL", "https://fep.dreamzfitness.app")
+app.config["MEMBER_PORTAL_PUBLIC_URL"] = (os.getenv("MEMBER_PORTAL_PUBLIC_URL") or "https://dreamzfitness.app").rstrip("/")
 app.config["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY", "")
 app.config["COACH_AI_MODE"] = os.getenv("COACH_AI_MODE") or ("openai" if app.config["OPENAI_API_KEY"] else "fallback")
 app.config["OPENAI_MODEL"] = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
@@ -631,6 +633,28 @@ class EmailLog(db.Model):
     error = db.Column(db.Text)
     reviewed_at = db.Column(db.DateTime)
     reviewed_by = db.Column(db.String)
+
+
+class PortalInvitation(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    source_reference = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    member_id = db.Column(db.String, nullable=False, index=True)
+    expected_email_hash = db.Column(db.String(64), nullable=False)
+    language = db.Column(db.String(8), default=DEFAULT_LANGUAGE, nullable=False)
+    signup_plan = db.Column(db.String(32), nullable=False)
+    request_payload_hash = db.Column(db.String(64), nullable=False)
+    status = db.Column(db.String(40), default="waiting_for_member", nullable=False, index=True)
+    attempts = db.Column(db.Integer, default=0, nullable=False)
+    manual_review_required = db.Column(db.Boolean, default=False, nullable=False, index=True)
+    last_error = db.Column(db.Text)
+    email_log_id = db.Column(db.Integer, db.ForeignKey("email_log.id"), index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    ready_at = db.Column(db.DateTime)
+    send_started_at = db.Column(db.DateTime)
+    sent_at = db.Column(db.DateTime)
+
+    email_log = db.relationship("EmailLog")
 
 
 class SyncRun(db.Model):
@@ -8548,7 +8572,13 @@ def member_by_email(email):
     normalized = normalize_email(email)
     if not normalized:
         return None
-    return Member.query.filter(db.func.lower(Member.email) == normalized).first()
+    members = (
+        Member.query
+        .filter(db.func.lower(db.func.trim(Member.email)) == normalized)
+        .limit(2)
+        .all()
+    )
+    return members[0] if len(members) == 1 else None
 
 
 def generate_member_login_code(member):
@@ -8746,6 +8776,26 @@ def require_sync_access():
         abort(503, "Sync API token is not configured.")
     if not supplied_token or not secrets.compare_digest(str(supplied_token), str(expected_token)):
         abort(403, "Sync API access denied.")
+
+
+def bearer_token_from_authorization():
+    authorization = request.headers.get("Authorization", "")
+    prefix = "Bearer "
+    if not authorization.startswith(prefix):
+        return None
+    return authorization[len(prefix):].strip()
+
+
+def require_signup_portal_integration_access():
+    expected_token = (
+        app.config.get("SIGNUP_PORTAL_INTEGRATION_TOKEN")
+        or os.getenv("SIGNUP_PORTAL_INTEGRATION_TOKEN")
+    )
+    supplied_token = bearer_token_from_authorization()
+    if not expected_token or len(str(expected_token)) < 32:
+        abort(503, "Signup portal integration is not configured.")
+    if not supplied_token or not secrets.compare_digest(str(supplied_token), str(expected_token)):
+        abort(403, "Signup portal integration access denied.")
 
 
 def require_fep_access():
@@ -9338,6 +9388,7 @@ SMTP_HOST = os.getenv("SMTP_HOST", "smtp.yourprovider.com")
 SMTP_USER = os.getenv("SMTP_USER", "noreply@dreamzfitness.com")
 SMTP_PASS = os.getenv("SMTP_PASS", "changeme")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
+SMTP_TIMEOUT_SECONDS = int(os.getenv("SMTP_TIMEOUT_SECONDS", "20"))
 SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER)
 SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Dreamz Fitness")
 
@@ -9446,7 +9497,7 @@ def deliver_email(to_addresses, subject, body, cc_addresses=None, bcc_addresses=
         msg.add_alternative(html_body, subtype="html")
 
     try:
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as s:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT_SECONDS) as s:
             s.login(SMTP_USER, SMTP_PASS)
             s.send_message(msg, to_addrs=[*to_addresses, *cc_addresses, *bcc_addresses])
     except Exception as exc:
@@ -9565,6 +9616,249 @@ Dreamz Fitness
         signoff=signoff,
     )
     return subject, body, html_body
+
+
+PORTAL_INVITATION_SIGNUP_PLANS = {"month", "under18", "six", "twelve"}
+PORTAL_INVITATION_TERMINAL_STATUSES = {"sent", "manual_review"}
+PORTAL_INVITATION_STALE_SEND_MINUTES = 15
+
+
+def portal_invitation_email_hash(email):
+    return hashlib.sha256(normalize_email(email).encode("utf-8")).hexdigest()
+
+
+def valid_portal_email(email):
+    normalized = normalize_email(email)
+    return bool(
+        normalized
+        and len(normalized) <= 254
+        and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", normalized)
+    )
+
+
+def portal_eligible_member_plan(plan_type):
+    normalized = re.sub(r"[^a-z0-9]+", " ", str(plan_type or "").lower()).strip()
+    if not normalized:
+        return False
+    if any(blocked in normalized for blocked in ("day pass", "week pass", "delfins", "hotel", "guest")):
+        return False
+    if "under 18" in normalized:
+        return True
+    if "no contract" in normalized and re.search(r"\b1\s*(?:m|month|months)\b", normalized):
+        return True
+    if "paid in full" in normalized and re.search(r"\b(?:6|12)\s*(?:m|month|months)\b", normalized):
+        return True
+    return bool(
+        "contract" in normalized
+        and re.search(r"\b(?:6|12)\s*(?:m|month|months)\b", normalized)
+    )
+
+
+def portal_invitation_public(record, duplicate=False):
+    return {
+        "reference": record.source_reference,
+        "member_number": record.member_id,
+        "status": record.status,
+        "ready": record.ready_at is not None,
+        "sent": record.sent_at is not None,
+        "requires_manual_review": bool(record.manual_review_required),
+        "duplicate": bool(duplicate),
+        "created_at": record.created_at.isoformat() if record.created_at else None,
+        "updated_at": record.updated_at.isoformat() if record.updated_at else None,
+    }
+
+
+def normalize_portal_invitation_payload(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("Expected a JSON object.")
+    reference = str(payload.get("reference") or "").strip().upper()
+    member_id = str(payload.get("member_number") or "").strip()
+    expected_email = normalize_email(payload.get("expected_email"))
+    language = normalize_language(payload.get("language") or DEFAULT_LANGUAGE)
+    signup_plan = str(payload.get("signup_plan") or "").strip().lower()
+
+    if not re.fullmatch(r"DF-\d{8}-\d{4,6}", reference):
+        raise ValueError("Invalid signup reference.")
+    if not re.fullmatch(r"\d{1,12}", member_id):
+        raise ValueError("Invalid Gym Assistant member number.")
+    if not valid_portal_email(expected_email):
+        raise ValueError("Invalid expected member email.")
+    if signup_plan not in PORTAL_INVITATION_SIGNUP_PLANS:
+        raise ValueError("Signup plan is not eligible for a portal invitation.")
+
+    canonical = {
+        "reference": reference,
+        "member_number": member_id,
+        "expected_email": expected_email,
+        "language": language,
+        "signup_plan": signup_plan,
+    }
+    payload_hash = hashlib.sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return canonical, payload_hash
+
+
+def mark_portal_invitation_for_review(record, reason):
+    record.status = "manual_review"
+    record.manual_review_required = True
+    record.last_error = reason
+    record.updated_at = datetime.now()
+    db.session.commit()
+    return record
+
+
+def build_portal_activation_email(member, language=DEFAULT_LANGUAGE):
+    language = normalize_language(language)
+    member_name = display_member_name(member.name) or translated_text("member", language)
+    login_url = f"{app.config['MEMBER_PORTAL_PUBLIC_URL'].rstrip('/')}/login"
+    subject = translated_text("email_portal_activation_subject", language)
+    title = translated_text("email_portal_activation_title", language)
+    intro = translated_text("email_portal_activation_intro", language, name=member_name)
+    instruction = translated_text("email_portal_activation_instruction", language)
+    note = translated_text("email_portal_activation_note", language)
+    signoff = translated_text("email_signoff", language)
+    body = f"""{intro}
+
+{instruction}
+
+{login_url}
+
+{note}
+
+{signoff}
+Dreamz Fitness
+"""
+    html_body = email_html_layout(
+        title,
+        intro,
+        rows=[],
+        note=f"{instruction}\n\n{note}",
+        signoff=signoff,
+        tone="success",
+        action_label=translated_text("email_portal_activation_action", language),
+        action_url=login_url,
+    )
+    return subject, body, html_body
+
+
+def reconcile_portal_invitation(record):
+    if record.status in PORTAL_INVITATION_TERMINAL_STATUSES:
+        return record
+
+    now = datetime.now()
+    if record.status == "sending":
+        if record.send_started_at and record.send_started_at <= now - timedelta(
+            minutes=PORTAL_INVITATION_STALE_SEND_MINUTES
+        ):
+            return mark_portal_invitation_for_review(record, "email_delivery_outcome_uncertain")
+        return record
+
+    member = Member.query.filter_by(member_id=record.member_id).first()
+    if not member:
+        if record.status != "waiting_for_member":
+            record.status = "waiting_for_member"
+            record.updated_at = now
+            db.session.commit()
+        return record
+
+    member_email = normalize_email(member.email)
+    if not valid_portal_email(member_email):
+        return mark_portal_invitation_for_review(record, "gym_assistant_email_missing_or_invalid")
+
+    matching_members = (
+        Member.query
+        .filter(db.func.lower(db.func.trim(Member.email)) == member_email)
+        .limit(2)
+        .all()
+    )
+    if len(matching_members) != 1:
+        return mark_portal_invitation_for_review(record, "gym_assistant_email_not_unique")
+    if portal_invitation_email_hash(member_email) != record.expected_email_hash:
+        return mark_portal_invitation_for_review(record, "signup_email_does_not_match_gym_assistant")
+    if not portal_eligible_member_plan(member.plan_type):
+        return mark_portal_invitation_for_review(record, "gym_assistant_plan_not_eligible")
+
+    subject, body, html_body = build_portal_activation_email(member, language=record.language)
+    send_started_at = datetime.now()
+    claimed = (
+        PortalInvitation.query
+        .filter(PortalInvitation.id == record.id)
+        .filter(PortalInvitation.status.in_(["waiting_for_member", "ready"]))
+        .update(
+            {
+                PortalInvitation.status: "sending",
+                PortalInvitation.ready_at: db.func.coalesce(PortalInvitation.ready_at, now),
+                PortalInvitation.attempts: PortalInvitation.attempts + 1,
+                PortalInvitation.send_started_at: send_started_at,
+                PortalInvitation.updated_at: send_started_at,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.session.commit()
+    db.session.refresh(record)
+    if claimed != 1:
+        return record
+
+    try:
+        deliver_email([member_email], subject, body, html_body=html_body)
+    except Exception:
+        latest_log = (
+            EmailLog.query
+            .filter_by(subject=subject, to_addresses=member_email)
+            .order_by(EmailLog.id.desc())
+            .first()
+        )
+        if latest_log:
+            record.email_log_id = latest_log.id
+        return mark_portal_invitation_for_review(record, "email_delivery_failed_or_uncertain")
+
+    latest_log = (
+        EmailLog.query
+        .filter_by(subject=subject, to_addresses=member_email)
+        .order_by(EmailLog.id.desc())
+        .first()
+    )
+    if latest_log:
+        record.email_log_id = latest_log.id
+    record.status = "sent"
+    record.sent_at = datetime.now()
+    record.updated_at = record.sent_at
+    db.session.commit()
+    return record
+
+
+def reconcile_pending_portal_invitations(limit=100):
+    stale_cutoff = datetime.now() - timedelta(minutes=PORTAL_INVITATION_STALE_SEND_MINUTES)
+    stale_records = (
+        PortalInvitation.query
+        .filter_by(status="sending")
+        .filter(PortalInvitation.send_started_at <= stale_cutoff)
+        .limit(limit)
+        .all()
+    )
+    for record in stale_records:
+        mark_portal_invitation_for_review(record, "email_delivery_outcome_uncertain")
+
+    records = (
+        PortalInvitation.query
+        .filter(PortalInvitation.status.in_(["waiting_for_member", "ready"]))
+        .order_by(PortalInvitation.created_at.asc())
+        .limit(limit)
+        .all()
+    )
+    summary = {"checked": 0, "sent": 0, "waiting": 0, "manual_review": len(stale_records)}
+    for record in records:
+        reconcile_portal_invitation(record)
+        summary["checked"] += 1
+        if record.status == "sent":
+            summary["sent"] += 1
+        elif record.status == "manual_review":
+            summary["manual_review"] += 1
+        else:
+            summary["waiting"] += 1
+    return summary
 
 
 def build_staff_login_code_request_notification(member):
@@ -10408,6 +10702,13 @@ def api_sync_members():
     except ValueError as exc:
         abort(400, str(exc))
 
+    try:
+        invitation_summary = reconcile_pending_portal_invitations()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Portal invitation reconciliation failed after member sync.")
+        invitation_summary = {"status": "failed"}
+
     return {
         "status": sync_run.status,
         "sync_run_id": sync_run.id,
@@ -10415,7 +10716,69 @@ def api_sync_members():
         "members_new": sync_run.members_new,
         "members_updated": sync_run.members_updated,
         "documents_received": sync_run.documents_received,
+        "portal_invitations": invitation_summary,
     }
+
+
+@app.post("/api/integrations/signup/portal-invitations")
+def api_signup_portal_invitation():
+    require_signup_portal_integration_access()
+    ensure_runtime_schema()
+    try:
+        normalized, payload_hash = normalize_portal_invitation_payload(request.get_json(silent=True))
+    except ValueError as exc:
+        return jsonify({"status": "rejected", "error": str(exc)}), 422
+
+    record = PortalInvitation.query.filter_by(source_reference=normalized["reference"]).first()
+    if record:
+        if record.request_payload_hash != payload_hash:
+            return jsonify({
+                "status": "conflict",
+                "reference": record.source_reference,
+                "requires_manual_review": True,
+            }), 409
+        reconcile_portal_invitation(record)
+        status_code = 202 if record.status in {"waiting_for_member", "ready", "sending"} else 200
+        return jsonify(portal_invitation_public(record, duplicate=True)), status_code
+
+    record = PortalInvitation(
+        source_reference=normalized["reference"],
+        member_id=normalized["member_number"],
+        expected_email_hash=portal_invitation_email_hash(normalized["expected_email"]),
+        language=normalized["language"],
+        signup_plan=normalized["signup_plan"],
+        request_payload_hash=payload_hash,
+    )
+    db.session.add(record)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        record = PortalInvitation.query.filter_by(source_reference=normalized["reference"]).one()
+        if record.request_payload_hash != payload_hash:
+            return jsonify({
+                "status": "conflict",
+                "reference": record.source_reference,
+                "requires_manual_review": True,
+            }), 409
+
+    reconcile_portal_invitation(record)
+    status_code = 202 if record.status in {"waiting_for_member", "ready", "sending"} else 200
+    return jsonify(portal_invitation_public(record)), status_code
+
+
+@app.get("/api/integrations/signup/portal-invitations/<reference>")
+def api_signup_portal_invitation_status(reference):
+    require_signup_portal_integration_access()
+    ensure_runtime_schema()
+    normalized_reference = str(reference or "").strip().upper()
+    if not re.fullmatch(r"DF-\d{8}-\d{4,6}", normalized_reference):
+        abort(404)
+    record = PortalInvitation.query.filter_by(source_reference=normalized_reference).first()
+    if not record:
+        abort(404)
+    reconcile_portal_invitation(record)
+    return jsonify(portal_invitation_public(record))
 
 
 def fep_member_snapshot_row(member):
@@ -13415,17 +13778,17 @@ def login():
                 flash(translated_text("login_code_sent_if_registered", current_language()), "success")
                 return redirect(url_for("login", step="code"))
 
-            session.pop("pending_login_email", None)
+            session["pending_login_email"] = email
             session.pop("dev_login_code", None)
-            flash(translated_text("login_not_verified", current_language()), "error")
-            return redirect(url_for("login"))
+            flash(translated_text("login_code_sent_if_registered", current_language()), "success")
+            return redirect(url_for("login", step="code"))
 
         pending_email = session.get("pending_login_email")
         supplied_code = request.form.get("code", "").strip()
         login_code = latest_member_login_code(pending_email)
         if not login_code:
-            flash(translated_text("request_new_login_code", current_language()), "error")
-            return redirect(url_for("login"))
+            flash(translated_text("invalid_login_code", current_language()), "error")
+            return redirect(url_for("login", step="code"))
 
         login_code.attempts += 1
         if login_code.expires_at < datetime.now() or login_code.attempts > 5:

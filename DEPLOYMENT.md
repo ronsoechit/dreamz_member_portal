@@ -25,6 +25,8 @@ STAFF_ADMIN_EMAIL=ron@dreamzfitness.com
 STAFF_TOKEN=<long random staff token>
 SYNC_API_TOKEN=<long random sync token>
 FEP_API_TOKEN=<long random FEP token>
+SIGNUP_PORTAL_INTEGRATION_TOKEN=<shared random token of at least 32 characters>
+MEMBER_PORTAL_PUBLIC_URL=https://dreamzfitness.app
 SYNC_STALE_AFTER_MINUTES=30
 SESSION_COOKIE_SECURE=true
 EMAIL_DELIVERY_MODE=smtp
@@ -34,6 +36,7 @@ SMTP_USER=<smtp username>
 SMTP_PASS=<smtp password>
 SMTP_FROM=<sender email>
 SMTP_FROM_NAME=Dreamz Fitness
+SMTP_TIMEOUT_SECONDS=20
 DIRECT_DEBIT_DAY=28
 STORAGE_BACKEND=s3
 S3_BUCKET=<bucket name>
@@ -62,6 +65,35 @@ $env:SYNC_API_TOKEN="<same token as Railway>"
 ```
 
 5. Check `/staff/sync`, `/staff/data-audit`, and `/staff/email-log`.
+
+### Signup portal activation rollout
+
+Deploy the member portal before the signup application. Configure the same
+`SIGNUP_PORTAL_INTEGRATION_TOKEN` on both services, but never place it in source
+control or logs. The signup service must use
+`MEMBER_PORTAL_URL=https://dreamzfitness.app`.
+
+The signup application may enqueue an invitation only for an eligible completed
+membership. The portal keeps the request pending until a later GymAssistant sync
+contains exactly one member with the expected member ID, email address, and an
+eligible membership plan. Only then does the portal send the localized activation
+email. Repeated requests and syncs are idempotent and do not send a second email.
+
+Roll out in this order:
+
+1. Deploy the portal and verify its health and protected integration endpoint.
+2. Deploy the signup application and verify that its health reports the portal
+   integration as configured.
+3. Test the delayed-sync path with a controlled test member before allowing a
+   real signup to rely on the activation mail.
+4. Check `/staff/email-log` and the portal invitation status if a request needs
+   manual review. Do not automatically retry an ambiguous SMTP result because
+   that could send a duplicate message.
+
+Existing signups are marked for legacy reconciliation and do not receive a bulk
+activation email. Existing members entered manually in GymAssistant can request a
+normal one-time login code from the portal after the sync has imported their
+unique email address.
 
 ### Sync monitoring
 
