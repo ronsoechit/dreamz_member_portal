@@ -26,7 +26,7 @@ from markupsafe import Markup
 from sqlalchemy import inspect, or_
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from dateutil.relativedelta import relativedelta
-from datetime import datetime, date, timedelta   # ← bestaande regel uitbreiden
+from datetime import datetime, date, time, timedelta   # ← bestaande regel uitbreiden
 from datetime import timezone
 from cancellation_policy import evaluate_cancellation_policy
 from ga_fields import GA_FIELDS
@@ -60,7 +60,7 @@ from types import SimpleNamespace
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
-from io import StringIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
@@ -115,6 +115,8 @@ app.config["INVOICES_PORTAL_URL"] = os.getenv("INVOICES_PORTAL_URL", "https://in
 app.config["CASH_CONTROL_URL"] = os.getenv("CASH_CONTROL_URL", "https://cash.dreamzfitness.app")
 app.config["FEP_MANAGER_URL"] = os.getenv("FEP_MANAGER_URL", "https://fep.dreamzfitness.app")
 app.config["MEMBER_PORTAL_PUBLIC_URL"] = (os.getenv("MEMBER_PORTAL_PUBLIC_URL") or "https://dreamzfitness.app").rstrip("/")
+app.config["WORDPRESS_SCHEDULE_WEBHOOK_URL"] = os.getenv("WORDPRESS_SCHEDULE_WEBHOOK_URL", "")
+app.config["WORDPRESS_SCHEDULE_WEBHOOK_TOKEN"] = os.getenv("WORDPRESS_SCHEDULE_WEBHOOK_TOKEN", "")
 app.config["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY", "")
 app.config["COACH_AI_MODE"] = os.getenv("COACH_AI_MODE") or ("openai" if app.config["OPENAI_API_KEY"] else "fallback")
 app.config["OPENAI_MODEL"] = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
@@ -930,6 +932,11 @@ class GroupClassSchedule(db.Model):
     last_updated_from_pdf = db.Column(db.Date)
     status = db.Column(db.String, default="draft", nullable=False)
     published_at = db.Column(db.DateTime)
+    published_by = db.Column(db.String)
+    has_unpublished_changes = db.Column(db.Boolean, default=False, nullable=False)
+    draft_initialized_at = db.Column(db.DateTime)
+    draft_updated_at = db.Column(db.DateTime)
+    draft_updated_by = db.Column(db.String)
     created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
 
@@ -955,6 +962,62 @@ class GroupClassOccurrence(db.Model):
 
     schedule = db.relationship("GroupClassSchedule", backref=db.backref("occurrences", lazy=True))
     class_type = db.relationship("GroupClassType", backref=db.backref("occurrences", lazy=True))
+
+
+class GroupClassDraftOccurrence(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    schedule_id = db.Column(db.Integer, db.ForeignKey("group_class_schedule.id"), nullable=False, index=True)
+    source_occurrence_id = db.Column(db.Integer, db.ForeignKey("group_class_occurrence.id"), index=True)
+    class_type_id = db.Column(db.Integer, db.ForeignKey("group_class_type.id"), nullable=False, index=True)
+    day_of_week = db.Column(db.Integer, nullable=False, index=True)
+    start_time = db.Column(db.Time, nullable=False)
+    end_time = db.Column(db.Time, nullable=False)
+    room = db.Column(db.String, nullable=False, index=True)
+    instructor = db.Column(db.String)
+    capacity = db.Column(db.Integer)
+    note = db.Column(db.String)
+    status = db.Column(db.String, default="scheduled", nullable=False, index=True)
+    is_bookable = db.Column(db.Boolean, default=True, nullable=False)
+    is_published = db.Column(db.Boolean, default=True, nullable=False)
+    blocks_room = db.Column(db.Boolean, default=True, nullable=False)
+    updated_by = db.Column(db.String)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    schedule = db.relationship("GroupClassSchedule", backref=db.backref("draft_occurrences", lazy=True))
+    source_occurrence = db.relationship("GroupClassOccurrence")
+    class_type = db.relationship("GroupClassType")
+
+
+class GroupClassScheduleAudit(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    schedule_id = db.Column(db.Integer, db.ForeignKey("group_class_schedule.id"), nullable=False, index=True)
+    draft_occurrence_id = db.Column(db.Integer, index=True)
+    occurrence_id = db.Column(db.Integer, db.ForeignKey("group_class_occurrence.id"), index=True)
+    action = db.Column(db.String, nullable=False, index=True)
+    actor = db.Column(db.String, nullable=False, index=True)
+    old_value = db.Column(db.Text)
+    new_value = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+
+    schedule = db.relationship("GroupClassSchedule")
+    occurrence = db.relationship("GroupClassOccurrence")
+
+
+class GroupClassScheduleVersion(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    schedule_id = db.Column(db.Integer, db.ForeignKey("group_class_schedule.id"), nullable=False, index=True)
+    version_number = db.Column(db.Integer, nullable=False)
+    source = db.Column(db.String)
+    snapshot_json = db.Column(db.Text, nullable=False)
+    published_by = db.Column(db.String, nullable=False)
+    published_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+
+    schedule = db.relationship("GroupClassSchedule", backref=db.backref("versions", lazy=True))
+
+    __table_args__ = (
+        db.UniqueConstraint("schedule_id", "version_number", name="uq_group_class_schedule_version"),
+    )
 
 
 class MemberClassPreference(db.Model):
@@ -1150,9 +1213,9 @@ STALE_SYNC_RUN_MINUTES = 15
 LOGIN_CODE_RESEND_COOLDOWN_SECONDS = 60
 COACH_PLAN_SCHEMA_VERSION = "2026-05-27b"
 GROUP_CLASS_SCHEDULE_NAME = "Dreamz Fitness Group Class Schedule"
-GROUP_CLASS_SCHEDULE_SOURCE = "uploaded PDF schedule converted to database seed"
+GROUP_CLASS_SCHEDULE_SOURCE = "20260723 - LESROOSTER latest.pdf"
 GROUP_CLASS_SCHEDULE_TIMEZONE = "America/Kralendijk"
-GROUP_CLASS_SCHEDULE_LAST_UPDATED_FROM_PDF = date(2026, 5, 18)
+GROUP_CLASS_SCHEDULE_LAST_UPDATED_FROM_PDF = date(2026, 7, 23)
 GROUP_CLASS_DAY_KEYS = {
     0: "monday",
     1: "tuesday",
@@ -1925,6 +1988,36 @@ GROUP_CLASS_TYPE_SEED = {
         "impact_level": "low",
         "pregnancy_safety_level": "suitable_or_requires_modification",
     },
+    "PILATES & YOGA FUSION": {
+        "category": "mobility_recovery",
+        "intensity": "low_medium",
+        "muscle_focus": "core_mobility",
+        "cardio_load": "low",
+        "strength_load": "low_medium",
+        "recovery_impact": "low",
+        "impact_level": "low",
+        "pregnancy_safety_level": "suitable_or_requires_modification_after_16_weeks",
+    },
+    "AB ATTACK": {
+        "category": "core_strength",
+        "intensity": "medium_high",
+        "muscle_focus": "core",
+        "cardio_load": "low_medium",
+        "strength_load": "medium_high",
+        "recovery_impact": "medium",
+        "impact_level": "low",
+        "pregnancy_safety_level": "not_recommended_or_requires_modification",
+    },
+    "KICKBOXING": {
+        "category": "cardio",
+        "intensity": "high",
+        "muscle_focus": "full_body_cardio",
+        "cardio_load": "high",
+        "strength_load": "low_medium",
+        "recovery_impact": "high",
+        "impact_level": "high",
+        "pregnancy_safety_level": "not_recommended_or_requires_modification",
+    },
     "RESERVED": {
         "category": "unavailable_reserved",
         "intensity": "none",
@@ -1942,28 +2035,31 @@ GROUP_CLASS_TYPE_SEED = {
 
 GROUP_CLASS_WEEKLY_SCHEDULE_SEED = [
     (0, "08:00", "09:00", "BODYPUMP", "AEROBICS ROOM", None),
-    (0, "18:00", "19:00", "BODYCOMBAT", "AEROBICS ROOM", None),
+    (0, "09:15", "10:15", "PILATES & YOGA FUSION", "DOJO", None),
     (0, "19:00", "20:00", "ZUMBA", "AEROBICS ROOM", None),
-    (0, "20:00", "21:00", "BODYPUMP", "AEROBICS ROOM", None),
+    (0, "20:15", "20:30", "AB ATTACK", "AEROBICS ROOM", None),
     (1, "08:00", "09:00", "TOTAL BODY", "AEROBICS ROOM", None),
     (1, "17:00", "18:00", "RESERVED", "DOJO", None),
     (1, "18:00", "19:00", "BODYPUMP", "AEROBICS ROOM", None),
     (1, "19:00", "20:00", "TOTAL BODY", "AEROBICS ROOM", None),
+    (1, "20:15", "20:30", "AB ATTACK", "AEROBICS ROOM", None),
     (2, "08:00", "09:00", "BODYPUMP", "AEROBICS ROOM", None),
     (2, "09:00", "10:00", "YOGA", "AEROBICS ROOM", None),
+    (2, "18:00", "19:00", "KICKBOXING", "DOJO", None),
     (2, "18:00", "19:00", "ZUMBA", "AEROBICS ROOM", None),
     (2, "18:00", "19:00", "SPINNING", "SPINNING ROOM", None),
-    (3, "08:00", "09:00", "STEP AEROBICS", "DOJO", None),
+    (2, "19:00", "20:00", "BODYPUMP", "AEROBICS ROOM", None),
+    (2, "20:15", "20:30", "AB ATTACK", "AEROBICS ROOM", None),
     (3, "17:00", "18:00", "RESERVED", "DOJO", None),
-    (3, "18:00", "19:00", "BOOTY SHAPE", "AEROBICS ROOM", None),
-    (3, "20:00", "21:00", "BODYPUMP", "AEROBICS ROOM", None),
+    (3, "19:00", "20:00", "BODYPUMP", "AEROBICS ROOM", None),
+    (3, "20:15", "20:30", "AB ATTACK", "AEROBICS ROOM", None),
     (4, "08:00", "09:00", "TOTAL BODY", "AEROBICS ROOM", None),
     (4, "09:00", "10:00", "BODYPUMP", "AEROBICS ROOM", None),
     (4, "18:00", "19:00", "ZUMBA", "AEROBICS ROOM", None),
     (4, "18:00", "19:00", "SPINNING", "SPINNING ROOM", None),
-    (5, "08:00", "09:00", "PILATES", "AEROBICS ROOM", "NEW"),
+    (4, "20:15", "20:30", "AB ATTACK", "AEROBICS ROOM", None),
+    (5, "08:00", "09:00", "PILATES", "AEROBICS ROOM", None),
     (5, "09:00", "10:00", "ZUMBA", "AEROBICS ROOM", None),
-    (5, "10:00", "11:00", "BODYCOMBAT", "AEROBICS ROOM", None),
     (5, "11:00", "12:00", "BODYPUMP", "AEROBICS ROOM", None),
 ]
 
@@ -2104,6 +2200,10 @@ def backfill_runtime_schema_defaults():
     ))
     db.session.execute(text(
         "UPDATE group_class_occurrence SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL"
+    ))
+    db.session.execute(text(
+        f"UPDATE group_class_schedule SET has_unpublished_changes = {sql_bool(False)} "
+        "WHERE has_unpublished_changes IS NULL"
     ))
     db.session.execute(text(
         f"UPDATE pricing_category SET is_active = {true_value} WHERE is_active IS NULL"
@@ -2335,8 +2435,31 @@ def group_class_seed_key(day_of_week, start_at, end_at, class_name, room):
     return "-".join(key_parts)
 
 
+def group_class_seed_signature(day_of_week, start_at, end_at, class_name, room):
+    start_time = start_at if isinstance(start_at, time) else parse_group_class_seed_time(start_at)
+    end_time = end_at if isinstance(end_at, time) else parse_group_class_seed_time(end_at)
+    return (
+        int(day_of_week),
+        start_time,
+        end_time,
+        (class_name or "").strip().upper(),
+        (room or "").strip().upper(),
+    )
+
+
+def group_class_occurrence_seed_signature(occurrence):
+    return group_class_seed_signature(
+        occurrence.day_of_week,
+        occurrence.start_time,
+        occurrence.end_time,
+        occurrence.class_type.name if occurrence.class_type else "",
+        occurrence.room,
+    )
+
+
 def seed_group_class_schedule():
     schedule = GroupClassSchedule.query.filter_by(name=GROUP_CLASS_SCHEDULE_NAME).first()
+    previous_schedule_version = schedule.last_updated_from_pdf if schedule else None
     if not schedule:
         schedule = GroupClassSchedule(
             name=GROUP_CLASS_SCHEDULE_NAME,
@@ -2345,9 +2468,16 @@ def seed_group_class_schedule():
         )
         db.session.add(schedule)
 
-    schedule.source = schedule.source or GROUP_CLASS_SCHEDULE_SOURCE
+    should_reconcile_schedule = (
+        previous_schedule_version is None
+        or previous_schedule_version < GROUP_CLASS_SCHEDULE_LAST_UPDATED_FROM_PDF
+    )
+    if should_reconcile_schedule:
+        schedule.source = GROUP_CLASS_SCHEDULE_SOURCE
+        schedule.last_updated_from_pdf = GROUP_CLASS_SCHEDULE_LAST_UPDATED_FROM_PDF
+    else:
+        schedule.source = schedule.source or GROUP_CLASS_SCHEDULE_SOURCE
     schedule.timezone = schedule.timezone or GROUP_CLASS_SCHEDULE_TIMEZONE
-    schedule.last_updated_from_pdf = schedule.last_updated_from_pdf or GROUP_CLASS_SCHEDULE_LAST_UPDATED_FROM_PDF
     schedule.updated_at = datetime.now()
 
     class_types = {}
@@ -2369,29 +2499,82 @@ def seed_group_class_schedule():
 
     db.session.flush()
 
+    if not should_reconcile_schedule:
+        db.session.commit()
+        return schedule
+
+    existing_occurrences = GroupClassOccurrence.query.filter_by(schedule_id=schedule.id).all()
+    occurrences_by_seed_key = {
+        occurrence.seed_key: occurrence
+        for occurrence in existing_occurrences
+        if occurrence.seed_key
+    }
+    occurrences_by_signature = {}
+    for occurrence in existing_occurrences:
+        signature = group_class_occurrence_seed_signature(occurrence)
+        occurrences_by_signature.setdefault(signature, []).append(occurrence)
+
+    desired_occurrences = []
     for day_of_week, start_at, end_at, class_name, room, note in GROUP_CLASS_WEEKLY_SCHEDULE_SEED:
         seed_key = group_class_seed_key(day_of_week, start_at, end_at, class_name, room)
-        if GroupClassOccurrence.query.filter_by(seed_key=seed_key).first():
-            continue
-
         class_type = class_types[class_name]
         is_reserved = class_name == "RESERVED"
-        occurrence = GroupClassOccurrence(
-            schedule_id=schedule.id,
-            class_type_id=class_type.id,
-            day_of_week=day_of_week,
-            start_time=parse_group_class_seed_time(start_at),
-            end_time=parse_group_class_seed_time(end_at),
-            room=room,
-            note=note,
-            status="reserved" if is_reserved else "scheduled",
-            is_bookable=not is_reserved and class_type.default_bookable,
-            is_published=not is_reserved and class_type.default_publish,
-            blocks_room=True,
-            seed_key=seed_key,
-        )
-        db.session.add(occurrence)
+        signature = group_class_seed_signature(day_of_week, start_at, end_at, class_name, room)
+        occurrence = occurrences_by_seed_key.get(seed_key)
+        if not occurrence:
+            matching_occurrences = [
+                item
+                for item in occurrences_by_signature.get(signature, [])
+                if item not in desired_occurrences
+            ]
+            occurrence = next(
+                (
+                    item
+                    for item in matching_occurrences
+                    if item.status in {"scheduled", "reserved"}
+                ),
+                matching_occurrences[0] if matching_occurrences else None,
+            )
 
+        if not occurrence:
+            occurrence = GroupClassOccurrence(schedule_id=schedule.id)
+            db.session.add(occurrence)
+
+        preserved_seed_key = occurrence.seed_key
+        occurrence.class_type = class_type
+        occurrence.day_of_week = day_of_week
+        occurrence.start_time = parse_group_class_seed_time(start_at)
+        occurrence.end_time = parse_group_class_seed_time(end_at)
+        occurrence.room = room
+        occurrence.note = note
+        occurrence.status = "reserved" if is_reserved else "scheduled"
+        occurrence.is_bookable = not is_reserved and class_type.default_bookable
+        occurrence.is_published = not is_reserved and class_type.default_publish
+        occurrence.blocks_room = True
+        occurrence.seed_key = preserved_seed_key or seed_key
+        occurrence.updated_at = datetime.now()
+        desired_occurrences.append(occurrence)
+
+    for occurrence in existing_occurrences:
+        if occurrence in desired_occurrences or not occurrence.seed_key:
+            continue
+        if occurrence.status == "cancelled" and not occurrence.is_bookable and not occurrence.is_published:
+            continue
+        old_data = group_class_occurrence_snapshot(occurrence)
+        occurrence.status = "cancelled"
+        occurrence.is_bookable = False
+        occurrence.is_published = False
+        occurrence.updated_at = datetime.now()
+        new_data = group_class_occurrence_snapshot(occurrence)
+        create_group_class_change_notifications(
+            occurrence,
+            group_class_change_type(old_data, new_data),
+            old_data,
+            new_data,
+        )
+
+    if schedule.draft_initialized_at and not schedule.has_unpublished_changes:
+        sync_group_class_draft_from_published(schedule, actor="system-sync")
     db.session.commit()
     return schedule
 
@@ -4005,19 +4188,402 @@ def parse_group_class_time(value):
         abort(400, translated_text("group_class_invalid_time", current_language()))
 
 
-def group_class_occurrence_snapshot(occurrence):
+def group_class_record_snapshot(record):
     return {
-        "class_type_id": occurrence.class_type_id,
-        "class_name": occurrence.class_type.name if occurrence.class_type else "",
-        "day_of_week": occurrence.day_of_week,
-        "start_time": group_class_time_label(occurrence.start_time),
-        "end_time": group_class_time_label(occurrence.end_time),
-        "room": occurrence.room,
-        "instructor": occurrence.instructor or "",
-        "capacity": occurrence.capacity,
-        "status": occurrence.status,
-        "is_bookable": bool(occurrence.is_bookable),
-        "is_published": bool(occurrence.is_published),
+        "class_type_id": record.class_type_id,
+        "class_name": record.class_type.name if record.class_type else "",
+        "day_of_week": record.day_of_week,
+        "start_time": group_class_time_label(record.start_time),
+        "end_time": group_class_time_label(record.end_time),
+        "room": record.room,
+        "instructor": record.instructor or "",
+        "capacity": record.capacity,
+        "note": record.note or "",
+        "status": record.status,
+        "is_bookable": bool(record.is_bookable),
+        "is_published": bool(record.is_published),
+    }
+
+
+def group_class_occurrence_snapshot(occurrence):
+    return group_class_record_snapshot(occurrence)
+
+
+def group_class_snapshot_json(records):
+    rows = [
+        group_class_record_snapshot(record)
+        for record in sorted(
+            records,
+            key=lambda item: (
+                item.day_of_week,
+                item.start_time,
+                item.class_type.name if item.class_type else "",
+            ),
+        )
+    ]
+    return json.dumps(rows, ensure_ascii=True, sort_keys=True)
+
+
+def group_class_snapshot_rows(snapshot_json):
+    try:
+        rows = json.loads(snapshot_json or "[]")
+    except (TypeError, ValueError):
+        return []
+    return rows if isinstance(rows, list) else []
+
+
+def add_group_class_schedule_audit(
+    schedule,
+    action,
+    *,
+    actor=None,
+    draft=None,
+    occurrence=None,
+    old_data=None,
+    new_data=None,
+):
+    event = GroupClassScheduleAudit(
+        schedule_id=schedule.id,
+        draft_occurrence_id=draft.id if draft and draft.id else None,
+        occurrence_id=occurrence.id if occurrence and occurrence.id else None,
+        action=action,
+        actor=(actor or current_staff_username() or "system").strip() or "system",
+        old_value=json.dumps(old_data, ensure_ascii=True, sort_keys=True) if old_data is not None else None,
+        new_value=json.dumps(new_data, ensure_ascii=True, sort_keys=True) if new_data is not None else None,
+    )
+    db.session.add(event)
+    return event
+
+
+def group_class_audit_label(event):
+    data = {}
+    for raw_value in (event.new_value, event.old_value):
+        try:
+            parsed = json.loads(raw_value or "{}")
+        except (TypeError, ValueError):
+            parsed = {}
+        if isinstance(parsed, dict) and parsed:
+            data = parsed
+            break
+    class_name = str(data.get("class_name") or data.get("name") or "").strip()
+    day_value = data.get("day_of_week")
+    day_name = group_class_day_label(day_value) if day_value in GROUP_CLASS_DAY_KEYS else ""
+    start_time = str(data.get("start_time") or "").strip()
+    label_parts = [part for part in (class_name, day_name, start_time) if part]
+    return " · ".join(label_parts)
+
+
+def published_group_class_occurrences(schedule):
+    return (
+        GroupClassOccurrence.query
+        .filter_by(schedule_id=schedule.id)
+        .filter(GroupClassOccurrence.status.in_(["scheduled", "reserved"]))
+        .order_by(
+            GroupClassOccurrence.day_of_week.asc(),
+            GroupClassOccurrence.start_time.asc(),
+            GroupClassOccurrence.id.asc(),
+        )
+        .all()
+    )
+
+
+def copy_group_class_occurrence_to_draft(schedule, occurrence, actor=None):
+    return GroupClassDraftOccurrence(
+        schedule_id=schedule.id,
+        source_occurrence_id=occurrence.id,
+        class_type_id=occurrence.class_type_id,
+        day_of_week=occurrence.day_of_week,
+        start_time=occurrence.start_time,
+        end_time=occurrence.end_time,
+        room=occurrence.room,
+        instructor=occurrence.instructor,
+        capacity=occurrence.capacity,
+        note=occurrence.note,
+        status=occurrence.status,
+        is_bookable=occurrence.is_bookable,
+        is_published=occurrence.is_published,
+        blocks_room=occurrence.blocks_room,
+        updated_by=actor,
+    )
+
+
+def sync_group_class_draft_from_published(schedule, actor="system"):
+    existing_drafts = GroupClassDraftOccurrence.query.filter_by(schedule_id=schedule.id).all()
+    for draft in existing_drafts:
+        db.session.delete(draft)
+    if existing_drafts:
+        db.session.flush()
+    for occurrence in published_group_class_occurrences(schedule):
+        db.session.add(copy_group_class_occurrence_to_draft(schedule, occurrence, actor=actor))
+    now = datetime.now()
+    schedule.draft_initialized_at = schedule.draft_initialized_at or now
+    schedule.draft_updated_at = now
+    schedule.draft_updated_by = actor
+    schedule.has_unpublished_changes = False
+    db.session.flush()
+
+
+def ensure_group_class_initial_version(schedule):
+    existing = GroupClassScheduleVersion.query.filter_by(schedule_id=schedule.id).first()
+    if existing:
+        return existing
+    version = GroupClassScheduleVersion(
+        schedule_id=schedule.id,
+        version_number=1,
+        source=schedule.source,
+        snapshot_json=group_class_snapshot_json(published_group_class_occurrences(schedule)),
+        published_by=schedule.published_by or "system-import",
+        published_at=schedule.published_at or schedule.updated_at or datetime.now(),
+    )
+    db.session.add(version)
+    add_group_class_schedule_audit(
+        schedule,
+        "initial_import",
+        actor=version.published_by,
+        new_data={"version_number": 1, "source": schedule.source or ""},
+    )
+    return version
+
+
+def ensure_group_class_draft(schedule):
+    if schedule.draft_initialized_at is None:
+        sync_group_class_draft_from_published(schedule, actor="system-import")
+    ensure_group_class_initial_version(schedule)
+    db.session.commit()
+    return schedule
+
+
+def group_class_occurrence_has_history(occurrence):
+    today = local_datetime(datetime.now(timezone.utc)).date()
+    if MemberClassAttendance.query.filter_by(occurrence_id=occurrence.id).first():
+        return True
+    return bool(
+        MemberClassPlan.query
+        .filter_by(occurrence_id=occurrence.id)
+        .filter(
+            (MemberClassPlan.class_date < today)
+            | (MemberClassPlan.status == "attended")
+        )
+        .first()
+    )
+
+
+def apply_group_class_draft_to_occurrence(draft, occurrence):
+    occurrence.class_type_id = draft.class_type_id
+    occurrence.day_of_week = draft.day_of_week
+    occurrence.start_time = draft.start_time
+    occurrence.end_time = draft.end_time
+    occurrence.room = draft.room
+    occurrence.instructor = draft.instructor
+    occurrence.capacity = draft.capacity
+    occurrence.note = draft.note
+    occurrence.status = draft.status
+    occurrence.is_bookable = draft.is_bookable and draft.status == "scheduled"
+    occurrence.is_published = draft.is_published and draft.status == "scheduled"
+    occurrence.blocks_room = draft.blocks_room
+    occurrence.updated_at = datetime.now()
+
+
+def group_class_draft_differs_from_occurrence(draft, occurrence):
+    return group_class_record_snapshot(draft) != group_class_occurrence_snapshot(occurrence)
+
+
+def publish_group_class_schedule(schedule, actor):
+    ensure_group_class_draft(schedule)
+    drafts = (
+        GroupClassDraftOccurrence.query
+        .filter_by(schedule_id=schedule.id)
+        .order_by(
+            GroupClassDraftOccurrence.day_of_week.asc(),
+            GroupClassDraftOccurrence.start_time.asc(),
+            GroupClassDraftOccurrence.id.asc(),
+        )
+        .all()
+    )
+    active_occurrences = published_group_class_occurrences(schedule)
+    retained_occurrence_ids = set()
+    affected_member_plans = 0
+
+    for draft in drafts:
+        source = db.session.get(GroupClassOccurrence, draft.source_occurrence_id) if draft.source_occurrence_id else None
+        old_data = group_class_occurrence_snapshot(source) if source else None
+        if source and group_class_draft_differs_from_occurrence(draft, source) and group_class_occurrence_has_history(source):
+            retired_data = old_data
+            source.status = "cancelled"
+            source.is_bookable = False
+            source.is_published = False
+            source.updated_at = datetime.now()
+            cancelled_data = group_class_occurrence_snapshot(source)
+            affected_member_plans += create_group_class_change_notifications(
+                source,
+                "class_cancelled",
+                retired_data,
+                cancelled_data,
+            )
+            retained_occurrence_ids.add(source.id)
+            source = None
+
+        if source is None:
+            source = GroupClassOccurrence(schedule_id=schedule.id)
+            db.session.add(source)
+
+        apply_group_class_draft_to_occurrence(draft, source)
+        db.session.flush()
+        new_data = group_class_occurrence_snapshot(source)
+        change_type = group_class_change_type(old_data, new_data) if old_data else None
+        if old_data and change_type:
+            affected_member_plans += create_group_class_change_notifications(
+                source,
+                change_type,
+                old_data,
+                new_data,
+            )
+        add_group_class_schedule_audit(
+            schedule,
+            "published_added" if old_data is None else ("published_updated" if change_type else "published_unchanged"),
+            actor=actor,
+            draft=draft,
+            occurrence=source,
+            old_data=old_data,
+            new_data=new_data,
+        )
+        draft.source_occurrence_id = source.id
+        draft.updated_by = actor
+        draft.updated_at = datetime.now()
+        retained_occurrence_ids.add(source.id)
+
+    for occurrence in active_occurrences:
+        if occurrence.id in retained_occurrence_ids:
+            continue
+        old_data = group_class_occurrence_snapshot(occurrence)
+        occurrence.status = "cancelled"
+        occurrence.is_bookable = False
+        occurrence.is_published = False
+        occurrence.updated_at = datetime.now()
+        new_data = group_class_occurrence_snapshot(occurrence)
+        affected_member_plans += create_group_class_change_notifications(
+            occurrence,
+            "class_cancelled",
+            old_data,
+            new_data,
+        )
+        add_group_class_schedule_audit(
+            schedule,
+            "published_removed",
+            actor=actor,
+            occurrence=occurrence,
+            old_data=old_data,
+            new_data=new_data,
+        )
+
+    db.session.flush()
+    next_version_number = (
+        db.session.query(db.func.max(GroupClassScheduleVersion.version_number))
+        .filter(GroupClassScheduleVersion.schedule_id == schedule.id)
+        .scalar()
+        or 0
+    ) + 1
+    now = datetime.now()
+    version = GroupClassScheduleVersion(
+        schedule_id=schedule.id,
+        version_number=next_version_number,
+        source="manager portal",
+        snapshot_json=group_class_snapshot_json(published_group_class_occurrences(schedule)),
+        published_by=actor,
+        published_at=now,
+    )
+    db.session.add(version)
+    schedule.status = "published"
+    schedule.published_at = now
+    schedule.published_by = actor
+    schedule.has_unpublished_changes = False
+    schedule.draft_updated_at = now
+    schedule.draft_updated_by = actor
+    schedule.updated_at = now
+    add_group_class_schedule_audit(
+        schedule,
+        "schedule_published",
+        actor=actor,
+        new_data={
+            "version_number": next_version_number,
+            "published_classes": len(drafts),
+            "affected_member_plans": affected_member_plans,
+        },
+    )
+    db.session.commit()
+    return version, affected_member_plans
+
+
+def group_class_wordpress_payload(schedule):
+    ensure_group_class_draft(schedule)
+    drafts = (
+        GroupClassDraftOccurrence.query
+        .filter_by(schedule_id=schedule.id)
+        .order_by(
+            GroupClassDraftOccurrence.day_of_week.asc(),
+            GroupClassDraftOccurrence.start_time.asc(),
+            GroupClassDraftOccurrence.id.asc(),
+        )
+        .all()
+    )
+    return {
+        "source": "Dreamz Fitness manager portal",
+        "source_version": (
+            schedule.last_updated_from_pdf.isoformat()
+            if schedule.last_updated_from_pdf
+            else date.today().isoformat()
+        ),
+        "timezone": schedule.timezone or GROUP_CLASS_SCHEDULE_TIMEZONE,
+        "classes": [
+            {
+                "day_of_week": draft.day_of_week,
+                "title": draft.class_type.name,
+                "begin_time": draft.start_time.strftime("%H:%M:%S"),
+                "end_time": draft.end_time.strftime("%H:%M:%S"),
+                "room": draft.room,
+                "instructor": draft.instructor or "",
+                "note": draft.note or "",
+                "status": draft.status,
+            }
+            for draft in drafts
+        ],
+    }
+
+
+def publish_group_class_schedule_to_wordpress(schedule):
+    webhook_url = (app.config.get("WORDPRESS_SCHEDULE_WEBHOOK_URL") or "").strip()
+    webhook_token = (app.config.get("WORDPRESS_SCHEDULE_WEBHOOK_TOKEN") or "").strip()
+    if not webhook_url or not webhook_token:
+        return {"enabled": False, "published_classes": 0}
+
+    payload = group_class_wordpress_payload(schedule)
+    body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+    request_object = Request(
+        webhook_url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "Dreamz-Member-Portal/1.0",
+            "X-Dreamz-Schedule-Token": webhook_token,
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request_object, timeout=15) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+        raise RuntimeError("The public website did not accept the schedule update.") from exc
+
+    expected_count = len(payload["classes"])
+    if (
+        not isinstance(response_payload, dict)
+        or response_payload.get("success") is not True
+        or int(response_payload.get("published_classes") or -1) != expected_count
+    ):
+        raise RuntimeError("The public website did not confirm the complete schedule update.")
+    return {
+        "enabled": True,
+        "published_classes": expected_count,
     }
 
 
@@ -4116,29 +4682,39 @@ def group_class_admin_context():
     schedule = GroupClassSchedule.query.filter_by(name=GROUP_CLASS_SCHEDULE_NAME).first()
     if not schedule:
         schedule = seed_group_class_schedule()
+    ensure_group_class_draft(schedule)
     class_types = GroupClassType.query.order_by(GroupClassType.name.asc()).all()
     occurrences_query = (
-        GroupClassOccurrence.query
+        GroupClassDraftOccurrence.query
         .join(GroupClassType)
-        .order_by(GroupClassOccurrence.day_of_week.asc(), GroupClassOccurrence.start_time.asc(), GroupClassType.name.asc())
+        .filter(GroupClassDraftOccurrence.schedule_id == schedule.id)
+        .order_by(
+            GroupClassDraftOccurrence.day_of_week.asc(),
+            GroupClassDraftOccurrence.start_time.asc(),
+            GroupClassType.name.asc(),
+        )
     )
     if selected_day != "":
         try:
-            occurrences_query = occurrences_query.filter(GroupClassOccurrence.day_of_week == int(selected_day))
+            occurrences_query = occurrences_query.filter(GroupClassDraftOccurrence.day_of_week == int(selected_day))
         except ValueError:
             selected_day = ""
     if selected_room:
-        occurrences_query = occurrences_query.filter(GroupClassOccurrence.room == selected_room)
+        occurrences_query = occurrences_query.filter(GroupClassDraftOccurrence.room == selected_room)
     if selected_type:
         try:
-            occurrences_query = occurrences_query.filter(GroupClassOccurrence.class_type_id == int(selected_type))
+            occurrences_query = occurrences_query.filter(GroupClassDraftOccurrence.class_type_id == int(selected_type))
         except ValueError:
             selected_type = ""
 
     occurrences = occurrences_query.all()
     rooms = [
         room for (room,) in
-        db.session.query(GroupClassOccurrence.room).distinct().order_by(GroupClassOccurrence.room.asc()).all()
+        db.session.query(GroupClassDraftOccurrence.room)
+        .filter(GroupClassDraftOccurrence.schedule_id == schedule.id)
+        .distinct()
+        .order_by(GroupClassDraftOccurrence.room.asc())
+        .all()
         if room
     ]
     today = local_datetime(datetime.now(timezone.utc)).date()
@@ -4158,10 +4734,39 @@ def group_class_admin_context():
         .limit(25)
         .all()
     )
+    audit_events = (
+        GroupClassScheduleAudit.query
+        .filter_by(schedule_id=schedule.id)
+        .order_by(GroupClassScheduleAudit.created_at.desc(), GroupClassScheduleAudit.id.desc())
+        .limit(50)
+        .all()
+    )
+    versions = (
+        GroupClassScheduleVersion.query
+        .filter_by(schedule_id=schedule.id)
+        .order_by(GroupClassScheduleVersion.version_number.desc())
+        .limit(20)
+        .all()
+    )
+    published_occurrences = published_group_class_occurrences(schedule)
+    published_by_id = {item.id: item for item in published_occurrences}
+    all_drafts = GroupClassDraftOccurrence.query.filter_by(schedule_id=schedule.id).all()
+    pending_change_count = 0
+    referenced_ids = set()
+    for draft in all_drafts:
+        published = published_by_id.get(draft.source_occurrence_id)
+        if published:
+            referenced_ids.add(published.id)
+        if published is None or group_class_draft_differs_from_occurrence(draft, published):
+            pending_change_count += 1
+    pending_change_count += sum(1 for item in published_occurrences if item.id not in referenced_ids)
     return {
         "schedule": schedule,
         "class_types": class_types,
         "occurrences": occurrences,
+        "draft_count": len(all_drafts),
+        "published_count": len(published_occurrences),
+        "pending_change_count": pending_change_count,
         "rooms": rooms,
         "selected_day": selected_day,
         "selected_room": selected_room,
@@ -4170,6 +4775,9 @@ def group_class_admin_context():
         "statuses": sorted(GROUP_CLASS_OCCURRENCE_STATUSES),
         "future_plan_counts": future_plan_counts,
         "changes": changes,
+        "audit_events": audit_events,
+        "versions": versions,
+        "audit_label": group_class_audit_label,
         "time_label": group_class_time_label,
         "day_label": group_class_day_label,
     }
@@ -4183,6 +4791,9 @@ def empty_group_class_admin_context():
         "schedule": None,
         "class_types": [],
         "occurrences": [],
+        "draft_count": 0,
+        "published_count": 0,
+        "pending_change_count": 0,
         "rooms": [],
         "selected_day": selected_day,
         "selected_room": selected_room,
@@ -4191,6 +4802,9 @@ def empty_group_class_admin_context():
         "statuses": sorted(GROUP_CLASS_OCCURRENCE_STATUSES),
         "future_plan_counts": {},
         "changes": [],
+        "audit_events": [],
+        "versions": [],
+        "audit_label": group_class_audit_label,
         "time_label": group_class_time_label,
         "day_label": group_class_day_label,
     }
@@ -8834,7 +9448,9 @@ MANAGER_ALLOWED_STAFF_ENDPOINTS = frozenset({
     "staff_group_classes",
     "staff_group_class_type_save",
     "staff_group_class_occurrence_save",
+    "staff_group_class_draft_delete",
     "staff_group_class_publish",
+    "staff_group_class_pdf",
     "staff_pricing_products",
     "staff_pricing_item_save",
     "staff_cancellations",
@@ -9231,8 +9847,8 @@ def current_language():
     return language_choice_from_request() or DEFAULT_LANGUAGE
 
 
-def t(key):
-    return translate(key, current_language())
+def t(key, **values):
+    return translated_text(key, current_language(), **values)
 
 
 def safe_local_next_url(value, fallback=None):
@@ -11596,6 +12212,12 @@ def staff_group_classes():
     )
 
 
+@app.get("/admin/group-classes")
+def admin_group_classes():
+    require_staff_access()
+    return redirect(url_for("staff_group_classes"))
+
+
 @app.post("/staff/group-classes/class-types")
 def staff_group_class_type_save():
     validate_csrf_token()
@@ -11604,6 +12226,23 @@ def staff_group_class_type_save():
 
     class_type_id = parse_optional_int(request.form.get("class_type_id"))
     class_type = db.session.get(GroupClassType, class_type_id) if class_type_id else None
+    is_new = class_type is None
+    old_data = None
+    if class_type:
+        old_data = {
+            "name": class_type.name,
+            "category": class_type.category,
+            "intensity": class_type.intensity,
+            "muscle_focus": class_type.muscle_focus,
+            "cardio_load": class_type.cardio_load,
+            "strength_load": class_type.strength_load,
+            "recovery_impact": class_type.recovery_impact,
+            "impact_level": class_type.impact_level,
+            "pregnancy_safety_level": class_type.pregnancy_safety_level,
+            "default_bookable": class_type.default_bookable,
+            "default_publish": class_type.default_publish,
+            "description": class_type.description,
+        }
     if not class_type:
         class_type = GroupClassType()
         db.session.add(class_type)
@@ -11627,6 +12266,30 @@ def staff_group_class_type_save():
     class_type.default_publish = request.form.get("default_publish") == "1"
     class_type.description = request.form.get("description", "").strip() or None
     class_type.updated_at = datetime.now()
+    db.session.flush()
+    schedule = GroupClassSchedule.query.filter_by(name=GROUP_CLASS_SCHEDULE_NAME).first()
+    if not schedule:
+        schedule = seed_group_class_schedule()
+    new_data = {
+        "name": class_type.name,
+        "category": class_type.category,
+        "intensity": class_type.intensity,
+        "muscle_focus": class_type.muscle_focus,
+        "cardio_load": class_type.cardio_load,
+        "strength_load": class_type.strength_load,
+        "recovery_impact": class_type.recovery_impact,
+        "impact_level": class_type.impact_level,
+        "pregnancy_safety_level": class_type.pregnancy_safety_level,
+        "default_bookable": class_type.default_bookable,
+        "default_publish": class_type.default_publish,
+        "description": class_type.description,
+    }
+    add_group_class_schedule_audit(
+        schedule,
+        "class_type_added" if is_new else "class_type_updated",
+        old_data=old_data,
+        new_data=new_data,
+    )
     db.session.commit()
     flash(translated_text("group_class_type_saved", current_language()))
     return redirect(url_for("staff_group_classes"))
@@ -11638,17 +12301,27 @@ def staff_group_class_occurrence_save():
     require_staff_access()
     ensure_runtime_schema()
 
-    occurrence_id = parse_optional_int(request.form.get("occurrence_id"))
-    occurrence = db.session.get(GroupClassOccurrence, occurrence_id) if occurrence_id else None
-    is_new = occurrence is None
-    if is_new:
-        schedule = GroupClassSchedule.query.filter_by(name=GROUP_CLASS_SCHEDULE_NAME).first()
-        if not schedule:
-            schedule = seed_group_class_schedule()
-        occurrence = GroupClassOccurrence(schedule_id=schedule.id)
-        db.session.add(occurrence)
+    schedule = GroupClassSchedule.query.filter_by(name=GROUP_CLASS_SCHEDULE_NAME).first()
+    if not schedule:
+        schedule = seed_group_class_schedule()
+    ensure_group_class_draft(schedule)
 
-    old_data = group_class_occurrence_snapshot(occurrence) if not is_new else None
+    draft_id = parse_optional_int(request.form.get("draft_id"))
+    occurrence_id = parse_optional_int(request.form.get("occurrence_id"))
+    draft = db.session.get(GroupClassDraftOccurrence, draft_id) if draft_id else None
+    if draft_id and (not draft or draft.schedule_id != schedule.id):
+        abort(404)
+    if not draft and occurrence_id:
+        draft = GroupClassDraftOccurrence.query.filter_by(
+            schedule_id=schedule.id,
+            source_occurrence_id=occurrence_id,
+        ).first()
+    is_new = draft is None
+    if is_new:
+        draft = GroupClassDraftOccurrence(schedule_id=schedule.id)
+        db.session.add(draft)
+
+    old_data = group_class_record_snapshot(draft) if not is_new else None
     class_type_id = parse_optional_int(request.form.get("class_type_id"))
     class_type = db.session.get(GroupClassType, class_type_id) if class_type_id else None
     if not class_type:
@@ -11672,37 +12345,81 @@ def staff_group_class_occurrence_save():
     if class_type.name == "RESERVED":
         status = "reserved"
 
-    occurrence.class_type = class_type
-    occurrence.day_of_week = day_of_week
-    occurrence.start_time = start_time
-    occurrence.end_time = end_time
-    occurrence.room = request.form.get("room", "").strip().upper()
-    occurrence.instructor = request.form.get("instructor", "").strip() or None
-    occurrence.capacity = parse_optional_int(request.form.get("capacity"))
-    occurrence.note = request.form.get("note", "").strip() or None
-    occurrence.status = status
-    occurrence.blocks_room = True
-    occurrence.is_bookable = (
+    draft.class_type = class_type
+    draft.day_of_week = day_of_week
+    draft.start_time = start_time
+    draft.end_time = end_time
+    draft.room = request.form.get("room", "").strip().upper()
+    draft.instructor = request.form.get("instructor", "").strip() or None
+    draft.capacity = parse_optional_int(request.form.get("capacity"))
+    draft.note = request.form.get("note", "").strip() or None
+    draft.status = status
+    draft.blocks_room = True
+    draft.is_bookable = (
         request.form.get("is_bookable") == "1"
         and status == "scheduled"
         and class_type.name != "RESERVED"
     )
-    occurrence.is_published = request.form.get("is_published") == "1"
-    occurrence.updated_at = datetime.now()
-    if not occurrence.room:
+    draft.is_published = (
+        request.form.get("is_published") == "1"
+        and status == "scheduled"
+        and class_type.name != "RESERVED"
+    )
+    draft.updated_by = current_staff_username() or "staff"
+    draft.updated_at = datetime.now()
+    if not draft.room:
         abort(400, translated_text("group_class_required_fields", current_language()))
 
-    affected_count = 0
-    if not is_new:
-        new_data = group_class_occurrence_snapshot(occurrence)
-        change_type = group_class_change_type(old_data, new_data)
-        affected_count = create_group_class_change_notifications(occurrence, change_type, old_data, new_data)
-
+    db.session.flush()
+    new_data = group_class_record_snapshot(draft)
+    schedule.status = "draft"
+    schedule.has_unpublished_changes = True
+    schedule.draft_updated_at = datetime.now()
+    schedule.draft_updated_by = draft.updated_by
+    schedule.updated_at = datetime.now()
+    add_group_class_schedule_audit(
+        schedule,
+        "draft_added" if is_new else "draft_updated",
+        draft=draft,
+        occurrence=draft.source_occurrence,
+        old_data=old_data,
+        new_data=new_data,
+    )
     db.session.commit()
-    if affected_count:
-        flash(translated_text("group_class_saved_with_members", current_language(), count=affected_count))
-    else:
-        flash(translated_text("group_class_saved", current_language()))
+    flash(translated_text("group_class_draft_saved", current_language()))
+    return redirect(url_for("staff_group_classes"))
+
+
+@app.post("/staff/group-classes/drafts/<int:draft_id>/delete")
+def staff_group_class_draft_delete(draft_id):
+    validate_csrf_token()
+    require_staff_access()
+    ensure_runtime_schema()
+    schedule = GroupClassSchedule.query.filter_by(name=GROUP_CLASS_SCHEDULE_NAME).first()
+    if not schedule:
+        abort(404)
+    ensure_group_class_draft(schedule)
+    draft = db.session.get(GroupClassDraftOccurrence, draft_id)
+    if not draft or draft.schedule_id != schedule.id:
+        abort(404)
+    old_data = group_class_record_snapshot(draft)
+    actor = current_staff_username() or "staff"
+    add_group_class_schedule_audit(
+        schedule,
+        "draft_removed",
+        actor=actor,
+        draft=draft,
+        occurrence=draft.source_occurrence,
+        old_data=old_data,
+    )
+    db.session.delete(draft)
+    schedule.status = "draft"
+    schedule.has_unpublished_changes = True
+    schedule.draft_updated_at = datetime.now()
+    schedule.draft_updated_by = actor
+    schedule.updated_at = datetime.now()
+    db.session.commit()
+    flash(translated_text("group_class_draft_removed", current_language()))
     return redirect(url_for("staff_group_classes"))
 
 
@@ -11714,12 +12431,185 @@ def staff_group_class_publish():
     schedule = GroupClassSchedule.query.filter_by(name=GROUP_CLASS_SCHEDULE_NAME).first()
     if not schedule:
         schedule = seed_group_class_schedule()
-    schedule.status = "published"
-    schedule.published_at = datetime.now()
-    schedule.updated_at = datetime.now()
-    db.session.commit()
-    flash(translated_text("group_class_schedule_published", current_language()))
+    try:
+        publish_group_class_schedule_to_wordpress(schedule)
+    except RuntimeError:
+        app.logger.exception("Could not publish the group class schedule to the public website.")
+        flash(translated_text("group_class_website_publish_failed", current_language()), "error")
+        return redirect(url_for("staff_group_classes"))
+    version, affected_count = publish_group_class_schedule(
+        schedule,
+        current_staff_username() or "staff",
+    )
+    flash(translated_text(
+        "group_class_schedule_published_version",
+        current_language(),
+        version=version.version_number,
+        count=affected_count,
+    ))
     return redirect(url_for("staff_group_classes"))
+
+
+def build_group_class_schedule_pdf(rows, updated_on):
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.enums import TA_CENTER
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import ParagraphStyle
+        from reportlab.lib.utils import ImageReader
+        from reportlab.pdfgen import canvas
+        from reportlab.platypus import Paragraph, Table, TableStyle
+    except ImportError:
+        abort(503, translated_text("group_class_pdf_unavailable", current_language()))
+
+    output = BytesIO()
+    page_width, page_height = letter
+    pdf = canvas.Canvas(output, pagesize=letter)
+    pdf.setTitle("Dreamz Fitness Group Class Schedule")
+
+    pdf.setFillColor(colors.black)
+    pdf.rect(52, page_height - 132, page_width - 104, 82, fill=1, stroke=0)
+    logo_path = Path(app.static_folder) / "logo.jpg"
+    if logo_path.exists():
+        pdf.drawImage(
+            ImageReader(str(logo_path)),
+            112,
+            page_height - 124,
+            width=388,
+            height=99,
+            preserveAspectRatio=True,
+            anchor="c",
+            mask="auto",
+        )
+
+    pdf.setFillColor(colors.black)
+    pdf.setFont("Helvetica-Bold", 14)
+    pdf.drawCentredString(page_width / 2, page_height - 154, "GROUP CLASS SCHEDULE")
+    pdf.setFont("Helvetica-Oblique", 9)
+    updated_on = updated_on or date.today()
+    pdf.drawString(40, page_height - 177, f"Last update: {updated_on.strftime('%d %b %Y')}")
+
+    body_style = ParagraphStyle(
+        "schedule-body",
+        fontName="Helvetica",
+        fontSize=8.3,
+        leading=9.4,
+        textColor=colors.black,
+    )
+    day_style = ParagraphStyle(
+        "schedule-day",
+        parent=body_style,
+        fontName="Helvetica-Bold",
+        leading=10,
+    )
+    class_style = ParagraphStyle(
+        "schedule-class",
+        parent=body_style,
+        fontName="Helvetica",
+    )
+    room_style = ParagraphStyle(
+        "schedule-room",
+        parent=body_style,
+        fontName="Helvetica",
+    )
+
+    table_data = []
+    spans = []
+    for day_of_week in range(7):
+        day_rows = [row for row in rows if int(row.get("day_of_week", -1)) == day_of_week]
+        if not day_rows:
+            continue
+        start_row = len(table_data)
+        english_day = translated_text(f"group_class_day_{GROUP_CLASS_DAY_KEYS[day_of_week]}", "en").upper()
+        papiamentu_day = translated_text(f"group_class_day_{GROUP_CLASS_DAY_KEYS[day_of_week]}", "pap").upper()
+        for index, row in enumerate(day_rows):
+            class_name = html.escape(str(row.get("class_name") or ""))
+            time_text = f"{row.get('start_time', '')} - {row.get('end_time', '')}"
+            table_data.append([
+                Paragraph(f"{english_day}<br/>{papiamentu_day}", day_style) if index == 0 else "",
+                Paragraph(f"{html.escape(time_text)}&nbsp;&nbsp;<b>{class_name}</b>", class_style),
+                Paragraph(html.escape(str(row.get("room") or "")), room_style),
+            ])
+        end_row = len(table_data) - 1
+        if end_row > start_row:
+            spans.append(("SPAN", (0, start_row), (0, end_row)))
+
+    schedule_table = Table(
+        table_data,
+        colWidths=[112, 306, 114],
+        rowHeights=15.5,
+        hAlign="LEFT",
+    )
+    table_style = [
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.black),
+        ("LINEBEFORE", (1, 0), (1, -1), 0.8, colors.black),
+        ("LINEBEFORE", (2, 0), (2, -1), 0.8, colors.black),
+        ("LINEABOVE", (0, 0), (-1, 0), 0.8, colors.black),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]
+    table_style.extend(spans)
+    row_cursor = 0
+    for day_of_week in range(7):
+        day_count = sum(1 for row in rows if int(row.get("day_of_week", -1)) == day_of_week)
+        if not day_count:
+            continue
+        if row_cursor:
+            table_style.append(("LINEABOVE", (0, row_cursor), (-1, row_cursor), 0.8, colors.black))
+        row_cursor += day_count
+    schedule_table.setStyle(TableStyle(table_style))
+    table_width, table_height = schedule_table.wrapOn(pdf, 532, 520)
+    schedule_table.drawOn(pdf, 40, page_height - 188 - table_height)
+
+    pdf.setFont("Helvetica", 7)
+    pdf.setFillColor(colors.HexColor("#777777"))
+    pdf.drawRightString(page_width - 40, 30, "Dreamz Fitness Bonaire")
+    pdf.save()
+    output.seek(0)
+    return output
+
+
+@app.get("/staff/group-classes/pdf")
+def staff_group_class_pdf():
+    require_staff_access()
+    ensure_runtime_schema()
+    schedule = GroupClassSchedule.query.filter_by(name=GROUP_CLASS_SCHEDULE_NAME).first()
+    if not schedule:
+        schedule = seed_group_class_schedule()
+    ensure_group_class_draft(schedule)
+
+    version_id = parse_optional_int(request.args.get("version_id"))
+    scope = request.args.get("scope", "draft").strip().lower()
+    version = None
+    if version_id:
+        version = db.session.get(GroupClassScheduleVersion, version_id)
+        if not version or version.schedule_id != schedule.id:
+            abort(404)
+        rows = group_class_snapshot_rows(version.snapshot_json)
+        updated_on = version.published_at.date()
+        label = f"version-{version.version_number}"
+    elif scope == "published":
+        rows = group_class_snapshot_rows(group_class_snapshot_json(published_group_class_occurrences(schedule)))
+        updated_on = schedule.published_at.date() if schedule.published_at else schedule.last_updated_from_pdf
+        label = "published"
+    else:
+        drafts = GroupClassDraftOccurrence.query.filter_by(schedule_id=schedule.id).all()
+        rows = group_class_snapshot_rows(group_class_snapshot_json(drafts))
+        updated_on = schedule.draft_updated_at.date() if schedule.draft_updated_at else schedule.last_updated_from_pdf
+        label = "draft"
+
+    rows.sort(key=lambda row: (row.get("day_of_week", 0), row.get("start_time", ""), row.get("class_name", "")))
+    pdf_file = build_group_class_schedule_pdf(rows, updated_on)
+    filename_date = (updated_on or date.today()).isoformat()
+    return send_file(
+        pdf_file,
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=f"Dreamz-Group-Class-Schedule-{filename_date}-{label}.pdf",
+    )
 
 
 def save_equipment_upload(file_storage):

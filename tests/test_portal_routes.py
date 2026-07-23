@@ -2475,9 +2475,9 @@ class PortalRouteTests(unittest.TestCase):
 
         self.assertEqual(schedule.name, "Dreamz Fitness Group Class Schedule")
         self.assertEqual(schedule.timezone, "America/Kralendijk")
-        self.assertEqual(schedule.last_updated_from_pdf, date(2026, 5, 18))
-        self.assertEqual(GroupClassType.query.count(), 10)
-        self.assertEqual(GroupClassOccurrence.query.count(), 24)
+        self.assertEqual(schedule.last_updated_from_pdf, date(2026, 7, 23))
+        self.assertEqual(GroupClassType.query.count(), 13)
+        self.assertEqual(GroupClassOccurrence.query.count(), 27)
 
         reserved = GroupClassType.query.filter_by(name="RESERVED").one()
         self.assertFalse(reserved.default_bookable)
@@ -2503,7 +2503,52 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(pilates.day_of_week, 5)
         self.assertEqual(pilates.start_time.strftime("%H:%M"), "08:00")
         self.assertEqual(pilates.room, "AEROBICS ROOM")
-        self.assertEqual(pilates.note, "NEW")
+        self.assertIsNone(pilates.note)
+
+        fusion = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "PILATES & YOGA FUSION")
+            .one()
+        )
+        self.assertEqual(fusion.day_of_week, 0)
+        self.assertEqual(fusion.start_time.strftime("%H:%M"), "09:15")
+        self.assertEqual(fusion.room, "DOJO")
+
+        ab_attack_occurrences = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "AB ATTACK")
+            .all()
+        )
+        self.assertEqual(len(ab_attack_occurrences), 5)
+        self.assertTrue(all(item.start_time.strftime("%H:%M") == "20:15" for item in ab_attack_occurrences))
+        self.assertTrue(all(item.end_time.strftime("%H:%M") == "20:30" for item in ab_attack_occurrences))
+
+        monday_ab_attack = next(item for item in ab_attack_occurrences if item.day_of_week == 0)
+        self.assertEqual(monday_ab_attack.room, "AEROBICS ROOM")
+
+        wednesday_bodypump = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(
+                GroupClassType.name == "BODYPUMP",
+                GroupClassOccurrence.day_of_week == 2,
+                GroupClassOccurrence.start_time == datetime.strptime("19:00", "%H:%M").time(),
+            )
+            .one()
+        )
+        self.assertEqual(wednesday_bodypump.end_time.strftime("%H:%M"), "20:00")
+        self.assertEqual(wednesday_bodypump.room, "AEROBICS ROOM")
+
+        kickboxing = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "KICKBOXING")
+            .one()
+        )
+        self.assertEqual(kickboxing.day_of_week, 2)
+        self.assertEqual(kickboxing.room, "DOJO")
 
     def test_group_class_schedule_seed_is_idempotent_and_preserves_admin_edits(self):
         seed_group_class_schedule()
@@ -2520,11 +2565,72 @@ class PortalRouteTests(unittest.TestCase):
 
         seed_group_class_schedule()
 
-        self.assertEqual(GroupClassType.query.count(), 10)
-        self.assertEqual(GroupClassOccurrence.query.count(), 24)
+        self.assertEqual(GroupClassType.query.count(), 13)
+        self.assertEqual(GroupClassOccurrence.query.count(), 27)
         edited = db.session.get(GroupClassOccurrence, occurrence.id)
         self.assertEqual(edited.room, "MAIN ROOM")
         self.assertEqual(edited.capacity, 18)
+
+    def test_group_class_schedule_seed_reconciles_new_image_without_rewriting_history(self):
+        schedule = seed_group_class_schedule()
+        monday_bodypump = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "BODYPUMP", GroupClassOccurrence.day_of_week == 0)
+            .order_by(GroupClassOccurrence.start_time.asc())
+            .first()
+        )
+        monday_bodypump_id = monday_bodypump.id
+        monday_bodypump.capacity = 18
+        monday_bodypump.seed_key = monday_bodypump.seed_key.replace("2026-07-23", "2026-05-18", 1)
+
+        fusion = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "PILATES & YOGA FUSION")
+            .one()
+        )
+        db.session.delete(fusion)
+
+        bodycombat = GroupClassType.query.filter_by(name="BODYCOMBAT").one()
+        retired_history = GroupClassOccurrence(
+            schedule_id=schedule.id,
+            class_type_id=bodycombat.id,
+            day_of_week=0,
+            start_time=datetime.strptime("18:00", "%H:%M").time(),
+            end_time=datetime.strptime("19:00", "%H:%M").time(),
+            room="AEROBICS ROOM",
+            status="scheduled",
+            is_bookable=True,
+            is_published=True,
+            blocks_room=True,
+            seed_key="2026-05-18-0-1800-1900-bodycombat-aerobics-room",
+        )
+        db.session.add(retired_history)
+        schedule.last_updated_from_pdf = date(2026, 5, 18)
+        db.session.commit()
+
+        seed_group_class_schedule()
+
+        self.assertEqual(schedule.last_updated_from_pdf, date(2026, 7, 23))
+        self.assertEqual(GroupClassOccurrence.query.count(), 28)
+        self.assertEqual(
+            GroupClassOccurrence.query.filter(GroupClassOccurrence.status.in_(["scheduled", "reserved"])).count(),
+            27,
+        )
+        preserved = db.session.get(GroupClassOccurrence, monday_bodypump_id)
+        self.assertEqual(preserved.capacity, 18)
+        self.assertTrue(preserved.seed_key.startswith("2026-05-18-"))
+        self.assertEqual(retired_history.status, "cancelled")
+        self.assertFalse(retired_history.is_bookable)
+        self.assertFalse(retired_history.is_published)
+        self.assertEqual(
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "PILATES & YOGA FUSION")
+            .count(),
+            1,
+        )
 
     def test_pricing_catalog_seed_creates_initial_data(self):
         seed_pricing_catalog()
@@ -3602,13 +3708,13 @@ class PortalRouteTests(unittest.TestCase):
         seed_group_class_schedule()
         db.session.commit()
 
-        monday_afternoon = datetime(2026, 5, 18, 13, 48, tzinfo=timezone(timedelta(hours=-4)))
+        monday_afternoon = datetime(2026, 6, 22, 13, 48, tzinfo=timezone(timedelta(hours=-4)))
         with patch("dreamz_portal.current_portal_datetime", return_value=monday_afternoon):
             context = coach_context_summary(member, profile)
 
         self.assertIn("today_group_class_schedule", context)
         self.assertIn("BODYPUMP", context)
-        self.assertIn("BODYCOMBAT", context)
+        self.assertIn("PILATES & YOGA FUSION", context)
         self.assertIn("schedule_link=/group-classes", context)
         self.assertIn("status=ended", context)
         self.assertIn("status=upcoming", context)
@@ -3668,14 +3774,14 @@ class PortalRouteTests(unittest.TestCase):
         db.session.commit()
 
         self.assertTrue(is_group_class_schedule_question("Welke groepslessen zijn er vandaag?"))
-        monday_afternoon = datetime(2026, 5, 18, 13, 48, tzinfo=timezone(timedelta(hours=-4)))
+        monday_afternoon = datetime(2026, 6, 22, 13, 48, tzinfo=timezone(timedelta(hours=-4)))
         with patch("dreamz_portal.current_portal_datetime", return_value=monday_afternoon):
             reply = coach_today_group_class_reply(member, "nl")
 
         self.assertIn("BODYPUMP", reply)
-        self.assertIn("BODYCOMBAT", reply)
-        self.assertIn("18:00-19:00", reply)
-        self.assertIn("AEROBICS ROOM", reply)
+        self.assertIn("PILATES & YOGA FUSION", reply)
+        self.assertIn("09:15-10:15", reply)
+        self.assertIn("DOJO", reply)
         self.assertIn("Groepslessen", reply)
 
     def test_coach_message_group_class_question_uses_portal_context(self):
@@ -3684,7 +3790,7 @@ class PortalRouteTests(unittest.TestCase):
         seed_group_class_schedule()
         db.session.commit()
 
-        monday_afternoon = datetime(2026, 5, 18, 13, 48, tzinfo=timezone(timedelta(hours=-4)))
+        monday_afternoon = datetime(2026, 6, 22, 13, 48, tzinfo=timezone(timedelta(hours=-4)))
         with patch("dreamz_portal.current_portal_datetime", return_value=monday_afternoon):
             response = self.client.post(
                 "/coach/message",
@@ -3697,7 +3803,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(payload["status"], "success")
         self.assertEqual(payload["source"], "portal_context")
         self.assertIn("BODYPUMP", payload["reply"])
-        self.assertIn("18:00-19:00", payload["reply"])
+        self.assertIn("09:15-10:15", payload["reply"])
 
     def test_coach_message_balance_question_uses_portal_context(self):
         self.add_member(member_id="13659", name="Ron Soechit", balance=67.50, due_date=date(2026, 5, 31))

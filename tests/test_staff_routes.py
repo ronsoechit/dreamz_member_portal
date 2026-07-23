@@ -14,7 +14,7 @@ if importlib.util.find_spec("flask") is None or importlib.util.find_spec("flask_
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
-from dreamz_portal import AppSetting, CancellationRequest, CoachInteraction, DigitalSignatureRecord, EmailLog, GroupClassOccurrence, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, Member, MemberClassAttendance, MemberClassPlan, MemberDocument, MemberSignedDocument, MembershipApplication, MembershipApplicationStatus, PricingChangeLog, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, StaffUser, SyncRun, app, db, deliver_email, ensure_runtime_schema, payment_status_for_member, pricing_visibility_list, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
+from dreamz_portal import AppSetting, CancellationRequest, CoachInteraction, DigitalSignatureRecord, EmailLog, GroupClassDraftOccurrence, GroupClassOccurrence, GroupClassScheduleAudit, GroupClassScheduleVersion, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, Member, MemberClassAttendance, MemberClassPlan, MemberDocument, MemberSignedDocument, MembershipApplication, MembershipApplicationStatus, PricingChangeLog, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, StaffUser, SyncRun, app, db, deliver_email, ensure_runtime_schema, payment_status_for_member, pricing_visibility_list, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
 
 
 class FakeS3Body:
@@ -30,6 +30,8 @@ class StaffRouteTests(unittest.TestCase):
         app.config["TESTING"] = True
         app.config["STAFF_TOKEN"] = "staff-test-token"
         app.config["EMAIL_DELIVERY_MODE"] = "log"
+        app.config["WORDPRESS_SCHEDULE_WEBHOOK_URL"] = ""
+        app.config["WORDPRESS_SCHEDULE_WEBHOOK_TOKEN"] = ""
         app.config["_RUNTIME_SCHEMA_READY"] = False
         self.ctx = app.app_context()
         self.ctx.push()
@@ -42,6 +44,8 @@ class StaffRouteTests(unittest.TestCase):
         db.drop_all()
         self.ctx.pop()
         app.config["STAFF_TOKEN"] = None
+        app.config["WORDPRESS_SCHEDULE_WEBHOOK_URL"] = ""
+        app.config["WORDPRESS_SCHEDULE_WEBHOOK_TOKEN"] = ""
         app.config["_RUNTIME_SCHEMA_READY"] = False
 
     def test_root_redirects_to_member_login(self):
@@ -408,6 +412,17 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("RESERVED", body)
         self.assertIn("AEROBICS ROOM", body)
 
+    def test_manager_admin_group_classes_alias_redirects_to_manager_page(self):
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "manager"
+
+        response = self.client.get("/admin/group-classes")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.headers["Location"].endswith("/staff/group-classes"))
+
+
     def test_staff_pricing_requires_staff_access(self):
         response = self.client.get("/staff/pricing-products")
 
@@ -723,6 +738,222 @@ class StaffRouteTests(unittest.TestCase):
         notification = ScheduleChangeNotification.query.filter_by(member_id="13659").one()
         self.assertEqual(notification.change_type, "class_time_changed")
         self.assertIn("moved to 20:00", notification.message)
+
+    def test_staff_schedule_update_notifies_future_member_plans_only(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        seed_group_class_schedule()
+        bodypump = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(GroupClassType.name == "BODYPUMP", GroupClassOccurrence.day_of_week == 0)
+            .order_by(GroupClassOccurrence.start_time.asc())
+            .first()
+        )
+        future_plan = MemberClassPlan(
+            member_id="13659",
+            occurrence_id=bodypump.id,
+            class_date=date.today() + timedelta(days=7),
+            status="planned",
+        )
+        past_plan = MemberClassPlan(
+            member_id="13659",
+            occurrence_id=bodypump.id,
+            class_date=date.today() - timedelta(days=7),
+            status="planned",
+        )
+        db.session.add_all([future_plan, past_plan])
+        db.session.commit()
+        attendance = MemberClassAttendance(
+            member_id="13659",
+            plan_id=past_plan.id,
+            occurrence_id=bodypump.id,
+            class_date=past_plan.class_date,
+        )
+        db.session.add(attendance)
+        db.session.commit()
+
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "admin"
+            sess["staff_username"] = "ron"
+            sess["_csrf_token"] = "token"
+
+        response = self.client.post(
+            "/staff/group-classes/occurrences",
+            data={
+                "csrf_token": "token",
+                "occurrence_id": str(bodypump.id),
+                "day_of_week": "0",
+                "start_time": "20:00",
+                "end_time": "21:00",
+                "class_type_id": str(bodypump.class_type_id),
+                "room": "AEROBICS ROOM",
+                "instructor": "Christel",
+                "capacity": "24",
+                "status": "scheduled",
+                "is_bookable": "1",
+                "is_published": "1",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        published_before_publish = db.session.get(GroupClassOccurrence, bodypump.id)
+        self.assertEqual(published_before_publish.start_time.strftime("%H:%M"), "08:00")
+        self.assertEqual(db.session.get(MemberClassPlan, future_plan.id).status, "planned")
+        self.assertEqual(ScheduleChangeNotification.query.filter_by(member_id="13659").count(), 0)
+
+        draft = GroupClassDraftOccurrence.query.filter_by(source_occurrence_id=bodypump.id).one()
+        self.assertEqual(draft.start_time.strftime("%H:%M"), "20:00")
+        self.assertEqual(draft.instructor, "Christel")
+        self.assertEqual(draft.capacity, 24)
+        self.assertEqual(draft.updated_by, "ron")
+        self.assertEqual(GroupClassScheduleAudit.query.filter_by(action="draft_updated", actor="ron").count(), 1)
+
+        publish_response = self.client.post(
+            "/staff/group-classes/publish",
+            data={"csrf_token": "token"},
+            follow_redirects=True,
+        )
+        self.assertEqual(publish_response.status_code, 200)
+
+        preserved_history = db.session.get(GroupClassOccurrence, bodypump.id)
+        self.assertEqual(preserved_history.start_time.strftime("%H:%M"), "08:00")
+        self.assertEqual(preserved_history.status, "cancelled")
+        replacement = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(
+                GroupClassType.name == "BODYPUMP",
+                GroupClassOccurrence.day_of_week == 0,
+                GroupClassOccurrence.start_time == datetime.strptime("20:00", "%H:%M").time(),
+                GroupClassOccurrence.status == "scheduled",
+            )
+            .one()
+        )
+        self.assertNotEqual(replacement.id, bodypump.id)
+        self.assertEqual(replacement.instructor, "Christel")
+        self.assertEqual(replacement.capacity, 24)
+        self.assertEqual(db.session.get(MemberClassPlan, future_plan.id).status, "adjusted")
+        self.assertEqual(db.session.get(MemberClassPlan, past_plan.id).status, "planned")
+        self.assertEqual(MemberClassAttendance.query.filter_by(plan_id=past_plan.id).count(), 1)
+        notification = ScheduleChangeNotification.query.filter_by(member_id="13659").one()
+        self.assertEqual(notification.change_type, "class_cancelled")
+        self.assertIn("has been cancelled", notification.message)
+        self.assertEqual(GroupClassScheduleVersion.query.count(), 2)
+        self.assertEqual(GroupClassScheduleAudit.query.filter_by(action="schedule_published", actor="ron").count(), 1)
+
+    def test_staff_can_remove_draft_class_and_publish_without_deleting_history(self):
+        seed_group_class_schedule()
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "manager"
+            sess["_csrf_token"] = "token"
+
+        self.client.get("/staff/group-classes")
+        published = (
+            GroupClassOccurrence.query
+            .join(GroupClassType)
+            .filter(
+                GroupClassType.name == "AB ATTACK",
+                GroupClassOccurrence.day_of_week == 0,
+            )
+            .one()
+        )
+        draft = GroupClassDraftOccurrence.query.filter_by(source_occurrence_id=published.id).one()
+
+        delete_response = self.client.post(
+            f"/staff/group-classes/drafts/{draft.id}/delete",
+            data={"csrf_token": "token"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertEqual(db.session.get(GroupClassOccurrence, published.id).status, "scheduled")
+        self.assertEqual(GroupClassScheduleAudit.query.filter_by(action="draft_removed", actor="manager").count(), 1)
+
+        publish_response = self.client.post(
+            "/staff/group-classes/publish",
+            data={"csrf_token": "token"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(publish_response.status_code, 200)
+        retired = db.session.get(GroupClassOccurrence, published.id)
+        self.assertEqual(retired.status, "cancelled")
+        self.assertFalse(retired.is_published)
+        self.assertEqual(GroupClassOccurrence.query.filter_by(id=published.id).count(), 1)
+
+    def test_staff_group_class_pdf_export_returns_download(self):
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "manager"
+
+        response = self.client.get("/staff/group-classes/pdf?scope=draft")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "application/pdf")
+        self.assertTrue(response.data.startswith(b"%PDF"))
+        self.assertIn("Dreamz-Group-Class-Schedule-", response.headers["Content-Disposition"])
+
+    def test_staff_publish_sends_complete_schedule_to_wordpress_webhook(self):
+        seed_group_class_schedule()
+        app.config["WORDPRESS_SCHEDULE_WEBHOOK_URL"] = (
+            "https://dreamzfitness.com/wp-json/dreamz/v1/group-class-schedule"
+        )
+        app.config["WORDPRESS_SCHEDULE_WEBHOOK_TOKEN"] = "schedule-test-token"
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "manager"
+            sess["_csrf_token"] = "token"
+
+        self.client.get("/staff/group-classes")
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return b'{"success": true, "published_classes": 27}'
+
+        with patch("dreamz_portal.urlopen", return_value=FakeResponse()) as mocked_urlopen:
+            response = self.client.post(
+                "/staff/group-classes/publish",
+                data={"csrf_token": "token"},
+                follow_redirects=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        request_object = mocked_urlopen.call_args.args[0]
+        payload = json.loads(request_object.data.decode("utf-8"))
+        self.assertEqual(len(payload["classes"]), 27)
+        self.assertIn(
+            {
+                "day_of_week": 0,
+                "title": "AB ATTACK",
+                "begin_time": "20:15:00",
+                "end_time": "20:30:00",
+                "room": "AEROBICS ROOM",
+                "instructor": "",
+                "note": "",
+                "status": "scheduled",
+            },
+            payload["classes"],
+        )
+        self.assertTrue(any(
+            item["day_of_week"] == 2
+            and item["title"] == "BODYPUMP"
+            and item["begin_time"] == "19:00:00"
+            for item in payload["classes"]
+        ))
+        self.assertEqual(
+            request_object.get_header("X-dreamz-schedule-token"),
+            "schedule-test-token",
+        )
+        self.assertEqual(GroupClassScheduleVersion.query.count(), 2)
+
 
     def test_staff_cancellations_status_filter(self):
         self.add_request(member_id="1206", member_name="Accepted Member", status="accepted")

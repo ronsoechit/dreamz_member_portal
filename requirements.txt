@@ -4,6 +4,7 @@ gunicorn==22.0.0
 python-dotenv==1.0.1
 psycopg2-binary==2.9.9
 python-dateutil==2.9.0.post0
+reportlab==4.4.9
 Pillow==10.3.0
 pdf2image==1.17.0
 pytesseract==0.3.10
