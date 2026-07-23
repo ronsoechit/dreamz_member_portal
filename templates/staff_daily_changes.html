@@ -4,7 +4,7 @@
 {% block content %}
 <div class="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
   <div>
-    <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">Admin Dashboard</div>
+    <div class="text-sm font-semibold uppercase tracking-wide text-yellow-400">{{ t('manager') if current_staff_role == 'manager' else t('admin') }} {{ t('dashboard') }}</div>
     <h2 class="text-2xl font-semibold">Daily Changes</h2>
     <p class="text-sm text-gray-400">
       GymAssistant changes received by the portal for {{ selected_date|format_date('%d/%m/%Y') }}.

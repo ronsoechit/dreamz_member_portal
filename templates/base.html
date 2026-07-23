@@ -20,7 +20,7 @@
   <header class="app-header {% if current_staff_role %}staff-header{% endif %} bg-gray-800 shadow-md">
     <div class="container mx-auto flex flex-col gap-4 px-5 py-4">
       <div class="header-top-row flex items-center justify-between gap-3">
-        <a href="/" class="brand-mark shrink-0">
+        <a href="{% if current_staff_role == 'manager' %}{{ url_for('staff_daily_changes') }}{% elif current_staff_role %}{{ url_for('staff_home') }}{% else %}/{% endif %}" class="brand-mark shrink-0">
           <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Logo" class="h-10">
         </a>
         {% if current_staff_role %}
@@ -54,32 +54,36 @@
           <nav class="app-nav staff-nav flex flex-wrap items-center gap-1 rounded border border-gray-700 bg-gray-900/40 p-1 text-sm">
             {% if current_staff_role == 'admin' %}
               <a class="rounded px-3 py-2 {% if request.endpoint == 'admin_dashboard' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('admin_dashboard') }}">{{ t('staff_master_nav') }}</a>
+              <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_home' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_home') }}">{{ t('staff_home_nav') }}</a>
+              <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_data_audit' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_data_audit') }}">{{ t('staff_audit_nav') }}</a>
             {% endif %}
-            <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_home' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_home') }}">{{ t('staff_home_nav') }}</a>
-            <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_data_audit' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_data_audit') }}">{{ t('staff_audit_nav') }}</a>
             <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_daily_changes' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_daily_changes') }}">{{ t('staff_changes_nav') }}</a>
-            <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_sync_status' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_sync_status') }}">{{ t('staff_sync_nav') }}</a>
             {% if current_staff_role == 'admin' %}
+              <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_sync_status' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_sync_status') }}">{{ t('staff_sync_nav') }}</a>
               <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_coach_activity' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_coach_activity') }}">{{ t('staff_coach_nav') }}</a>
             {% endif %}
             <a class="rounded px-3 py-2 {% if request.endpoint in ['staff_group_classes', 'staff_group_class_type_save', 'staff_group_class_occurrence_save', 'staff_group_class_publish'] %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_group_classes') }}">{{ t('staff_group_classes_nav') }}</a>
-            <a class="rounded px-3 py-2 {% if request.endpoint in ['staff_equipment', 'staff_equipment_save'] %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_equipment') }}">{{ t('staff_equipment_nav') }}</a>
+            {% if current_staff_role == 'admin' %}
+              <a class="rounded px-3 py-2 {% if request.endpoint in ['staff_equipment', 'staff_equipment_save'] %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_equipment') }}">{{ t('staff_equipment_nav') }}</a>
+            {% endif %}
             <a class="rounded px-3 py-2 {% if request.endpoint in ['staff_pricing_products', 'staff_pricing_item_save'] %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_pricing_products') }}">{{ t('staff_pricing_nav') }}</a>
-            <a class="rounded px-3 py-2 {% if request.endpoint in ['staff_terms_agreements', 'staff_legal_version_save', 'staff_legal_translation_save', 'staff_required_agreement_rule_save', 'staff_signed_document_save', 'staff_membership_application_status_save'] %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_terms_agreements') }}">{{ t('staff_terms_nav') }}</a>
+            {% if current_staff_role == 'admin' %}
+              <a class="rounded px-3 py-2 {% if request.endpoint in ['staff_terms_agreements', 'staff_legal_version_save', 'staff_legal_translation_save', 'staff_required_agreement_rule_save', 'staff_signed_document_save', 'staff_membership_application_status_save'] %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_terms_agreements') }}">{{ t('staff_terms_nav') }}</a>
+            {% endif %}
             <a class="relative rounded px-3 py-2 {% if request.endpoint == 'staff_cancellations' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_cancellations') }}">
               {{ t('staff_cancellations_nav') }}
               {% if open_cancellation_count %}
                 <span class="ml-1 rounded-full bg-yellow-500 px-2 py-0.5 text-xs font-semibold text-black">{{ open_cancellation_count }}</span>
               {% endif %}
             </a>
-            <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_whatsapp_login_status' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_whatsapp_login_status') }}">{{ t('staff_whatsapp_login_nav') }}</a>
-            <a class="relative rounded px-3 py-2 {% if request.endpoint == 'staff_email_log' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_email_log') }}">
-              {{ t('staff_email_log_nav') }}
-              {% if open_email_log_count %}
-                <span class="ml-1 rounded-full bg-yellow-500 px-2 py-0.5 text-xs font-semibold text-black">{{ open_email_log_count }}</span>
-              {% endif %}
-            </a>
             {% if current_staff_role == 'admin' %}
+              <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_whatsapp_login_status' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_whatsapp_login_status') }}">{{ t('staff_whatsapp_login_nav') }}</a>
+              <a class="relative rounded px-3 py-2 {% if request.endpoint == 'staff_email_log' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_email_log') }}">
+                {{ t('staff_email_log_nav') }}
+                {% if open_email_log_count %}
+                  <span class="ml-1 rounded-full bg-yellow-500 px-2 py-0.5 text-xs font-semibold text-black">{{ open_email_log_count }}</span>
+                {% endif %}
+              </a>
               <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_settings' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_settings') }}">{{ t('staff_settings_nav') }}</a>
             {% endif %}
             <a class="rounded px-3 py-2 text-yellow-400 hover:bg-gray-700 hover:text-yellow-300" href="{{ url_for('staff_logout') }}">{{ t('staff_logout_nav') }}</a>

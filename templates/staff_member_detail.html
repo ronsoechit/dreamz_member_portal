@@ -9,7 +9,9 @@
     <p class="mt-1 text-sm text-gray-400">#{{ member.member_id }}{% if member.plan_type %} &middot; {{ member.plan_type }}{% endif %}</p>
   </div>
   <div class="flex flex-wrap gap-2">
-    <a class="rounded border border-gray-700 bg-gray-900/70 px-3 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('staff_data_audit') }}">{{ t('back_to_audit') }}</a>
+    {% if current_staff_role == 'admin' %}
+      <a class="rounded border border-gray-700 bg-gray-900/70 px-3 py-2 text-sm font-semibold text-yellow-200 hover:border-yellow-400" href="{{ url_for('staff_data_audit') }}">{{ t('back_to_audit') }}</a>
+    {% endif %}
     <a class="rounded border border-gray-700 bg-gray-900/70 px-3 py-2 text-sm font-semibold text-gray-100 hover:border-green-400" href="{{ url_for('staff_daily_changes') }}">{{ t('staff_view_changes') }}</a>
     {% if documents %}
       <a class="rounded border border-gray-700 bg-gray-900/70 px-3 py-2 text-sm font-semibold text-gray-100 hover:border-blue-400" href="#member-documents">{{ t('staff_view_documents') }}</a>

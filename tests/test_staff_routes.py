@@ -146,24 +146,54 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("Cancellations", body)
         self.assertIn(">2</span>", body)
 
-    def test_manager_navigation_can_view_operational_pages_without_settings(self):
-        self.add_member()
+    def test_manager_navigation_only_shows_allowed_pages(self):
         with self.client.session_transaction() as sess:
             sess["staff_role"] = "manager"
             sess["staff_username"] = "manager"
 
-        response = self.client.get("/staff/data-audit")
+        response = self.client.get("/staff/changes")
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn(">Audit</a>", body)
-        self.assertIn(">Changes</a>", body)
-        self.assertIn(">Sync</a>", body)
-        self.assertNotIn(">Coach</a>", body)
-        self.assertIn("Cancellations", body)
-        self.assertIn("Email Log", body)
-        self.assertNotIn(">Settings</a>", body)
-        self.assertIn("/staff/members/1206", body)
+        self.assertIn('href="/staff/changes"', body)
+        self.assertIn('href="/staff/group-classes"', body)
+        self.assertIn('href="/staff/pricing-products"', body)
+        self.assertIn('href="/staff/cancellations"', body)
+        self.assertIn('href="/staff/logout"', body)
+        self.assertIn("Manager Dashboard", body)
+        self.assertNotIn("Admin Dashboard", body)
+        self.assertNotIn('href="/admin"', body)
+        self.assertNotIn('href="/staff"', body)
+        self.assertNotIn('href="/staff/data-audit"', body)
+        self.assertNotIn('href="/staff/sync"', body)
+        self.assertNotIn('href="/staff/coach"', body)
+        self.assertNotIn('href="/staff/equipment"', body)
+        self.assertNotIn('href="/staff/terms-agreements"', body)
+        self.assertNotIn('href="/staff/whatsapp-login"', body)
+        self.assertNotIn('href="/staff/email-log"', body)
+        self.assertNotIn('href="/staff/settings"', body)
+
+    def test_manager_direct_access_to_other_staff_pages_redirects_to_changes(self):
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "manager"
+
+        for route in (
+            "/admin",
+            "/staff",
+            "/staff/data-audit",
+            "/staff/sync",
+            "/staff/coach",
+            "/staff/equipment",
+            "/staff/terms-agreements",
+            "/staff/whatsapp-login",
+            "/staff/email-log",
+            "/staff/settings",
+        ):
+            with self.subTest(route=route):
+                response = self.client.get(route)
+                self.assertEqual(response.status_code, 302)
+                self.assertEqual(response.headers["Location"], "/staff/changes")
 
     def test_staff_terms_agreements_page_lists_seeded_documents_and_warnings(self):
         seed_legal_documents()
@@ -356,7 +386,8 @@ class StaffRouteTests(unittest.TestCase):
 
         response = self.client.get("/staff/coach")
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/staff/changes")
 
     def test_staff_group_classes_requires_staff_access(self):
         response = self.client.get("/staff/group-classes")
@@ -890,14 +921,15 @@ class StaffRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Dreamz Master Dashboard", response.get_data(as_text=True))
 
-    def test_admin_dashboard_rejects_manager_access(self):
+    def test_admin_dashboard_redirects_manager_to_changes(self):
         with self.client.session_transaction() as sess:
             sess["staff_role"] = "manager"
             sess["staff_username"] = "manager"
 
         response = self.client.get("/admin")
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/staff/changes")
 
     def test_legacy_staff_master_dashboard_redirects_to_admin(self):
         with self.client.session_transaction() as sess:
@@ -917,13 +949,16 @@ class StaffRouteTests(unittest.TestCase):
             sess["_csrf_token"] = "token"
             sess["language"] = "en"
         response = self.client.post(
-            "/staff/login",
-            data={"username": "Manager", "password": "manager-pass", "csrf_token": "token"},
+            "/staff/login?next=/admin",
+            data={"username": "Manager", "password": "manager-pass", "csrf_token": "token", "next": "/admin"},
             follow_redirects=True,
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Dreamz Fitness Staff", response.get_data(as_text=True))
+        body = response.get_data(as_text=True)
+        self.assertIn("Daily Changes", body)
+        self.assertIn("Manager access is limited", body)
+        self.assertNotIn("Dreamz Master Dashboard", body)
 
     def test_staff_login_uses_configured_fallback_when_schema_unavailable(self):
         app.config["STAFF_MANAGER_USERNAME"] = "manager"
@@ -945,7 +980,8 @@ class StaffRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        self.assertIn("Dreamz Fitness Staff", body)
+        self.assertIn("Daily Changes", body)
+        self.assertIn("Manager access is limited", body)
         with self.client.session_transaction() as sess:
             self.assertEqual(sess["staff_role"], "manager")
 
@@ -1182,10 +1218,9 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("505 Member", body)
         self.assertNotIn("001 Member", body)
 
-    def test_staff_login_allows_manager_audit(self):
+    def test_staff_login_sends_manager_to_changes(self):
         app.config["STAFF_MANAGER_USERNAME"] = "manager"
         app.config["STAFF_MANAGER_PASSWORD"] = "manager-pass"
-        self.add_member()
 
         with self.client.session_transaction() as sess:
             sess["_csrf_token"] = "token"
@@ -1196,8 +1231,10 @@ class StaffRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Dreamz Fitness Staff", response.get_data(as_text=True))
-        self.assertIn("Member Portal Staff/Admin", response.get_data(as_text=True))
+        body = response.get_data(as_text=True)
+        self.assertIn("Daily Changes", body)
+        self.assertIn("Manager access is limited", body)
+        self.assertNotIn("Member Portal Staff/Admin", body)
 
     def test_staff_settings_updates_notifications_and_staff_user(self):
         with self.client.session_transaction() as sess:
@@ -1339,7 +1376,7 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("cancellation request received", body)
         self.assertNotIn("member portal login code", body)
 
-    def test_manager_can_view_email_log_but_not_review_or_open_settings(self):
+    def test_manager_cannot_view_email_log_review_or_settings(self):
         db.session.add(EmailLog(
             delivery_mode="log",
             status="logged",
@@ -1355,18 +1392,18 @@ class StaffRouteTests(unittest.TestCase):
 
         response = self.client.get("/staff/email-log?review=open")
 
-        self.assertEqual(response.status_code, 200)
-        body = response.get_data(as_text=True)
-        self.assertIn("cancellation request received", body)
-        self.assertIn("View only", body)
-        self.assertNotIn("Email settings", body)
-        self.assertNotIn("Mark reviewed", body)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/staff/changes")
 
         review_response = self.client.post(
             "/staff/email-log/1/review",
             data={"csrf_token": "token"},
         )
         self.assertEqual(review_response.status_code, 403)
+
+        settings_response = self.client.get("/staff/settings")
+        self.assertEqual(settings_response.status_code, 302)
+        self.assertEqual(settings_response.headers["Location"], "/staff/changes")
 
     def test_cancellation_status_update_to_processed_sends_confirmation(self):
         self.add_member(last_payment=date(2026, 5, 1), next_payment=date(2026, 6, 1))

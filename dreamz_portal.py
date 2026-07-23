@@ -8826,6 +8826,41 @@ def require_staff_access(required_role=None):
 
     abort(403, "Staff login required.")
 
+
+MANAGER_ALLOWED_STAFF_ENDPOINTS = frozenset({
+    "staff_login",
+    "staff_logout",
+    "staff_daily_changes",
+    "staff_group_classes",
+    "staff_group_class_type_save",
+    "staff_group_class_occurrence_save",
+    "staff_group_class_publish",
+    "staff_pricing_products",
+    "staff_pricing_item_save",
+    "staff_cancellations",
+    "staff_cancellation_status",
+    "staff_member_detail",
+})
+
+
+@app.before_request
+def restrict_manager_staff_access():
+    if current_staff_role() != "manager":
+        return None
+
+    endpoint = request.endpoint or ""
+    if endpoint in MANAGER_ALLOWED_STAFF_ENDPOINTS:
+        return None
+    if endpoint != "admin_dashboard" and not endpoint.startswith("staff_") and not request.path.startswith("/staff"):
+        return None
+
+    if request.method not in {"GET", "HEAD"}:
+        abort(403, "This page is not available for manager accounts.")
+
+    flash(translated_text("staff_manager_scope_notice", current_language()), "warning")
+    return redirect(url_for("staff_daily_changes"))
+
+
 def cancellation_request_query():
     query = CancellationRequest.query.order_by(CancellationRequest.requested_at.desc())
     status = request.args.get("status", "").strip()
@@ -10562,6 +10597,9 @@ def staff_login():
             session["staff_username"] = username
             session["staff_role"] = user.role
             session.permanent = True
+            if user.role == "manager":
+                flash(translated_text("staff_manager_scope_notice", current_language()), "warning")
+                return redirect(url_for("staff_daily_changes"))
             return redirect(next_target)
         flash("Invalid staff login.")
         if next_target and next_target != url_for("staff_home"):
@@ -10609,7 +10647,8 @@ def admin_dashboard():
             next_url=url_for("admin_dashboard"),
         )
     if staff_role != "admin":
-        abort(403)
+        flash(translated_text("staff_manager_scope_notice", current_language()), "warning")
+        return redirect(url_for("staff_daily_changes"))
     master_apps = [
         {
             "label_key": "staff_master_financial_label",
