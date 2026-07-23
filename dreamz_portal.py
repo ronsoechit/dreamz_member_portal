@@ -12456,8 +12456,8 @@ def staff_group_class_publish():
 
 def build_group_class_schedule_pdf(rows, updated_on):
     try:
+        from PIL import Image
         from reportlab.lib import colors
-        from reportlab.lib.enums import TA_CENTER
         from reportlab.lib.pagesizes import letter
         from reportlab.lib.styles import ParagraphStyle
         from reportlab.lib.utils import ImageReader
@@ -12470,107 +12470,185 @@ def build_group_class_schedule_pdf(rows, updated_on):
     page_width, page_height = letter
     pdf = canvas.Canvas(output, pagesize=letter)
     pdf.setTitle("Dreamz Fitness Group Class Schedule")
+    pdf.setAuthor("Dreamz Fitness Bonaire")
+    pdf.setSubject("Printable weekly group class schedule")
 
-    pdf.setFillColor(colors.black)
-    pdf.rect(52, page_height - 132, page_width - 104, 82, fill=1, stroke=0)
     logo_path = Path(app.static_folder) / "logo.jpg"
     if logo_path.exists():
+        with Image.open(logo_path).convert("RGB") as source_logo:
+            source_logo = source_logo.crop((3, 3, source_logo.width - 3, source_logo.height - 3))
+            print_pixels = []
+            for red, green, blue in source_logo.getdata():
+                is_gold = (
+                    red > 55
+                    and green > 35
+                    and red > blue * 1.3
+                    and green > blue * 1.15
+                )
+                if is_gold:
+                    print_pixels.append((red, green, blue))
+                else:
+                    gray = int(0.299 * red + 0.587 * green + 0.114 * blue)
+                    inverted = 255 - gray
+                    print_pixels.append((inverted, inverted, inverted))
+            print_logo = Image.new("RGB", source_logo.size, "white")
+            print_logo.putdata(print_pixels)
+            logo_buffer = BytesIO()
+            print_logo.save(logo_buffer, format="PNG", optimize=True)
+        logo_buffer.seek(0)
+        logo = ImageReader(logo_buffer)
+        logo_width, logo_height = logo.getSize()
+        target_width = 330
+        target_height = target_width * logo_height / logo_width
         pdf.drawImage(
-            ImageReader(str(logo_path)),
-            112,
-            page_height - 124,
-            width=388,
-            height=99,
+            logo,
+            (page_width - target_width) / 2,
+            page_height - 31 - target_height,
+            width=target_width,
+            height=target_height,
             preserveAspectRatio=True,
             anchor="c",
             mask="auto",
         )
+    else:
+        pdf.setFillColor(colors.black)
+        pdf.setFont("Helvetica-Bold", 26)
+        pdf.drawCentredString(page_width / 2, page_height - 78, "DREAMZ FITNESS")
 
     pdf.setFillColor(colors.black)
-    pdf.setFont("Helvetica-Bold", 14)
-    pdf.drawCentredString(page_width / 2, page_height - 154, "GROUP CLASS SCHEDULE")
+    pdf.setFont("Helvetica-Bold", 12.5)
+    pdf.drawCentredString(page_width / 2, page_height - 127, "GROUP CLASS SCHEDULE")
     pdf.setFont("Helvetica-Oblique", 9)
     updated_on = updated_on or date.today()
-    pdf.drawString(40, page_height - 177, f"Last update: {updated_on.strftime('%d %b %Y')}")
+    pdf.drawString(70, page_height - 150, f"Last update: {updated_on.strftime('%d %b %Y')}")
 
-    body_style = ParagraphStyle(
-        "schedule-body",
-        fontName="Helvetica",
-        fontSize=8.3,
-        leading=9.4,
-        textColor=colors.black,
-    )
     day_style = ParagraphStyle(
         "schedule-day",
-        parent=body_style,
-        fontName="Helvetica-Bold",
+        fontName="Helvetica",
+        fontSize=8.8,
+        leading=10.2,
+        textColor=colors.black,
+    )
+    time_style = ParagraphStyle(
+        "schedule-time",
+        fontName="Helvetica",
+        fontSize=8.5,
         leading=10,
+        textColor=colors.black,
     )
     class_style = ParagraphStyle(
         "schedule-class",
-        parent=body_style,
-        fontName="Helvetica",
+        fontName="Helvetica-Bold",
+        fontSize=8.5,
+        leading=10,
+        textColor=colors.black,
     )
     room_style = ParagraphStyle(
         "schedule-room",
-        parent=body_style,
         fontName="Helvetica",
+        fontSize=8.5,
+        leading=10,
+        textColor=colors.black,
     )
 
     table_data = []
-    spans = []
+    row_heights = []
     for day_of_week in range(7):
         day_rows = [row for row in rows if int(row.get("day_of_week", -1)) == day_of_week]
         if not day_rows:
             continue
-        start_row = len(table_data)
         english_day = translated_text(f"group_class_day_{GROUP_CLASS_DAY_KEYS[day_of_week]}", "en").upper()
         papiamentu_day = translated_text(f"group_class_day_{GROUP_CLASS_DAY_KEYS[day_of_week]}", "pap").upper()
+
+        session_data = []
+        room_data = []
+        session_heights = []
+        previous_end_minutes = None
         for index, row in enumerate(day_rows):
-            class_name = html.escape(str(row.get("class_name") or ""))
-            time_text = f"{row.get('start_time', '')} - {row.get('end_time', '')}"
-            table_data.append([
-                Paragraph(f"{english_day}<br/>{papiamentu_day}", day_style) if index == 0 else "",
-                Paragraph(f"{html.escape(time_text)}&nbsp;&nbsp;<b>{class_name}</b>", class_style),
-                Paragraph(html.escape(str(row.get("room") or "")), room_style),
+            start_text = str(row.get("start_time") or "")
+            end_text = str(row.get("end_time") or "")
+            try:
+                start_hour, start_minute = [int(part) for part in start_text.split(":", 1)]
+                start_minutes = start_hour * 60 + start_minute
+            except (TypeError, ValueError):
+                start_minutes = 0
+            try:
+                end_hour, end_minute = [int(part) for part in end_text.split(":", 1)]
+                end_minutes = end_hour * 60 + end_minute
+            except (TypeError, ValueError):
+                end_minutes = start_minutes
+
+            if index == 0 and start_minutes >= 12 * 60:
+                session_data.append(["", ""])
+                room_data.append([""])
+                session_heights.append(18)
+            elif previous_end_minutes is not None and start_minutes - previous_end_minutes >= 60:
+                session_data.append(["", ""])
+                room_data.append([""])
+                session_heights.append(8)
+
+            session_data.append([
+                Paragraph(html.escape(f"{start_text} - {end_text}"), time_style),
+                Paragraph(html.escape(str(row.get("class_name") or "")), class_style),
             ])
-        end_row = len(table_data) - 1
-        if end_row > start_row:
-            spans.append(("SPAN", (0, start_row), (0, end_row)))
+            room_data.append([Paragraph(html.escape(str(row.get("room") or "")), room_style)])
+            session_heights.append(11.5)
+            previous_end_minutes = end_minutes
+
+        session_table = Table(
+            session_data,
+            colWidths=[78, 196],
+            rowHeights=session_heights,
+            hAlign="LEFT",
+        )
+        session_table.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        room_table = Table(
+            room_data,
+            colWidths=[106],
+            rowHeights=session_heights,
+            hAlign="LEFT",
+        )
+        room_table.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        table_data.append([
+            Paragraph(f"{english_day}<br/>{papiamentu_day}", day_style),
+            session_table,
+            room_table,
+        ])
+        row_heights.append(sum(session_heights) + 12)
 
     schedule_table = Table(
         table_data,
-        colWidths=[112, 306, 114],
-        rowHeights=15.5,
-        hAlign="LEFT",
+        colWidths=[92, 274, 106],
+        rowHeights=row_heights,
+        hAlign="CENTER",
     )
     table_style = [
-        ("BOX", (0, 0), (-1, -1), 0.8, colors.black),
-        ("LINEBEFORE", (1, 0), (1, -1), 0.8, colors.black),
-        ("LINEBEFORE", (2, 0), (2, -1), 0.8, colors.black),
-        ("LINEABOVE", (0, 0), (-1, 0), 0.8, colors.black),
+        ("GRID", (0, 0), (-1, -1), 0.65, colors.black),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
     ]
-    table_style.extend(spans)
-    row_cursor = 0
-    for day_of_week in range(7):
-        day_count = sum(1 for row in rows if int(row.get("day_of_week", -1)) == day_of_week)
-        if not day_count:
-            continue
-        if row_cursor:
-            table_style.append(("LINEABOVE", (0, row_cursor), (-1, row_cursor), 0.8, colors.black))
-        row_cursor += day_count
     schedule_table.setStyle(TableStyle(table_style))
-    table_width, table_height = schedule_table.wrapOn(pdf, 532, 520)
-    schedule_table.drawOn(pdf, 40, page_height - 188 - table_height)
+    table_width, table_height = schedule_table.wrapOn(pdf, 472, 600)
+    schedule_table.drawOn(pdf, (page_width - table_width) / 2, page_height - 160 - table_height)
 
     pdf.setFont("Helvetica", 7)
-    pdf.setFillColor(colors.HexColor("#777777"))
-    pdf.drawRightString(page_width - 40, 30, "Dreamz Fitness Bonaire")
+    pdf.setFillColor(colors.HexColor("#666666"))
+    pdf.drawCentredString(page_width / 2, 28, "Dreamz Fitness Bonaire")
     pdf.save()
     output.seek(0)
     return output

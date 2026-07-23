@@ -7,6 +7,8 @@ import os
 import unittest
 from unittest.mock import patch
 
+from pypdf import PdfReader
+
 
 if importlib.util.find_spec("flask") is None or importlib.util.find_spec("flask_sqlalchemy") is None:
     raise unittest.SkipTest("Flask app dependencies are not installed in this Python runtime")
@@ -900,6 +902,11 @@ class StaffRouteTests(unittest.TestCase):
         self.assertEqual(response.mimetype, "application/pdf")
         self.assertTrue(response.data.startswith(b"%PDF"))
         self.assertIn("Dreamz-Group-Class-Schedule-", response.headers["Content-Disposition"])
+        pdf = PdfReader(io.BytesIO(response.data))
+        self.assertEqual(len(pdf.pages), 1)
+        content = pdf.pages[0].get_contents().get_data()
+        self.assertNotIn(b"52 660 508 82 re f*", content)
+        self.assertIn("GROUP CLASS SCHEDULE", pdf.pages[0].extract_text())
 
     def test_staff_publish_sends_complete_schedule_to_wordpress_webhook(self):
         seed_group_class_schedule()
