@@ -411,6 +411,12 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("BODYPUMP", body)
         self.assertIn("RESERVED", body)
         self.assertIn("AEROBICS ROOM", body)
+        self.assertIn(
+            'onsubmit=\'return confirm("Remove this class from the draft? '
+            'The live schedule changes only after publication.")\'',
+            body,
+        )
+        self.assertIn("Remove from draft", body)
 
     def test_manager_admin_group_classes_alias_redirects_to_manager_page(self):
         with self.client.session_transaction() as sess:

@@ -200,7 +200,7 @@
                   <input type="hidden" name="draft_id" value="{{ occurrence.id }}">
                   <button type="submit" class="w-full rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black hover:bg-yellow-400">{{ t('save') }}</button>
                 </form>
-                <form method="post" action="{{ url_for('staff_group_class_draft_delete', draft_id=occurrence.id) }}" onsubmit="return confirm({{ t('group_class_delete_confirm')|tojson }})">
+                <form method="post" action="{{ url_for('staff_group_class_draft_delete', draft_id=occurrence.id) }}" onsubmit='return confirm({{ t("group_class_delete_confirm")|tojson }})'>
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   <button type="submit" class="w-full rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-200 hover:bg-red-500/20">{{ t('group_class_delete') }}</button>
                 </form>
