@@ -12431,6 +12431,10 @@ def staff_group_class_publish():
     schedule = GroupClassSchedule.query.filter_by(name=GROUP_CLASS_SCHEDULE_NAME).first()
     if not schedule:
         schedule = seed_group_class_schedule()
+    ensure_group_class_draft(schedule)
+    if not schedule.has_unpublished_changes:
+        flash(translated_text("group_class_no_unpublished_changes", current_language()))
+        return redirect(url_for("staff_group_classes"))
     try:
         publish_group_class_schedule_to_wordpress(schedule)
     except RuntimeError:

@@ -14,7 +14,7 @@ if importlib.util.find_spec("flask") is None or importlib.util.find_spec("flask_
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
-from dreamz_portal import AppSetting, CancellationRequest, CoachInteraction, DigitalSignatureRecord, EmailLog, GroupClassDraftOccurrence, GroupClassOccurrence, GroupClassScheduleAudit, GroupClassScheduleVersion, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, Member, MemberClassAttendance, MemberClassPlan, MemberDocument, MemberSignedDocument, MembershipApplication, MembershipApplicationStatus, PricingChangeLog, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, StaffUser, SyncRun, app, db, deliver_email, ensure_runtime_schema, payment_status_for_member, pricing_visibility_list, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
+from dreamz_portal import AppSetting, CancellationRequest, CoachInteraction, DigitalSignatureRecord, EmailLog, GroupClassDraftOccurrence, GroupClassOccurrence, GroupClassSchedule, GroupClassScheduleAudit, GroupClassScheduleVersion, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, Member, MemberClassAttendance, MemberClassPlan, MemberDocument, MemberSignedDocument, MembershipApplication, MembershipApplicationStatus, PricingChangeLog, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, StaffUser, SyncRun, app, db, deliver_email, ensure_runtime_schema, payment_status_for_member, pricing_visibility_list, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
 
 
 class FakeS3Body:
@@ -907,6 +907,9 @@ class StaffRouteTests(unittest.TestCase):
             sess["_csrf_token"] = "token"
 
         self.client.get("/staff/group-classes")
+        schedule = GroupClassSchedule.query.one()
+        schedule.has_unpublished_changes = True
+        db.session.commit()
 
         class FakeResponse:
             def __enter__(self):

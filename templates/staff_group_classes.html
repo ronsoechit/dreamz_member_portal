@@ -14,7 +14,11 @@
     </a>
     <form method="post" action="{{ url_for('staff_group_class_publish') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="rounded bg-yellow-500 px-4 py-3 text-sm font-semibold text-black hover:bg-yellow-400">
+      <button
+        type="submit"
+        {% if not pending_change_count %}disabled{% endif %}
+        class="rounded px-4 py-3 text-sm font-semibold {% if pending_change_count %}bg-yellow-500 text-black hover:bg-yellow-400{% else %}cursor-not-allowed bg-gray-700 text-gray-400{% endif %}"
+      >
         {{ t('group_class_publish_updates') }}
       </button>
     </form>
