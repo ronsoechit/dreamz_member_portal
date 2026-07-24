@@ -19,6 +19,8 @@ static/mandates/
 static/forms/
 
 .coverage
+output/
+tmp/
 
 * - Copy*.py
 * - Copy*.html

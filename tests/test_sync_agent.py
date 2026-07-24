@@ -1,12 +1,14 @@
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 import tempfile
 import unittest
 import os
 import subprocess
 import zipfile
 from unittest.mock import patch
+from urllib.error import URLError
 
-from sync_agent import build_sync_payload, diff_manifest, load_manifest, main, process_fep_payment_command, process_fep_payment_updates, run_fep_payment_writer, save_manifest, scan_source
+from sync_agent import build_sync_payload, diff_manifest, get_invoice_monitor_member_ids, load_manifest, main, process_fep_payment_command, process_fep_payment_updates, read_stable_file_snapshot, run_fep_payment_writer, save_manifest, scan_source
 
 
 PHOTO_VERSIONED_KEY = "portal/Data/Pictures/0000100-55c64d0fcd6f9d5f.jpg"
@@ -28,6 +30,10 @@ def write_backup(path: Path, member_id: str = "100") -> None:
 
 def write_members_btx(path: Path, member_id: str = "100") -> None:
     path.write_text("\n".join([
+        "CLASS=contract Dreamz 6 months",
+        "MEMBERTYPE_ID=900000101",
+        "OPTION=1 MONTHS EFT 6500 0",
+        "-",
         f"MN={member_id}",
         "LN=Tester",
         "FN=Live",
@@ -52,6 +58,176 @@ def write_member_log(path: Path, member_id: str = "101") -> None:
 
 
 class SyncAgentTests(unittest.TestCase):
+    def test_invoice_monitor_discovery_fails_closed(self):
+        with patch(
+            "sync_agent.urlrequest.urlopen",
+            side_effect=URLError("offline"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "reversal monitor"):
+                get_invoice_monitor_member_ids(
+                    "https://portal.example",
+                    "sync-token",
+                )
+
+    def test_stable_snapshot_read_rejects_source_changed_during_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Journal.jtx"
+            path.write_bytes(b"first")
+            original_read_bytes = Path.read_bytes
+
+            def mutate_after_read(target):
+                data = original_read_bytes(target)
+                target.write_bytes(data + b"-changed")
+                return data
+
+            with patch.object(Path, "read_bytes", mutate_after_read):
+                with self.assertRaisesRegex(ValueError, "changed while"):
+                    read_stable_file_snapshot(path)
+
+    def test_build_sync_payload_supports_install_level_backup_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            backup_dir = root / "Backup"
+            backup_dir.mkdir(parents=True)
+            write_members_btx(backup_dir / "Members.btx", member_id="90001")
+            backup_path = backup_dir / "GABackup.gbu"
+            with zipfile.ZipFile(backup_path, "w") as backup:
+                backup.writestr(
+                    "Members.btx",
+                    "\n".join([
+                        "CLASS=contract Dreamz 6 months",
+                        "MEMBERTYPE_ID=900000101",
+                        "OPTION=1 MONTHS EFT 6500 0",
+                        "-",
+                        "MN=90001",
+                        "LN=Member",
+                        "FN=Pilot",
+                        "MTN=contract Dreamz 6 months",
+                        "-",
+                        "",
+                    ]),
+                )
+                backup.writestr(
+                    "Journal.jtx",
+                    (
+                        "c20260215!1558 7001 1771185480 0 990792 90001 3 0 0 0 29"
+                        "|900000101 257 20260201 20260601 6500 0 0 6500 2 -1 0"
+                    ),
+                )
+
+            with patch.dict(os.environ, {}, clear=True):
+                payload = build_sync_payload(root, invoice_member_ids={"90001"})
+                scan = scan_source(root)
+
+        self.assertEqual(payload["invoice_membership_events"][0]["dues_cents"], 6500)
+        self.assertEqual(Path(payload["invoice_journal_source"]).name, "GABackup.gbu")
+        self.assertEqual(
+            payload["invoice_membership_events"][0]["catalog_period_match_status"],
+            "mismatch",
+        )
+        self.assertRegex(payload["invoice_source_sha256"], r"^[0-9a-f]{64}$")
+        self.assertRegex(payload["invoice_catalog_sha256"], r"^[0-9a-f]{64}$")
+        self.assertIsNotNone(payload["invoice_source_snapshot_at"])
+        self.assertEqual(Path(scan.latest_backup).parent.name, "Backup")
+        self.assertEqual(Path(scan.member_source).name, "Members.btx")
+
+    def test_build_sync_payload_only_extracts_allowlisted_membership_journal_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            data_dir.mkdir(parents=True)
+            write_members_btx(data_dir / "Members.btx", member_id="90001")
+            (data_dir / "Journal.jtx").write_text(
+                "\n".join(
+                    [
+                        (
+                            "c20260215!1558 7001 1771185480 0 990001 90001 3 0 0 0 29"
+                            "|900000101 257 20260201 20260301 6500 0 0 6500 0 0 0"
+                        ),
+                        (
+                            "c20260215!1559 7002 1771185540 0 0 90001 38 0 0 0 29"
+                            "|200 ProShop purchase"
+                        ),
+                        (
+                            "c20260723!1600 7003 1784841600 0 61002 99999 3 0 0 0 29"
+                            "|900000101 257 20260201 20260301 6500 0 0 6500 0 0 0"
+                        ),
+                    ]
+                ),
+                encoding="latin-1",
+            )
+
+            payload = build_sync_payload(root, invoice_member_ids={"90001"})
+
+        self.assertEqual(len(payload["invoice_membership_events"]), 1)
+        self.assertEqual(payload["invoice_pilot_member_ids"], ["90001"])
+        event = payload["invoice_membership_events"][0]
+        self.assertEqual(event["member_id"], "90001")
+        self.assertEqual(event["event_name"], "membership_renewal")
+        self.assertEqual(event["dues_cents"], 6500)
+        self.assertEqual(event["tender_total_cents"], 6500)
+        self.assertEqual(event["catalog_base_amount_cents"], 6500)
+        self.assertEqual(event["catalog_interval_count"], 1)
+        self.assertEqual(event["catalog_interval_unit"], "MONTHS")
+        self.assertEqual(event["catalog_match_status"], "match")
+        self.assertEqual(event["catalog_period_match_status"], "match")
+        self.assertTrue(event["is_positive_membership_payment"])
+        self.assertEqual(payload["invoice_journal_issue_count"], 0)
+        self.assertTrue(payload["invoice_journal_source"].endswith("Journal.jtx"))
+        self.assertTrue(payload["invoice_catalog_source"].endswith("Members.btx"))
+        self.assertRegex(payload["invoice_source_sha256"], r"^[0-9a-f]{64}$")
+        self.assertRegex(payload["invoice_catalog_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_invoice_snapshot_timestamp_comes_from_source_files_not_send_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            data_dir.mkdir(parents=True)
+            members_path = data_dir / "Members.btx"
+            journal_path = data_dir / "Journal.jtx"
+            write_members_btx(members_path, member_id="90001")
+            journal_path.write_text(
+                (
+                    "c20260215!1558 7001 1771185480 0 990001 90001 3 0 0 0 29"
+                    "|900000101 257 20260201 20260301 6500 0 0 6500 0 0 0"
+                ),
+                encoding="latin-1",
+            )
+            old_time = (
+                datetime.now(timezone.utc) - timedelta(hours=2)
+            ).timestamp()
+            os.utime(members_path, (old_time, old_time))
+            os.utime(journal_path, (old_time, old_time))
+
+            payload = build_sync_payload(root, invoice_member_ids={"90001"})
+
+        snapshot_at = datetime.fromisoformat(payload["invoice_source_snapshot_at"])
+        self.assertLess(
+            snapshot_at,
+            datetime.now(timezone.utc) - timedelta(minutes=90),
+        )
+
+    def test_build_sync_payload_does_not_send_financial_events_without_pilot_allowlist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            data_dir.mkdir(parents=True)
+            write_members_btx(data_dir / "Members.btx", member_id="90001")
+            (data_dir / "Journal.jtx").write_text(
+                (
+                    "c20260215!1558 7001 1771185480 0 990001 90001 3 0 0 0 29"
+                    "|900000101 257 20260201 20260301 6500 0 0 6500 0 0 0"
+                ),
+                encoding="latin-1",
+            )
+
+            with patch.dict(os.environ, {}, clear=True):
+                payload = build_sync_payload(root)
+
+        self.assertEqual(payload["invoice_membership_events"], [])
+        self.assertEqual(payload["invoice_pilot_member_ids"], [])
+        self.assertIsNone(payload["invoice_journal_source"])
+
     def test_scan_source_summarizes_relevant_gymassistant_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "Gym Assistant 2.6"

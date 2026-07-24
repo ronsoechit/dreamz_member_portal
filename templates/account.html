@@ -77,6 +77,9 @@
   <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
     {{ account_tile(t('membership_options_section'), t('member_pricing_account_intro'), url_for('member_account_membership'), member_contract_label or t('not_available')) }}
     {{ account_tile(t('billing_gym_balance'), t('billing_gym_balance_intro'), url_for('member_account_billing'), '$%.2f'|format(gym_balance) if gym_balance > 0 else None) }}
+    {% if invoice_pilot_visible %}
+      {{ account_tile(t('invoices'), t('invoices_account_intro'), url_for('member_account_invoices'), issued_invoice_count) }}
+    {% endif %}
     {{ account_tile(t('member_agreements_title'), t('member_agreements_account_intro'), url_for('member_agreements')) }}
     {{ account_tile(t('documents'), t('documents_empty') if not document_groups else t('view_signed_documents'), url_for('member_account_documents'), document_groups|length if document_groups else None) }}
     {{ account_tile(t('profile_information'), t('profile_information_intro'), url_for('member_account_profile'), display_name) }}

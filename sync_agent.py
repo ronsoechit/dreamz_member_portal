@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 import hashlib
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -14,8 +15,14 @@ from typing import Iterable
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
+import zipfile
 
 from ga_import import ImportIssue, ImportResult, parse_gymassistant_export, parse_member_log
+from ga_journal import (
+    parse_gymassistant_billing_catalog_text,
+    parse_gymassistant_journal_text,
+    service_period_matches_catalog_interval,
+)
 from ga_documents import infer_member_document_records
 from storage_backend import s3_client, upload_file_to_s3
 
@@ -72,7 +79,8 @@ def photos_root(source_root: Path) -> Path:
 
 
 def backup_root(source_root: Path) -> Path:
-    return data_root(source_root) / "Backup"
+    roots = backup_root_candidates(source_root)
+    return next((root for root in roots if root.exists()), roots[0])
 
 
 def temp_files_root(source_root: Path) -> Path:
@@ -80,19 +88,134 @@ def temp_files_root(source_root: Path) -> Path:
 
 
 def live_members_path(source_root: Path) -> Path:
-    return data_root(source_root) / "Members.btx"
+    candidates = []
+    configured_path = os.getenv("GYM_ASSISTANT_MEMBERS_PATH", "").strip()
+    if configured_path:
+        candidates.append(Path(configured_path))
+    candidates.extend([
+        data_root(source_root) / "Members.btx",
+        source_root / "Members.btx",
+    ])
+    candidates.extend(root / "Members.btx" for root in backup_root_candidates(source_root))
+    return next((path for path in candidates if path.is_file()), candidates[0])
 
 
 def live_members_dat_path(source_root: Path) -> Path:
     return data_root(source_root) / "Members.dat"
 
 
+def live_journal_path(source_root: Path) -> Path:
+    candidates = []
+    configured_path = os.getenv("GYM_ASSISTANT_JOURNAL_PATH", "").strip()
+    if configured_path:
+        candidates.append(Path(configured_path))
+    candidates.extend([
+        data_root(source_root) / "Journal.jtx",
+        source_root / "Journal.jtx",
+    ])
+    candidates.extend(root / "Journal.jtx" for root in backup_root_candidates(source_root))
+    return next((path for path in candidates if path.is_file()), candidates[0])
+
+
+def backup_root_candidates(source_root: Path) -> list[Path]:
+    candidates = []
+    configured_root = os.getenv("GYM_ASSISTANT_BACKUP_ROOT", "").strip()
+    if configured_root:
+        candidates.append(Path(configured_root))
+    candidates.extend([
+        data_root(source_root) / "Backup",
+        source_root / "Backup",
+    ])
+    if source_root.name.lower() == "backup":
+        candidates.append(source_root)
+    unique = []
+    seen = set()
+    for candidate in candidates:
+        normalized = str(candidate.resolve()).casefold()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(candidate)
+    return unique
+
+
 def latest_backup_path(source_root: Path) -> Path | None:
-    root = backup_root(source_root)
-    if not root.exists():
-        return None
-    backups = [path for path in root.glob("*.gbu") if path.is_file()]
+    backups = [
+        path
+        for root in backup_root_candidates(source_root)
+        if root.exists()
+        for path in root.glob("*.gbu")
+        if path.is_file()
+    ]
     return max(backups, key=lambda path: path.stat().st_mtime) if backups else None
+
+
+def backup_contains_invoice_snapshot(path: Path) -> bool:
+    try:
+        with zipfile.ZipFile(path) as backup:
+            names = {Path(name).name.casefold() for name in backup.namelist()}
+    except (OSError, zipfile.BadZipFile):
+        return False
+    return {"journal.jtx", "members.btx"}.issubset(names)
+
+
+def latest_invoice_backup_path(source_root: Path) -> Path | None:
+    backups = [
+        path
+        for root in backup_root_candidates(source_root)
+        if root.exists()
+        for path in root.glob("*.gbu")
+        if path.is_file() and backup_contains_invoice_snapshot(path)
+    ]
+    return max(backups, key=lambda path: path.stat().st_mtime) if backups else None
+
+
+def read_stable_file_snapshot(path: Path) -> tuple[bytes, str, str]:
+    before = path.stat()
+    data = path.read_bytes()
+    after = path.stat()
+    if (
+        before.st_size != after.st_size
+        or before.st_mtime_ns != after.st_mtime_ns
+        or len(data) != after.st_size
+    ):
+        raise ValueError(f"GymAssistant source changed while it was being read: {path}")
+    snapshot_at = (
+        datetime.fromtimestamp(after.st_mtime, timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+    )
+    return data, snapshot_at, hashlib.sha256(data).hexdigest()
+
+
+def backup_snapshot_entries(data: bytes) -> tuple[str, bytes]:
+    with zipfile.ZipFile(BytesIO(data)) as backup:
+        journal_entry = next(
+            (
+                name
+                for name in backup.namelist()
+                if Path(name).name.casefold() == "journal.jtx"
+            ),
+            None,
+        )
+        members_entry = next(
+            (
+                name
+                for name in backup.namelist()
+                if Path(name).name.casefold() == "members.btx"
+            ),
+            None,
+        )
+        if not journal_entry or not members_entry:
+            raise ValueError(
+                "GymAssistant backup must contain Journal.jtx and Members.btx."
+            )
+        journal_text = backup.read(journal_entry).decode(
+            "latin-1",
+            errors="replace",
+        )
+        members_bytes = backup.read(members_entry)
+    return journal_text, members_bytes
 
 
 def iter_member_log_files(source_root: Path, backup: Path | None = None) -> Iterable[Path]:
@@ -137,7 +260,12 @@ def parse_members_with_live_logs(member_source: Path) -> ImportResult:
     member_map = {str(member["member_id"]): dict(member) for member in result.members}
     issues: list[ImportIssue] = list(result.issues)
     backup = member_source if member_source.suffix.lower() == ".gbu" else None
-    source_root = member_source.parents[2] if len(member_source.parents) >= 3 and member_source.parent.name == "Backup" else None
+    source_root = None
+    if member_source.parent.name.lower() == "backup":
+        if member_source.parent.parent.name.lower() == "data":
+            source_root = member_source.parent.parent.parent
+        else:
+            source_root = member_source.parent.parent
     if source_root:
         for log_file in iter_member_log_files(source_root, backup):
             log_result = parse_member_log(log_file)
@@ -154,8 +282,148 @@ def parse_members_with_live_logs(member_source: Path) -> ImportResult:
     return ImportResult(list(member_map.values()), issues)
 
 
+def configured_invoice_pilot_member_ids() -> set[str]:
+    raw = os.getenv("INVOICE_GA_PILOT_MEMBER_IDS", "")
+    return {
+        member_id.strip()
+        for member_id in raw.split(",")
+        if member_id.strip().isdigit() and int(member_id.strip()) > 0
+    }
+
+
+def invoice_membership_event_payload(
+    source_root: Path,
+    backup: Path | None,
+    member_ids: set[str],
+) -> tuple[
+    list[dict],
+    int,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+]:
+    if not member_ids:
+        return [], 0, None, None, None, None, None
+
+    invoice_backup = latest_invoice_backup_path(source_root)
+    journal = live_journal_path(source_root)
+    members_path = live_members_path(source_root)
+    source = None
+    catalog_source = None
+    source_snapshot_at = None
+    source_sha256 = None
+    catalog_sha256 = None
+    catalog_issue_count = 0
+    catalog_options = []
+    try:
+        if invoice_backup:
+            (
+                backup_bytes,
+                source_snapshot_at,
+                source_sha256,
+            ) = read_stable_file_snapshot(invoice_backup)
+            journal_text, members_bytes = backup_snapshot_entries(backup_bytes)
+            result = parse_gymassistant_journal_text(
+                journal_text,
+                member_ids=member_ids,
+            )
+            catalog_options, _ = parse_gymassistant_billing_catalog_text(
+                members_bytes.decode("latin-1", errors="replace")
+            )
+            source = catalog_source = str(invoice_backup)
+            catalog_sha256 = hashlib.sha256(members_bytes).hexdigest()
+        elif journal.is_file() and members_path.is_file():
+            (
+                journal_bytes,
+                journal_snapshot_at,
+                source_sha256,
+            ) = read_stable_file_snapshot(journal)
+            (
+                members_bytes,
+                members_snapshot_at,
+                catalog_sha256,
+            ) = read_stable_file_snapshot(members_path)
+            result = parse_gymassistant_journal_text(
+                journal_bytes.decode("latin-1", errors="replace"),
+                member_ids=member_ids,
+            )
+            catalog_options, _ = parse_gymassistant_billing_catalog_text(
+                members_bytes.decode("latin-1", errors="replace")
+            )
+            source = str(journal)
+            catalog_source = str(members_path)
+            source_snapshot_at = min(
+                journal_snapshot_at,
+                members_snapshot_at,
+            )
+        else:
+            return [], 1, None, None, None, None, None
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        return (
+            [],
+            1,
+            f"GymAssistant invoice snapshot could not be read: {exc}",
+            None,
+            None,
+            None,
+            None,
+        )
+    options_by_key = {
+        (option.membership_type_id, option.billing_option_code): option
+        for option in catalog_options
+    }
+    records = []
+    for event in result.events:
+        record = event.as_sync_record()
+        option = options_by_key.get((event.membership_type_id, event.billing_option_code))
+        if option:
+            record["catalog_plan_name"] = option.plan_name
+            record["catalog_base_amount_cents"] = option.base_amount_cents
+            record["catalog_interval_count"] = option.interval_count
+            record["catalog_interval_unit"] = option.interval_unit
+            record["catalog_match_status"] = (
+                "match"
+                if event.dues_cents == option.base_amount_cents
+                else "mismatch"
+            )
+            record["catalog_period_match_status"] = (
+                "match"
+                if service_period_matches_catalog_interval(
+                    event.service_period_start,
+                    event.service_period_end_exclusive,
+                    option.interval_count,
+                    option.interval_unit,
+                )
+                else "mismatch"
+            )
+        else:
+            record["catalog_plan_name"] = None
+            record["catalog_base_amount_cents"] = None
+            record["catalog_interval_count"] = None
+            record["catalog_interval_unit"] = None
+            record["catalog_match_status"] = "missing"
+            record["catalog_period_match_status"] = "missing"
+        records.append(record)
+
+    return (
+        records,
+        len(result.issues) + catalog_issue_count,
+        source,
+        catalog_source,
+        source_snapshot_at,
+        source_sha256,
+        catalog_sha256,
+    )
+
+
 def relative_path(path: Path, source_root: Path) -> str:
-    return path.relative_to(source_root).as_posix()
+    try:
+        return path.relative_to(source_root).as_posix()
+    except ValueError:
+        parent_fingerprint = hashlib.sha256(str(path.parent).casefold().encode("utf-8")).hexdigest()[:12]
+        return f"_external/{parent_fingerprint}/{path.name}"
 
 
 def file_signature(path: Path, source_root: Path, kind: str) -> FileSignature:
@@ -188,7 +456,7 @@ def iter_photo_files(source_root: Path) -> Iterable[FileSignature]:
 
 def scan_source(source_root: Path) -> SyncScan:
     source_root = source_root.resolve()
-    if not source_root.exists():
+    if not source_root.exists() and not any(root.exists() for root in backup_root_candidates(source_root)):
         raise FileNotFoundError(f"GymAssistant source root not found: {source_root}")
 
     backup = latest_backup_path(source_root)
@@ -412,6 +680,7 @@ def build_sync_payload(
     existing_member_ids: set[str] | None = None,
     missing_file_keys: set[str] | None = None,
     storage_bucket: str | None = None,
+    invoice_member_ids: set[str] | None = None,
 ) -> dict:
     source_root = source_root.resolve()
     backup = latest_backup_path(source_root)
@@ -426,6 +695,28 @@ def build_sync_payload(
     import_result = parse_members_with_live_logs(member_source) if member_source.suffix.lower() == ".gbu" else parse_gymassistant_export(member_source)
     source_members = import_result.members[:member_limit] if member_limit else import_result.members
     members = [dict(member) for member in source_members]
+    selected_invoice_member_ids = (
+        configured_invoice_pilot_member_ids()
+        if invoice_member_ids is None
+        else {
+            str(member_id).strip()
+            for member_id in invoice_member_ids
+            if str(member_id).strip().isdigit() and int(str(member_id).strip()) > 0
+        }
+    )
+    (
+        invoice_events,
+        invoice_journal_issue_count,
+        invoice_journal_source,
+        invoice_catalog_source,
+        invoice_source_snapshot_at,
+        invoice_source_sha256,
+        invoice_catalog_sha256,
+    ) = invoice_membership_event_payload(
+        source_root,
+        backup,
+        selected_invoice_member_ids,
+    )
     attachment_root = attachments_root(source_root)
     documents = {}
     if upload_files and upload_via_portal and (not portal_url or not sync_token):
@@ -536,6 +827,14 @@ def build_sync_payload(
         "generated_at": utc_now_iso(),
         "members": [json_safe_member(member) for member in members],
         "documents": documents,
+        "invoice_pilot_member_ids": sorted(selected_invoice_member_ids),
+        "invoice_membership_events": invoice_events,
+        "invoice_journal_issue_count": invoice_journal_issue_count,
+        "invoice_journal_source": invoice_journal_source,
+        "invoice_catalog_source": invoice_catalog_source,
+        "invoice_source_snapshot_at": invoice_source_snapshot_at,
+        "invoice_source_sha256": invoice_source_sha256,
+        "invoice_catalog_sha256": invoice_catalog_sha256,
     }
 
 
@@ -581,6 +880,43 @@ def get_existing_member_ids(portal_url: str, token: str, timeout: int = 60) -> s
     if not isinstance(member_ids, list):
         return None
     return {str(member_id) for member_id in member_ids}
+
+
+def get_invoice_monitor_member_ids(
+    portal_url: str,
+    token: str,
+    timeout: int = 60,
+) -> set[str]:
+    endpoint = portal_url.rstrip("/") + "/api/sync/member-ids"
+    http_request = urlrequest.Request(
+        endpoint,
+        method="GET",
+        headers={"X-Sync-Token": token},
+    )
+    try:
+        with urlrequest.urlopen(http_request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+            payload = json.loads(raw) if raw else {}
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Invoice monitor API returned HTTP {exc.code}: {detail}"
+        ) from exc
+    except (URLError, OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"Could not load the required invoice reversal monitor set: {exc}"
+        ) from exc
+    member_ids = payload.get("invoice_monitor_member_ids")
+    if not isinstance(member_ids, list):
+        raise RuntimeError(
+            "Portal did not return invoice_monitor_member_ids; "
+            "member sync stopped to preserve reversal monitoring."
+        )
+    return {
+        str(member_id).strip()
+        for member_id in member_ids
+        if str(member_id).strip().isdigit()
+    }
 
 
 def get_missing_file_keys(portal_url: str, token: str, timeout: int = 300) -> set[str]:
@@ -869,6 +1205,11 @@ def print_scan_report(scan: SyncScan, diff: SyncDiff | None = None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Read-only GymAssistant sync scanner for the Dreamz member portal.")
     parser.add_argument("--source-root", default=str(DEFAULT_GYM_ASSISTANT_ROOT), help="GymAssistant installation root.")
+    parser.add_argument(
+        "--backup-root",
+        default=os.getenv("GYM_ASSISTANT_BACKUP_ROOT", ""),
+        help="Optional GymAssistant backup directory containing Members.btx and .gbu files.",
+    )
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST_PATH), help="Local manifest path for change detection.")
     parser.add_argument("--write-manifest", action="store_true", help="Write/update the local manifest after scanning.")
     parser.add_argument("--portal-url", help="Portal base URL, for example http://127.0.0.1:5000.")
@@ -890,6 +1231,8 @@ def main() -> None:
     args = parser.parse_args()
 
     source_root = Path(args.source_root)
+    if args.backup_root:
+        os.environ["GYM_ASSISTANT_BACKUP_ROOT"] = str(Path(args.backup_root).resolve())
     manifest_path = Path(args.manifest)
 
     if args.process_fep_command:
@@ -952,6 +1295,10 @@ def main() -> None:
             raise SystemExit("--portal-url is required with --push-members")
         if not args.sync_token:
             raise SystemExit("--sync-token or SYNC_API_TOKEN is required with --push-members")
+        invoice_member_ids = (
+            configured_invoice_pilot_member_ids()
+            | get_invoice_monitor_member_ids(args.portal_url, args.sync_token)
+        )
         existing_member_ids = None
         missing_file_keys = set()
         if args.upload_files and args.upload_via_portal and args.upload_changed_only:
@@ -972,6 +1319,7 @@ def main() -> None:
             existing_member_ids=existing_member_ids,
             missing_file_keys=missing_file_keys,
             storage_bucket=args.storage_bucket,
+            invoice_member_ids=invoice_member_ids,
         )
         endpoint = args.portal_url.rstrip("/") + "/api/sync/members"
         result = post_json(endpoint, args.sync_token, payload)

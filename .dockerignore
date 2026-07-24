@@ -34,3 +34,5 @@ static/mandates
 static/forms
 
 tests/__pycache__
+output
+tmp

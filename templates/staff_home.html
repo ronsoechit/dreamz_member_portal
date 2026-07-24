@@ -52,6 +52,22 @@
   </a>
 
   {% if staff_is_authenticated %}
+    {% if current_staff_role == 'admin' %}
+      <a
+        href="{{ url_for('staff_invoices') }}"
+        class="group rounded border border-yellow-500/35 bg-yellow-500/10 p-6 transition hover:border-yellow-300 hover:bg-yellow-500/15"
+      >
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <div class="text-sm font-semibold uppercase tracking-wide text-yellow-300">{{ t('staff_invoices_label') }}</div>
+            <h3 class="mt-2 text-xl font-semibold text-white">{{ t('staff_invoices_title') }}</h3>
+          </div>
+          <span class="rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black transition group-hover:bg-yellow-400">{{ t('staff_master_open') }}</span>
+        </div>
+        <p class="mt-4 text-sm leading-6 text-yellow-50">{{ t('staff_invoices_intro') }}</p>
+      </a>
+    {% endif %}
+
     <a
       href="{{ url_for('staff_pricing_products') }}"
       class="group rounded border border-gray-700 bg-gray-800/50 p-6 transition hover:border-yellow-400 hover:bg-gray-800"

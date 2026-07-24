@@ -142,6 +142,60 @@ Do not run a visible GymAssistant UI writer during normal frontdesk work. It can
 
 The included `gymassistant_payment_writer.py` is a guarded UI writer for controlled testing. It only records a payment when explicitly started with `--apply --foreground-ui`; use `--require-idle-seconds` if it is ever scheduled on a staff workstation. If the desktop is not idle, the writer returns `deferred`, and the sync agent leaves the queued payment pending for a later run.
 
+### Gym Assistant membership-invoice pilot
+
+This pilot reads only Gym Assistant membership events (Journal action 1 or 3)
+for explicitly allowlisted members. It creates a membership line from
+`dues_cents`; it never uses a member's open balance, aggregate last-payment
+amount, ProShop purchases, drinks, account payments, or free-text product
+descriptions as an invoice amount. PT and Group PT remain blocked until they
+have their own structured and price-verified source.
+
+Use this controlled rollout:
+
+1. Back up the production Postgres database. The first request after deployment
+   creates the new additive invoice tables through the existing runtime schema
+   bootstrap.
+2. Confirm that `DF-<year>-000001` is approved as a separate legal invoice
+   number series before issuing the first document. Only then set
+   `INVOICE_NUMBER_SERIES_APPROVED=true`.
+3. Deploy the code with both `INVOICE_GA_PILOT_ENABLED=false` and
+   `INVOICE_ISSUING_ENABLED=false`.
+4. Verify the admin-only `/staff/invoices` page. Confirm private S3/R2 storage
+   is configured; Railway-local storage is not durable and must not be used for
+   issued PDFs.
+5. Set `INVOICE_GA_PILOT_ENABLED=true` and configure exactly one controlled
+   member in `INVOICE_GA_PILOT_MEMBER_IDS=<pilot-member-id>` on the portal.
+   Configure the same value for the frontdesk sync-agent task. Do not add other
+   members during the first pilot. Point the agent at the actual backup
+   directory with `GYM_ASSISTANT_BACKUP_ROOT=<backup-directory>` or pass
+   `--backup-root "<backup-directory>"`. The agent uses the newest `.gbu`
+   containing both `Members.btx` and `Journal.jtx`. Create a fresh `.gbu`
+   after the controlled payment; the portal checks the actual snapshot
+   timestamp and hashes and blocks snapshots with relevant parse errors.
+6. Keep `INVOICE_ISSUING_ENABLED=false`, run a fresh frontdesk sync, and verify
+   the member, membership amount, and service period against Gym Assistant.
+   Any open account balance must not appear as an invoice line.
+7. Use **Check membership events** to prepare the draft. A draft does not get
+   an invoice number and is not visible to the member.
+8. After the source, number series, legal fields, inclusive ABB treatment, and
+   S3 write/read/download have been checked, set
+   `INVOICE_ISSUING_ENABLED=true`. An admin must complete all three standard
+   review checkboxes before the one pilot invoice can be issued. If the
+   Gym Assistant period differs from the catalog billing interval, an
+   additional explicit period confirmation is required.
+9. Sign in as the pilot member and verify `/account/invoices` and the private
+   PDF download in the member's selected portal language.
+
+Issuing never sends an automatic email. To stop the pilot immediately, set
+`INVOICE_ISSUING_ENABLED=false`; to hide the pilot from the member and stop
+financial Journal imports as well, also set `INVOICE_GA_PILOT_ENABLED=false`.
+Members retain access to their existing issued PDFs after the pilot flag is
+disabled; those PDFs remain immutable in private object storage. The updated
+frontdesk agent also keeps previously imported invoice members in its
+read-only monitor set, so a later Gym Assistant void/reversal can still
+invalidate the linked portal invoice while new drafts remain disabled.
+
 ### Storage note
 
 The full GymAssistant folder is not uploaded to Railway. The portal database stores structured member data and document metadata. PDFs/photos should be uploaded to object storage once the storage adapter is enabled.

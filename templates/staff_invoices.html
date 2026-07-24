@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+{% block title %}{{ t('staff_invoices_title') }} | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<section class="mb-6 overflow-hidden rounded-xl border border-yellow-500/30 bg-gradient-to-br from-gray-900 via-gray-900 to-yellow-950/40 p-6 shadow-xl">
+  <div class="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+    <div class="max-w-3xl">
+      <div class="inline-flex rounded-full border border-yellow-400/40 bg-yellow-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-widest text-yellow-200">
+        {{ t('staff_invoice_pilot_badge') }}
+      </div>
+      <h1 class="mt-4 text-3xl font-semibold text-white">{{ t('staff_invoices_title') }}</h1>
+      <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('staff_invoices_intro') }}</p>
+      <p class="mt-3 rounded-lg border border-yellow-500/20 bg-black/20 p-3 text-sm leading-6 text-yellow-100">
+        {{ t('staff_invoice_pilot_membership_only') }}
+      </p>
+    </div>
+    <form method="post" action="{{ url_for('staff_reconcile_invoices') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="inline-flex rounded-lg bg-yellow-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400">
+        {{ t('staff_invoice_reconcile') }}
+      </button>
+    </form>
+  </div>
+</section>
+
+<section class="mb-6 rounded-xl border {% if invoice_config_issues %}border-red-500/35 bg-red-950/20{% else %}border-green-500/35 bg-green-950/20{% endif %} p-5">
+  <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <div>
+      <div class="text-xs font-semibold uppercase tracking-widest {% if invoice_config_issues %}text-red-300{% else %}text-green-300{% endif %}">
+        {{ t('staff_invoice_config_title') }}
+      </div>
+      <p class="mt-2 text-sm leading-6 text-gray-200">
+        {{ t('staff_invoice_config_blocked') if invoice_config_issues else t('staff_invoice_config_ready') }}
+      </p>
+    </div>
+    <div class="flex gap-2">
+      <span class="rounded-full border border-gray-600 bg-gray-950 px-3 py-1 text-xs text-gray-200">
+        {{ invoice_pending_count }} {{ t('staff_invoice_pending_drafts') }}
+      </span>
+      <span class="rounded-full border border-gray-600 bg-gray-950 px-3 py-1 text-xs text-gray-200">
+        {{ invoice_issued_count }} {{ t('staff_invoice_issued') }}
+      </span>
+    </div>
+  </div>
+  {% if invoice_config_issues %}
+    <ul class="mt-4 grid gap-2 md:grid-cols-2">
+      {% for issue in invoice_config_issues %}
+        <li class="rounded-lg border border-red-500/20 bg-black/20 px-4 py-3 text-sm text-red-100">
+          {{ t('staff_invoice_config_' ~ issue) }}
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</section>
+
+<section class="mb-6">
+  <div class="mb-3 flex items-center justify-between">
+    <h2 class="text-lg font-semibold text-white">{{ t('staff_invoice_source_status') }}</h2>
+    <span class="text-xs uppercase tracking-widest text-gray-500">Gym Assistant Journal</span>
+  </div>
+  <div class="grid gap-3 lg:grid-cols-2">
+    {% for row in pilot_members %}
+      <article class="rounded-xl border border-gray-700 bg-gray-900/70 p-5">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <div class="text-xs font-semibold uppercase tracking-widest text-yellow-300">#{{ row.member_id }}</div>
+            <h3 class="mt-1 text-lg font-semibold text-white">
+              {{ row.display_name }}
+            </h3>
+          </div>
+          <span class="rounded-full border {% if row.eligible_count %}border-green-500/40 bg-green-500/10 text-green-200{% else %}border-gray-600 bg-gray-950 text-gray-300{% endif %} px-3 py-1 text-xs font-semibold">
+            {{ row.eligible_count }} {{ t('invoice_eligibility_eligible') }}
+          </span>
+        </div>
+        <dl class="mt-4 grid grid-cols-2 gap-3 text-sm">
+          <div>
+            <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('invoice_source') }}</dt>
+            <dd class="mt-1 break-words text-gray-200">{{ row.state.source if row.state and row.state.source else t('not_available') }}</dd>
+          </div>
+          <div>
+            <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('date') }}</dt>
+            <dd class="mt-1 text-gray-200">{{ row.state.last_synced_at if row.state else t('not_available') }}</dd>
+          </div>
+          <div>
+            <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('invoice_source_event_type') }}</dt>
+            <dd class="mt-1 text-gray-200">{{ row.event_count }}</dd>
+          </div>
+          <div>
+            <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('invoice_eligibility') }}</dt>
+            <dd class="mt-1 text-gray-200">{{ row.eligible_count }}</dd>
+          </div>
+        </dl>
+      </article>
+    {% else %}
+      <div class="rounded-xl border border-gray-700 bg-gray-900/70 p-5 text-sm text-gray-300">{{ t('staff_invoice_no_records') }}</div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="mb-6">
+  <div class="mb-3 flex items-center justify-between">
+    <h2 class="text-lg font-semibold text-white">{{ t('staff_invoice_eligible_sources') }}</h2>
+    <span class="text-xs text-gray-500">{{ event_rows|length }}</span>
+  </div>
+  <div class="grid gap-4">
+    {% for row in event_rows %}
+      <article class="rounded-xl border {% if row.is_ready %}border-green-500/30{% else %}border-gray-700{% endif %} bg-gray-900/70 p-5">
+        <div class="grid gap-5 lg:grid-cols-[1fr_auto]">
+          <div>
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full border {% if row.is_ready %}border-green-500/40 bg-green-500/10 text-green-200{% else %}border-red-500/30 bg-red-500/10 text-red-200{% endif %} px-3 py-1 text-xs font-semibold">
+                {{ t('invoice_eligibility_eligible') if row.is_ready else t('invoice_status_blocked') }}
+              </span>
+              <span class="text-xs text-gray-500">#{{ row.event.member_id }} · {{ row.event.event_name }} · GA {{ row.event.journal_transaction_id or '—' }}</span>
+            </div>
+            <h3 class="mt-3 text-xl font-semibold text-white">
+              {{ row.display_name }}
+            </h3>
+            <dl class="mt-4 grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
+              <div>
+                <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('invoice_membership_amount') }}</dt>
+                <dd class="mt-1 text-lg font-semibold text-yellow-200">${{ '%.2f'|format(row.amount) }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('invoice_service_period') }}</dt>
+                <dd class="mt-1 text-gray-200">{{ row.event.service_period_start|format_date }} – {{ row.service_period_end|format_date }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('invoice_payment_date') }}</dt>
+                <dd class="mt-1 text-gray-200">{{ row.event.occurred_at.date()|format_date }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('invoice_source_reference') }}</dt>
+                <dd class="mt-1 break-all font-mono text-xs text-gray-400">{{ row.event.source_reference }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('invoice_total') }} ({{ t('invoice_source') }})</dt>
+                <dd class="mt-1 text-gray-200">${{ '%.2f'|format(row.event.tender_total_cents / 100) }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('invoice_excluded_amounts') }}</dt>
+                <dd class="mt-1 text-gray-200">${{ '%.2f'|format((row.event.balance_payment_cents|abs) / 100) }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('email') }}</dt>
+                <dd class="mt-1 break-all text-gray-200">{{ row.member.email if row.member and row.member.email else '—' }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('invoice_source') }}</dt>
+                <dd class="mt-1 text-gray-200">{{ row.event.catalog_plan_name or '—' }} · MT {{ row.event.membership_type_id }} / {{ row.event.billing_option_code }}</dd>
+              </div>
+            </dl>
+            {% if row.event.balance_payment_cents %}
+              <p class="mt-4 rounded-lg border border-yellow-500/20 bg-yellow-500/10 p-3 text-sm text-yellow-100">
+                {{ t('invoice_eligibility_balance_payment_excluded') }}
+              </p>
+            {% endif %}
+            {% if row.event.catalog_period_match_status == 'mismatch' %}
+              <p class="mt-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-100">
+                {{ t('invoice_eligibility_period_review_required') }}
+              </p>
+            {% endif %}
+            {% if row.blocker_labels %}
+              <ul class="mt-4 space-y-2">
+                {% for label in row.blocker_labels %}
+                  <li class="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-100">{{ label }}</li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+          </div>
+          <div class="flex items-start justify-end">
+            {% if row.invoice %}
+              <span class="rounded-full border border-gray-600 bg-gray-950 px-3 py-2 text-xs font-semibold text-gray-200">
+                {{ t('invoice_status_' ~ row.invoice.status) }}
+              </span>
+            {% elif row.is_ready %}
+              <span class="rounded-full border border-green-500/30 bg-green-500/10 px-3 py-2 text-xs font-semibold text-green-200">
+                {{ t('invoice_status_source_received') }}
+              </span>
+            {% endif %}
+          </div>
+        </div>
+      </article>
+    {% else %}
+      <div class="rounded-xl border border-gray-700 bg-gray-900/70 p-5 text-sm text-gray-300">{{ t('staff_invoice_no_records') }}</div>
+    {% endfor %}
+  </div>
+</section>
+
+<section>
+  <div class="mb-3 flex items-center justify-between">
+    <h2 class="text-lg font-semibold text-white">{{ t('staff_invoice_pending_drafts') }}</h2>
+    <span class="text-xs text-gray-500">{{ invoices|length }}</span>
+  </div>
+  <div class="grid gap-4">
+    {% for invoice in invoices %}
+      <article class="rounded-xl border border-gray-700 bg-gray-900/70 p-5">
+        <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.8fr)]">
+          <div>
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full border border-yellow-500/30 bg-yellow-500/10 px-3 py-1 text-xs font-semibold text-yellow-200">
+                {{ t('invoice_status_' ~ invoice.status) }}
+              </span>
+              <span class="text-xs text-gray-500">#{{ invoice.member_id }}</span>
+            </div>
+            <h3 class="mt-3 text-xl font-semibold text-white">{{ invoice.member_name }}</h3>
+            <dl class="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+              <div>
+                <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('invoice_number') }}</dt>
+                <dd class="mt-1 text-gray-200">{{ invoice.invoice_number or '—' }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('invoice_membership_amount') }}</dt>
+                <dd class="mt-1 text-lg font-semibold text-yellow-200">${{ '%.2f'|format(invoice.paid_amount) }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('invoice_service_period') }}</dt>
+                <dd class="mt-1 text-gray-200">{{ invoice.service_period_start|format_date }} – {{ invoice.service_period_end|format_date }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('invoice_payment_reference') }}</dt>
+                <dd class="mt-1 text-gray-200">{{ invoice.payment_reference or '—' }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('language') }}</dt>
+                <dd class="mt-1 text-gray-200">{{ invoice.language|upper }}</dd>
+              </div>
+            </dl>
+            <p class="mt-4 text-sm leading-6 text-gray-400">{{ t('invoice_membership_only_note') }}</p>
+            {% if invoice.status in ['issued', 'void'] and invoice.storage_uri %}
+              <a href="{{ url_for('staff_download_invoice', invoice_id=invoice.id) }}" class="mt-4 inline-flex rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-4 py-2 text-sm font-semibold text-yellow-200 hover:bg-yellow-500/20">
+                {{ t('invoice_download') }}
+              </a>
+            {% endif %}
+          </div>
+          {% if invoice.status in ['ready_for_review', 'generation_failed'] %}
+            <form method="post" action="{{ url_for('staff_issue_invoice', invoice_id=invoice.id) }}" class="rounded-xl border border-yellow-500/20 bg-black/20 p-4">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <div class="text-xs font-semibold uppercase tracking-widest text-yellow-300">{{ t('staff_invoice_review_title') }}</div>
+              <p class="mt-2 text-sm text-gray-300">{{ t('staff_invoice_review_required') }}</p>
+              <div class="mt-4 space-y-3">
+                <label class="flex gap-3 text-sm leading-5 text-gray-200">
+                  <input class="mt-1 h-4 w-4 accent-yellow-500" type="checkbox" name="review_source_confirmed" value="1" required>
+                  <span>{{ t('staff_invoice_review_source_confirm') }}</span>
+                </label>
+                <label class="flex gap-3 text-sm leading-5 text-gray-200">
+                  <input class="mt-1 h-4 w-4 accent-yellow-500" type="checkbox" name="review_scope_confirmed" value="1" required>
+                  <span>{{ t('staff_invoice_review_scope_confirm') }}</span>
+                </label>
+                <label class="flex gap-3 text-sm leading-5 text-gray-200">
+                  <input class="mt-1 h-4 w-4 accent-yellow-500" type="checkbox" name="review_details_confirmed" value="1" required>
+                  <span>{{ t('staff_invoice_review_details_confirm') }}</span>
+                </label>
+                {% if invoice.source_event.catalog_period_match_status == 'mismatch' %}
+                  <label class="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 flex gap-3 text-sm leading-5 text-yellow-100">
+                    <input class="mt-1 h-4 w-4 accent-yellow-500" type="checkbox" name="review_period_confirmed" value="1" required>
+                    <span>{{ t('staff_invoice_review_period_confirm') }}</span>
+                  </label>
+                {% endif %}
+              </div>
+              <button type="submit" {% if invoice_config_issues %}disabled{% endif %} class="mt-5 w-full rounded-lg px-4 py-3 text-sm font-semibold {% if invoice_config_issues %}cursor-not-allowed bg-gray-700 text-gray-400{% else %}bg-yellow-500 text-black hover:bg-yellow-400{% endif %}">
+                {{ t('staff_invoice_issue') }}
+              </button>
+            </form>
+          {% endif %}
+        </div>
+      </article>
+    {% else %}
+      <div class="rounded-xl border border-gray-700 bg-gray-900/70 p-5 text-sm text-gray-300">{{ t('staff_invoice_no_records') }}</div>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}
