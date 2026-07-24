@@ -114,11 +114,20 @@ class SyncAgentTests(unittest.TestCase):
                         "|900000101 257 20260201 20260601 6500 0 0 6500 2 -1 0"
                     ),
                 )
+            write_member_log(
+                root / "Data" / "Temp Files" / "AddedMembers.btx",
+                member_id="90002",
+            )
 
             with patch.dict(os.environ, {}, clear=True):
                 payload = build_sync_payload(root, invoice_member_ids={"90001"})
                 scan = scan_source(root)
 
+        self.assertEqual(
+            {member["member_id"] for member in payload["members"]},
+            {"90001", "90002"},
+        )
+        self.assertEqual(scan.member_count, 2)
         self.assertEqual(payload["invoice_membership_events"][0]["dues_cents"], 6500)
         self.assertEqual(Path(payload["invoice_journal_source"]).name, "GABackup.gbu")
         self.assertEqual(

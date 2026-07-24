@@ -259,13 +259,17 @@ def parse_members_with_live_logs(member_source: Path) -> ImportResult:
     result = parse_gymassistant_export(member_source)
     member_map = {str(member["member_id"]): dict(member) for member in result.members}
     issues: list[ImportIssue] = list(result.issues)
-    backup = member_source if member_source.suffix.lower() == ".gbu" else None
     source_root = None
     if member_source.parent.name.lower() == "backup":
         if member_source.parent.parent.name.lower() == "data":
             source_root = member_source.parent.parent.parent
         else:
             source_root = member_source.parent.parent
+    backup = (
+        member_source
+        if member_source.suffix.lower() == ".gbu"
+        else latest_backup_path(source_root) if source_root else None
+    )
     if source_root:
         for log_file in iter_member_log_files(source_root, backup):
             log_result = parse_member_log(log_file)
@@ -280,6 +284,15 @@ def parse_members_with_live_logs(member_source: Path) -> ImportResult:
                 else:
                     member_map[member_id] = dict(member)
     return ImportResult(list(member_map.values()), issues)
+
+
+def parse_member_source(member_source: Path) -> ImportResult:
+    if (
+        member_source.suffix.lower() == ".gbu"
+        or member_source.parent.name.lower() == "backup"
+    ):
+        return parse_members_with_live_logs(member_source)
+    return parse_gymassistant_export(member_source)
 
 
 def configured_invoice_pilot_member_ids() -> set[str]:
@@ -469,7 +482,7 @@ def scan_source(source_root: Path) -> SyncScan:
     if live_members.exists():
         files.append(file_signature(live_members, source_root, "member_data"))
         member_source = live_members
-        member_count = len(parse_gymassistant_export(live_members).members)
+        member_count = len(parse_member_source(live_members).members)
     elif backup:
         member_source = backup
         member_count = len(parse_members_with_live_logs(backup).members)
@@ -692,7 +705,7 @@ def build_sync_payload(
             f"No live Members.btx or GymAssistant .gbu backup found under {data_root(source_root)}"
         )
 
-    import_result = parse_members_with_live_logs(member_source) if member_source.suffix.lower() == ".gbu" else parse_gymassistant_export(member_source)
+    import_result = parse_member_source(member_source)
     source_members = import_result.members[:member_limit] if member_limit else import_result.members
     members = [dict(member) for member in source_members]
     selected_invoice_member_ids = (
