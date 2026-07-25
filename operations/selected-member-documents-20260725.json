@@ -1,0 +1,141 @@
+{
+  "expected_member_ids": [
+    "26812",
+    "32348",
+    "22001",
+    "35009",
+    "18241",
+    "20190",
+    "31846",
+    "16163",
+    "17108",
+    "33752",
+    "28251",
+    "22226",
+    "34592",
+    "34593"
+  ],
+  "expected_document_count": 24,
+  "documents": [
+    {
+      "member_id": "26812",
+      "document_type": "signup_form",
+      "source_filename": "inscrip form 2025-02-22.pdf"
+    },
+    {
+      "member_id": "26812",
+      "document_type": "combined_contract_mandate",
+      "source_filename": "Ccontract + Mandate 2025-02-22.pdf"
+    },
+    {
+      "member_id": "32348",
+      "document_type": "signup_form",
+      "source_filename": "inscrip form 2026-01-09.pdf"
+    },
+    {
+      "member_id": "32348",
+      "document_type": "combined_contract_mandate",
+      "source_filename": "Ccontract + Mandate 2026-01-09.pdf"
+    },
+    {
+      "member_id": "22001",
+      "document_type": "signup_form",
+      "source_filename": "inscrip form 2024-04-23.pdf"
+    },
+    {
+      "member_id": "22001",
+      "document_type": "combined_contract_mandate",
+      "source_filename": "Ccontract + Mandate 2024-06-24.pdf"
+    },
+    {
+      "member_id": "22001",
+      "document_type": "group_pt",
+      "source_filename": "PT form 2024-04-23.pdf"
+    },
+    {
+      "member_id": "35009",
+      "document_type": "signup_form",
+      "source_filename": "inscrip form 2026-06-09.pdf"
+    },
+    {
+      "member_id": "18241",
+      "document_type": "signup_form",
+      "source_filename": "Inscription Form 2023-09-06.pdf"
+    },
+    {
+      "member_id": "18241",
+      "document_type": "combined_contract_mandate",
+      "source_filename": "Ccontract + Mandate 2025-01-08.pdf"
+    },
+    {
+      "member_id": "20190",
+      "document_type": "signup_form",
+      "source_filename": "inscrip form 2024-01-02.pdf"
+    },
+    {
+      "member_id": "20190",
+      "document_type": "contract",
+      "source_filename": "Contracts 2024-01-05.pdf"
+    },
+    {
+      "member_id": "31846",
+      "document_type": "signup_form",
+      "source_filename": "inscrip form 2025-12-16.pdf"
+    },
+    {
+      "member_id": "31846",
+      "document_type": "combined_contract_mandate",
+      "source_filename": "Ccontract + Mandate 2025-12-16.pdf"
+    },
+    {
+      "member_id": "16163",
+      "document_type": "combined_contract_mandate",
+      "source_filename": "CNTR + DD 2023-05-16.pdf"
+    },
+    {
+      "member_id": "17108",
+      "document_type": "signup_form",
+      "source_filename": "Inscription Form 2023-07-04.pdf"
+    },
+    {
+      "member_id": "17108",
+      "document_type": "combined_contract_mandate",
+      "source_filename": "Ccontract + Mandate 2024-06-05.pdf"
+    },
+    {
+      "member_id": "33752",
+      "document_type": "combined_contract_mandate",
+      "source_filename": "Ccontract + Mandate 2026-03-28.pdf"
+    },
+    {
+      "member_id": "28251",
+      "document_type": "signup_form",
+      "source_filename": "inscrip form 2025-05-24.pdf"
+    },
+    {
+      "member_id": "22226",
+      "document_type": "signup_form",
+      "source_filename": "inscrip form 2024-05-07.pdf"
+    },
+    {
+      "member_id": "22226",
+      "document_type": "combined_contract_mandate",
+      "source_filename": "Ccontract + Mandate 2024-05-07.pdf"
+    },
+    {
+      "member_id": "34592",
+      "document_type": "signup_form",
+      "source_filename": "inscrip form 2026-05-11.pdf"
+    },
+    {
+      "member_id": "34592",
+      "document_type": "combined_contract_mandate",
+      "source_filename": "Ccontract + Mandate 2026-05-11.pdf"
+    },
+    {
+      "member_id": "34593",
+      "document_type": "combined_contract_mandate",
+      "source_filename": "Ccontract + Mandate 2026-05-11.pdf"
+    }
+  ]
+}
