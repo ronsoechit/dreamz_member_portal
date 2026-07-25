@@ -60,6 +60,44 @@ class SyncApiTests(unittest.TestCase):
         db.session.commit()
         return member
 
+    def add_member_document(self, member_id, document_type, source_filename, path=None, display_order=0):
+        document = MemberDocument(
+            member_id=str(member_id),
+            document_type=document_type,
+            title=document_type.replace("_", " ").title(),
+            path=path or rf"C:\Gym Assistant 2.6\Data\Attachments\{str(member_id).zfill(7)}\{source_filename}",
+            source_filename=source_filename,
+            display_order=display_order,
+        )
+        db.session.add(document)
+        db.session.commit()
+        return document
+
+    def document_sync_item(self, member_id, document_type, source_filename, hash_character="a"):
+        member_id = str(member_id)
+        return {
+            "member_id": member_id,
+            "document_type": document_type,
+            "source_filename": source_filename,
+            "storage_uri": (
+                f"s3://dreamz-test/gymassistant/Data/Attachments/"
+                f"{member_id.zfill(7)}/{source_filename}"
+            ),
+            "sha256": hash_character * 64,
+            "size_bytes": 4096,
+        }
+
+    def document_sync_payload(self, expected_member_ids, documents, expected_document_count=None):
+        return {
+            "expected_member_ids": [str(member_id) for member_id in expected_member_ids],
+            "expected_document_count": (
+                len(documents)
+                if expected_document_count is None
+                else expected_document_count
+            ),
+            "documents": documents,
+        }
+
     def fep_payment_payload(self, **overrides):
         payload = {
             "source": "fep_manager_bank_upload_auto",
@@ -164,6 +202,83 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(second_document.id, first_document_id)
         self.assertEqual(second_summary["document_changes"], [])
 
+    def test_sync_api_preserves_uploaded_s3_path_over_legacy_local_document_path(self):
+        db.session.add(Member(member_id="1206", name="Example, Member"))
+        db.session.commit()
+        document = self.add_member_document(
+            "1206",
+            "contract",
+            "contract.pdf",
+            path="s3://dreamz-test/gymassistant/Data/Attachments/0001206/contract.pdf",
+        )
+        original_document_id = document.id
+        payload = {
+            "source": "unit-test",
+            "members": [{"member_id": "1206", "name": "Example, Member"}],
+            "documents": {
+                "1206": [
+                    {
+                        "document_type": "contract",
+                        "title": "Contract",
+                        "path": r"C:\Gym Assistant 2.6\Data\Attachments\0001206\contract.pdf",
+                        "source_filename": "contract.pdf",
+                    }
+                ]
+            },
+        }
+
+        response = self.client.post(
+            "/api/sync/members",
+            json=payload,
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        refreshed = MemberDocument.query.one()
+        self.assertEqual(refreshed.id, original_document_id)
+        self.assertEqual(
+            refreshed.path,
+            "s3://dreamz-test/gymassistant/Data/Attachments/0001206/contract.pdf",
+        )
+        summary = json.loads(SyncRun.query.order_by(SyncRun.id.desc()).first().change_summary)
+        self.assertEqual(summary["document_changes"], [])
+
+    def test_sync_api_allows_new_s3_uri_to_replace_existing_s3_document_path(self):
+        db.session.add(Member(member_id="1206", name="Example, Member"))
+        db.session.commit()
+        self.add_member_document(
+            "1206",
+            "contract",
+            "contract.pdf",
+            path="s3://dreamz-test/gymassistant/Data/Attachments/0001206/old-contract.pdf",
+        )
+        payload = {
+            "source": "unit-test",
+            "members": [{"member_id": "1206", "name": "Example, Member"}],
+            "documents": {
+                "1206": [
+                    {
+                        "document_type": "contract",
+                        "title": "Contract",
+                        "path": "s3://dreamz-test/gymassistant/Data/Attachments/0001206/contract.pdf",
+                        "source_filename": "contract.pdf",
+                    }
+                ]
+            },
+        }
+
+        response = self.client.post(
+            "/api/sync/members",
+            json=payload,
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            MemberDocument.query.one().path,
+            "s3://dreamz-test/gymassistant/Data/Attachments/0001206/contract.pdf",
+        )
+
     def test_sync_file_upload_requires_token(self):
         response = self.client.post("/api/sync/files", data=b"file", headers={"X-Storage-Key": "gymassistant/test.pdf"})
 
@@ -184,6 +299,214 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["uri"], "s3://bucket/gymassistant/test.pdf")
         upload.assert_called_once_with(b"%PDF", "gymassistant/test.pdf", content_type="application/pdf")
+
+    def test_sync_member_documents_requires_token(self):
+        response = self.client.post(
+            "/api/sync/member-documents",
+            json={"expected_member_ids": [], "expected_document_count": 0, "documents": []},
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_sync_member_documents_updates_only_existing_document_paths(self):
+        first_member = Member(
+            member_id="26812",
+            name="Existing, Member",
+            email="member@example.com",
+            billing_amount=60.0,
+            balance=12.0,
+        )
+        second_member = Member(
+            member_id="32348",
+            name="No Email, Member",
+            email=None,
+            billing_amount=80.0,
+        )
+        db.session.add_all([first_member, second_member])
+        db.session.commit()
+        first_document = self.add_member_document("26812", "signup_form", "signup.pdf")
+        second_document = self.add_member_document("32348", "contract", "contract.pdf")
+        first_document_id = first_document.id
+        second_document_id = second_document.id
+        payload = self.document_sync_payload(
+            ["26812", "32348"],
+            [
+                self.document_sync_item("26812", "signup_form", "signup.pdf"),
+                self.document_sync_item("32348", "contract", "contract.pdf", "b"),
+            ],
+        )
+
+        with (
+            patch("dreamz_portal.s3_bucket_name", return_value="dreamz-test"),
+            patch("dreamz_portal.s3_object_exists", return_value=True) as object_exists,
+            patch("dreamz_portal.reconcile_pending_portal_invitations") as reconcile,
+            patch("dreamz_portal.sync_invoice_membership_events") as invoice_sync,
+        ):
+            response = self.client.post(
+                "/api/sync/member-documents",
+                json=payload,
+                headers={"X-Sync-Token": "sync-test-token"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["member_count"], 2)
+        self.assertEqual(response.json["document_count"], 2)
+        self.assertEqual(response.json["documents_updated"], 2)
+        self.assertEqual(response.json["documents_unchanged"], 0)
+        self.assertEqual(object_exists.call_count, 2)
+        self.assertEqual(db.session.get(MemberDocument, first_document_id).path, payload["documents"][0]["storage_uri"])
+        self.assertEqual(db.session.get(MemberDocument, second_document_id).path, payload["documents"][1]["storage_uri"])
+        refreshed_first_member = Member.query.filter_by(member_id="26812").one()
+        refreshed_second_member = Member.query.filter_by(member_id="32348").one()
+        self.assertEqual(refreshed_first_member.email, "member@example.com")
+        self.assertEqual(refreshed_first_member.balance, 12.0)
+        self.assertIsNone(refreshed_second_member.email)
+        self.assertEqual(refreshed_second_member.billing_amount, 80.0)
+        reconcile.assert_not_called()
+        invoice_sync.assert_not_called()
+
+    def test_sync_member_documents_is_idempotent_for_same_storage_uris(self):
+        db.session.add(Member(member_id="26812", name="Existing, Member"))
+        db.session.commit()
+        document = self.add_member_document("26812", "contract", "contract.pdf")
+        original_document_id = document.id
+        item = self.document_sync_item("26812", "contract", "contract.pdf")
+        payload = self.document_sync_payload(["26812"], [item])
+        headers = {"X-Sync-Token": "sync-test-token"}
+
+        with (
+            patch("dreamz_portal.s3_bucket_name", return_value="dreamz-test"),
+            patch("dreamz_portal.s3_object_exists", return_value=True),
+        ):
+            first_response = self.client.post("/api/sync/member-documents", json=payload, headers=headers)
+            second_response = self.client.post("/api/sync/member-documents", json=payload, headers=headers)
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(first_response.json["documents_updated"], 1)
+        self.assertEqual(second_response.status_code, 200)
+        self.assertEqual(second_response.json["documents_updated"], 0)
+        self.assertEqual(second_response.json["documents_unchanged"], 1)
+        refreshed = MemberDocument.query.one()
+        self.assertEqual(refreshed.id, original_document_id)
+        self.assertEqual(refreshed.path, item["storage_uri"])
+
+    def test_sync_member_documents_rejects_identity_mismatch_atomically(self):
+        db.session.add(Member(member_id="26812", name="Existing, Member"))
+        db.session.commit()
+        first_document = self.add_member_document(
+            "26812",
+            "signup_form",
+            "signup.pdf",
+            path=r"C:\old\signup.pdf",
+            display_order=0,
+        )
+        second_document = self.add_member_document(
+            "26812",
+            "contract",
+            "contract.pdf",
+            path=r"C:\old\contract.pdf",
+            display_order=1,
+        )
+        payload = self.document_sync_payload(
+            ["26812"],
+            [
+                self.document_sync_item("26812", "signup_form", "signup.pdf"),
+                self.document_sync_item("26812", "contract", "different.pdf", "b"),
+            ],
+        )
+
+        with (
+            patch("dreamz_portal.s3_bucket_name", return_value="dreamz-test"),
+            patch("dreamz_portal.s3_object_exists", return_value=True) as object_exists,
+        ):
+            response = self.client.post(
+                "/api/sync/member-documents",
+                json=payload,
+                headers={"X-Sync-Token": "sync-test-token"},
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(db.session.get(MemberDocument, first_document.id).path, r"C:\old\signup.pdf")
+        self.assertEqual(db.session.get(MemberDocument, second_document.id).path, r"C:\old\contract.pdf")
+        object_exists.assert_not_called()
+
+    def test_sync_member_documents_rejects_unknown_member_and_ambiguous_document(self):
+        unknown_payload = self.document_sync_payload(
+            ["99999"],
+            [self.document_sync_item("99999", "contract", "contract.pdf")],
+        )
+        headers = {"X-Sync-Token": "sync-test-token"}
+        with patch("dreamz_portal.s3_bucket_name", return_value="dreamz-test"):
+            unknown_response = self.client.post(
+                "/api/sync/member-documents",
+                json=unknown_payload,
+                headers=headers,
+            )
+
+        self.assertEqual(unknown_response.status_code, 409)
+
+        db.session.add(Member(member_id="26812", name="Existing, Member"))
+        db.session.commit()
+        self.add_member_document("26812", "contract", "contract.pdf", path=r"C:\old\first.pdf", display_order=0)
+        self.add_member_document("26812", "contract", "contract.pdf", path=r"C:\old\second.pdf", display_order=1)
+        ambiguous_payload = self.document_sync_payload(
+            ["26812"],
+            [self.document_sync_item("26812", "contract", "contract.pdf")],
+        )
+        with patch("dreamz_portal.s3_bucket_name", return_value="dreamz-test"):
+            ambiguous_response = self.client.post(
+                "/api/sync/member-documents",
+                json=ambiguous_payload,
+                headers=headers,
+            )
+
+        self.assertEqual(ambiguous_response.status_code, 409)
+        self.assertEqual(
+            {document.path for document in MemberDocument.query.all()},
+            {r"C:\old\first.pdf", r"C:\old\second.pdf"},
+        )
+
+    def test_sync_member_documents_rejects_count_and_member_set_mismatches(self):
+        item = self.document_sync_item("26812", "contract", "contract.pdf")
+        headers = {"X-Sync-Token": "sync-test-token"}
+        count_response = self.client.post(
+            "/api/sync/member-documents",
+            json=self.document_sync_payload(["26812"], [item], expected_document_count=2),
+            headers=headers,
+        )
+        member_response = self.client.post(
+            "/api/sync/member-documents",
+            json=self.document_sync_payload(["26812", "32348"], [item]),
+            headers=headers,
+        )
+
+        self.assertEqual(count_response.status_code, 400)
+        self.assertEqual(member_response.status_code, 400)
+
+    def test_sync_member_documents_rejects_wrong_bucket_or_member_prefix(self):
+        db.session.add(Member(member_id="26812", name="Existing, Member"))
+        db.session.commit()
+        self.add_member_document("26812", "contract", "contract.pdf")
+        wrong_bucket = self.document_sync_item("26812", "contract", "contract.pdf")
+        wrong_bucket["storage_uri"] = wrong_bucket["storage_uri"].replace("dreamz-test", "other-bucket")
+        wrong_prefix = self.document_sync_item("26812", "contract", "contract.pdf")
+        wrong_prefix["storage_uri"] = wrong_prefix["storage_uri"].replace("0026812", "0032348")
+        headers = {"X-Sync-Token": "sync-test-token"}
+
+        with patch("dreamz_portal.s3_bucket_name", return_value="dreamz-test"):
+            bucket_response = self.client.post(
+                "/api/sync/member-documents",
+                json=self.document_sync_payload(["26812"], [wrong_bucket]),
+                headers=headers,
+            )
+            prefix_response = self.client.post(
+                "/api/sync/member-documents",
+                json=self.document_sync_payload(["26812"], [wrong_prefix]),
+                headers=headers,
+            )
+
+        self.assertEqual(bucket_response.status_code, 400)
+        self.assertEqual(prefix_response.status_code, 400)
 
     def test_sync_member_ids_requires_token(self):
         response = self.client.get("/api/sync/member-ids")

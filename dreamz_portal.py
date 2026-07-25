@@ -6366,6 +6366,37 @@ def document_signature(record):
     }
 
 
+def document_identity(record):
+    return (
+        record.get("document_type") or "other",
+        record.get("source_filename") or "",
+    )
+
+
+def preserve_uploaded_document_paths(member_id, incoming_records):
+    records = [dict(record or {}) for record in (incoming_records or [])]
+    existing_by_identity = {}
+    for document in MemberDocument.query.filter_by(member_id=member_id).all():
+        identity = (document.document_type or "other", document.source_filename or "")
+        existing_by_identity.setdefault(identity, []).append(document)
+
+    incoming_identity_counts = {}
+    for record in records:
+        identity = document_identity(record)
+        incoming_identity_counts[identity] = incoming_identity_counts.get(identity, 0) + 1
+
+    for record in records:
+        identity = document_identity(record)
+        existing_matches = existing_by_identity.get(identity) or []
+        if len(existing_matches) != 1 or incoming_identity_counts.get(identity) != 1:
+            continue
+        existing_path = existing_matches[0].path
+        incoming_path = record.get("path")
+        if is_s3_uri(existing_path) and not is_s3_uri(incoming_path):
+            record["path"] = existing_path
+    return records
+
+
 def existing_document_signatures(member_id):
     return [
         document_signature({
@@ -7781,6 +7812,10 @@ def apply_sync_payload(payload):
 
             document_records = documents_by_member.get(member_data["member_id"])
             if document_records is not None:
+                document_records = preserve_uploaded_document_paths(
+                    member_data["member_id"],
+                    document_records,
+                )
                 before_documents = existing_document_signatures(member_data["member_id"])
                 after_documents = [document_signature(record) for record in document_records]
                 if before_documents != after_documents:
@@ -12993,6 +13028,125 @@ def safe_storage_upload_key(raw_key):
     return key
 
 
+SYNC_DOCUMENT_IMPORT_MAX_MEMBERS = 50
+SYNC_DOCUMENT_IMPORT_MAX_DOCUMENTS = 500
+
+
+def normalize_sync_document_member_id(value):
+    member_id = str(value or "").strip()
+    if not member_id.isdigit() or int(member_id) <= 0:
+        abort(400, "Document sync member IDs must be positive numbers.")
+    return str(int(member_id))
+
+
+def normalize_sync_document_import(payload):
+    if not isinstance(payload, dict):
+        abort(400, "Expected JSON document sync payload.")
+
+    raw_expected_member_ids = payload.get("expected_member_ids")
+    if not isinstance(raw_expected_member_ids, list) or not raw_expected_member_ids:
+        abort(400, "expected_member_ids must be a non-empty list.")
+    if len(raw_expected_member_ids) > SYNC_DOCUMENT_IMPORT_MAX_MEMBERS:
+        abort(400, "Too many members in one document sync request.")
+
+    expected_member_ids = [
+        normalize_sync_document_member_id(member_id)
+        for member_id in raw_expected_member_ids
+    ]
+    if len(set(expected_member_ids)) != len(expected_member_ids):
+        abort(400, "expected_member_ids contains duplicates.")
+
+    expected_document_count = payload.get("expected_document_count")
+    if (
+        isinstance(expected_document_count, bool)
+        or not isinstance(expected_document_count, int)
+        or expected_document_count <= 0
+        or expected_document_count > SYNC_DOCUMENT_IMPORT_MAX_DOCUMENTS
+    ):
+        abort(400, "expected_document_count must be a positive integer.")
+
+    raw_documents = payload.get("documents")
+    if not isinstance(raw_documents, list):
+        abort(400, "documents must be a list.")
+    if len(raw_documents) != expected_document_count:
+        abort(400, "Document count does not match expected_document_count.")
+
+    expected_member_id_set = set(expected_member_ids)
+    documents = []
+    identities = set()
+    document_member_ids = set()
+    for raw_document in raw_documents:
+        if not isinstance(raw_document, dict):
+            abort(400, "Each document must be an object.")
+
+        member_id = normalize_sync_document_member_id(raw_document.get("member_id"))
+        if member_id not in expected_member_id_set:
+            abort(400, "Document member_id is not listed in expected_member_ids.")
+
+        document_type = str(raw_document.get("document_type") or "").strip()
+        source_filename = str(raw_document.get("source_filename") or "").strip()
+        storage_uri = str(raw_document.get("storage_uri") or "").strip()
+        sha256 = str(raw_document.get("sha256") or "").strip().lower()
+        size_bytes = raw_document.get("size_bytes")
+        if not document_type or len(document_type) > 100:
+            abort(400, "Each document requires a valid document_type.")
+        if (
+            not source_filename
+            or len(source_filename) > 255
+            or source_filename != Path(source_filename).name
+            or "/" in source_filename
+            or "\\" in source_filename
+        ):
+            abort(400, "Each document requires a filename without a path.")
+        if not re.fullmatch(r"[0-9a-f]{64}", sha256):
+            abort(400, "Each document requires a valid sha256.")
+        if isinstance(size_bytes, bool) or not isinstance(size_bytes, int) or size_bytes <= 0:
+            abort(400, "Each document requires a positive size_bytes.")
+
+        identity = (member_id, document_type, source_filename)
+        if identity in identities:
+            abort(400, "Document identities must be unique.")
+        identities.add(identity)
+        document_member_ids.add(member_id)
+        documents.append({
+            "member_id": member_id,
+            "document_type": document_type,
+            "source_filename": source_filename,
+            "storage_uri": storage_uri,
+            "sha256": sha256,
+            "size_bytes": size_bytes,
+        })
+
+    if document_member_ids != expected_member_id_set:
+        abort(400, "Every expected member must have at least one document.")
+    return expected_member_ids, expected_document_count, documents
+
+
+def validate_sync_document_storage_uri(document):
+    parsed = parse_s3_uri(document["storage_uri"])
+    if not parsed:
+        abort(400, "Document storage_uri must be an S3 URI.")
+
+    configured_bucket = s3_bucket_name()
+    if not configured_bucket:
+        abort(503, "Document storage bucket is not configured.")
+    bucket, key = parsed
+    if bucket != configured_bucket:
+        abort(400, "Document storage_uri uses the wrong bucket.")
+
+    storage_prefix = (os.getenv("S3_PREFIX") or "gymassistant").replace("\\", "/").strip("/")
+    member_folder = str(document["member_id"]).zfill(7)
+    expected_prefix = f"{storage_prefix}/Data/Attachments/{member_folder}/"
+    if (
+        not key.startswith(expected_prefix)
+        or key == expected_prefix
+        or not key.lower().endswith(".pdf")
+    ):
+        abort(400, "Document storage_uri is outside the member attachment folder.")
+    if key.rsplit("/", 1)[-1] != document["source_filename"]:
+        abort(400, "Document storage filename does not match source_filename.")
+
+
 @app.post("/api/sync/files")
 def api_sync_file_upload():
     require_sync_access()
@@ -13008,6 +13162,90 @@ def api_sync_file_upload():
         app.logger.exception("Sync file upload failed for key %s", key)
         return {"status": "failed", "error": str(exc), "key": key}, 500
     return {"status": "success", "uri": uri, "key": key, "bytes": len(data)}
+
+
+@app.post("/api/sync/member-documents")
+def api_sync_member_documents():
+    require_sync_access()
+    expected_member_ids, expected_document_count, documents = normalize_sync_document_import(
+        request.get_json(silent=True)
+    )
+    for document in documents:
+        validate_sync_document_storage_uri(document)
+
+    members = Member.query.filter(Member.member_id.in_(expected_member_ids)).all()
+    found_member_ids = {member.member_id for member in members}
+    missing_member_ids = sorted(set(expected_member_ids) - found_member_ids, key=int)
+    if missing_member_ids:
+        abort(409, f"Unknown existing member ID(s): {', '.join(missing_member_ids)}.")
+
+    existing_documents = (
+        MemberDocument.query
+        .filter(MemberDocument.member_id.in_(expected_member_ids))
+        .order_by(MemberDocument.member_id, MemberDocument.display_order, MemberDocument.id)
+        .all()
+    )
+    existing_by_identity = {}
+    for document in existing_documents:
+        identity = (
+            document.member_id,
+            document.document_type,
+            document.source_filename or "",
+        )
+        if identity in existing_by_identity:
+            abort(409, "Existing document metadata contains an ambiguous document identity.")
+        existing_by_identity[identity] = document
+
+    incoming_by_identity = {
+        (
+            document["member_id"],
+            document["document_type"],
+            document["source_filename"],
+        ): document
+        for document in documents
+    }
+    if (
+        len(existing_documents) != expected_document_count
+        or set(existing_by_identity) != set(incoming_by_identity)
+    ):
+        abort(409, "Incoming documents do not exactly match existing document metadata.")
+
+    for document in documents:
+        try:
+            exists = s3_object_exists(document["storage_uri"])
+        except Exception:
+            app.logger.exception(
+                "Could not verify uploaded document for member %s",
+                document["member_id"],
+            )
+            abort(503, "Could not verify uploaded document storage.")
+        if not exists:
+            abort(409, "An uploaded document is missing from private storage.")
+
+    updated = 0
+    unchanged = 0
+    for identity, incoming in incoming_by_identity.items():
+        existing = existing_by_identity[identity]
+        if existing.path == incoming["storage_uri"]:
+            unchanged += 1
+            continue
+        existing.path = incoming["storage_uri"]
+        updated += 1
+
+    try:
+        db.session.commit()
+    except SQLAlchemyError:
+        db.session.rollback()
+        raise
+
+    return {
+        "ok": True,
+        "status": "success",
+        "member_count": len(expected_member_ids),
+        "document_count": expected_document_count,
+        "documents_updated": updated,
+        "documents_unchanged": unchanged,
+    }
 
 
 @app.get("/api/sync/member-ids")
