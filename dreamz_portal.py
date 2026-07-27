@@ -23,8 +23,8 @@ from flask import (
 
 from flask_sqlalchemy import SQLAlchemy
 from markupsafe import Markup
-from sqlalchemy import inspect, or_
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy import case, inspect, or_
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from dateutil.relativedelta import relativedelta
 from datetime import datetime, date, time, timedelta   # ← bestaande regel uitbreiden
 from datetime import timezone
@@ -1096,7 +1096,110 @@ class CoachWorkoutExerciseLog(db.Model):
     weight_used = db.Column(db.String)
     reps_completed = db.Column(db.String)
     completed = db.Column(db.Boolean, default=False, nullable=False)
+    completion_status = db.Column(db.String)
+    skip_reason = db.Column(db.String)
     created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+
+class CoachActiveWorkout(db.Model):
+    __table_args__ = (
+        db.UniqueConstraint("member_id", "start_request_id", name="uq_coach_active_workout_member_request"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    public_id = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    member_id = db.Column(db.String, nullable=False, index=True)
+    active_member_id = db.Column(db.String, unique=True, index=True)
+    start_request_id = db.Column(db.String(80), nullable=False)
+    session_number = db.Column(db.Integer)
+    focus = db.Column(db.String)
+    planned_minutes = db.Column(db.Integer)
+    language = db.Column(db.String, default=DEFAULT_LANGUAGE)
+    plan_version = db.Column(db.String)
+    warmup = db.Column(db.Text)
+    main_work = db.Column(db.Text)
+    cooldown = db.Column(db.Text)
+    safety_status = db.Column(db.String)
+    status = db.Column(db.String, default="active", nullable=False, index=True)
+    active_exercise_order = db.Column(db.Integer, default=1, nullable=False)
+    revision = db.Column(db.Integer, default=0, nullable=False)
+    elapsed_seconds = db.Column(db.Integer, default=0, server_default="0", nullable=False)
+    last_save_request_id = db.Column(db.String(80))
+    last_save_payload_hash = db.Column(db.String(64))
+    last_save_response_json = db.Column(db.Text)
+    finish_request_id = db.Column(db.String(80))
+    finish_response_json = db.Column(db.Text)
+    completed_session_id = db.Column(
+        db.Integer,
+        db.ForeignKey("coach_workout_session.id"),
+        unique=True,
+        index=True,
+    )
+    coach_reply = db.Column(db.Text)
+    started_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+    completed_at = db.Column(db.DateTime)
+    abandoned_at = db.Column(db.DateTime)
+
+
+class CoachActiveWorkoutExercise(db.Model):
+    __table_args__ = (
+        db.UniqueConstraint("active_workout_id", "exercise_order", name="uq_coach_active_workout_exercise_order"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    active_workout_id = db.Column(
+        db.Integer,
+        db.ForeignKey("coach_active_workout.id"),
+        nullable=False,
+        index=True,
+    )
+    member_id = db.Column(db.String, nullable=False, index=True)
+    exercise_order = db.Column(db.Integer, nullable=False)
+    exercise_name = db.Column(db.String, nullable=False)
+    equipment = db.Column(db.String)
+    planned_sets = db.Column(db.String)
+    planned_set_count = db.Column(db.Integer, default=1, nullable=False)
+    planned_reps = db.Column(db.String)
+    planned_rest = db.Column(db.String)
+    planned_load = db.Column(db.Text)
+    cue = db.Column(db.Text)
+    tracking_mode = db.Column(db.String, default="reps", nullable=False)
+    completion_status = db.Column(db.String, default="pending", nullable=False)
+    skip_reason = db.Column(db.String)
+    completed = db.Column(db.Boolean, default=False, nullable=False)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+
+class CoachActiveWorkoutSet(db.Model):
+    __table_args__ = (
+        db.UniqueConstraint("active_exercise_id", "set_number", name="uq_coach_active_workout_set_number"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    active_exercise_id = db.Column(
+        db.Integer,
+        db.ForeignKey("coach_active_workout_exercise.id"),
+        nullable=False,
+        index=True,
+    )
+    completed_exercise_log_id = db.Column(
+        db.Integer,
+        db.ForeignKey("coach_workout_exercise_log.id"),
+        index=True,
+    )
+    member_id = db.Column(db.String, nullable=False, index=True)
+    set_number = db.Column(db.Integer, nullable=False)
+    reps_completed = db.Column(db.Integer)
+    duration_seconds = db.Column(db.Integer)
+    weight_kg = db.Column(db.Numeric(8, 2))
+    rpe = db.Column(db.Float)
+    completed = db.Column(db.Boolean, default=False, nullable=False)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
 
 
 class CoachInteraction(db.Model):
@@ -2328,6 +2431,12 @@ def runtime_column_definition(column):
     return column.type.compile(dialect=db.engine.dialect)
 
 
+def runtime_model_column_definition(table, column):
+    if table.name == "coach_active_workout" and column.name == "elapsed_seconds":
+        return "INTEGER DEFAULT 0 NOT NULL"
+    return runtime_column_definition(column)
+
+
 def ensure_runtime_model_columns():
     if db.engine.dialect.name == "postgresql":
         inspector = inspect(db.engine)
@@ -2342,7 +2451,7 @@ def ensure_runtime_model_columns():
             for column in table.columns:
                 if column.primary_key or column.name in existing_columns:
                     continue
-                ensure_model_column(table.name, column.name, runtime_column_definition(column))
+                ensure_model_column(table.name, column.name, runtime_model_column_definition(table, column))
                 existing_columns.add(column.name)
         return
 
@@ -2351,7 +2460,26 @@ def ensure_runtime_model_columns():
         for column in table.columns:
             if column.primary_key:
                 continue
-            ensure_model_column(table.name, column.name, runtime_column_definition(column))
+            ensure_model_column(table.name, column.name, runtime_model_column_definition(table, column))
+
+
+def enforce_active_workout_elapsed_schema():
+    from sqlalchemy import text
+
+    inspector = inspect(db.engine)
+    if "coach_active_workout" not in inspector.get_table_names():
+        return
+    db.session.execute(text(
+        "UPDATE coach_active_workout SET elapsed_seconds = 0 WHERE elapsed_seconds IS NULL"
+    ))
+    if db.engine.dialect.name == "postgresql":
+        db.session.execute(text(
+            "ALTER TABLE coach_active_workout ALTER COLUMN elapsed_seconds SET DEFAULT 0"
+        ))
+        db.session.execute(text(
+            "ALTER TABLE coach_active_workout ALTER COLUMN elapsed_seconds SET NOT NULL"
+        ))
+    db.session.commit()
 
 
 def sql_bool(value):
@@ -2516,6 +2644,7 @@ def ensure_runtime_schema():
 
     db.create_all()
     ensure_runtime_model_columns()
+    enforce_active_workout_elapsed_schema()
     backfill_runtime_schema_defaults()
     ensure_sqlite_model_column("cancellation_request", "notification_to", "TEXT")
     ensure_sqlite_model_column("cancellation_request", "notification_cc", "TEXT")
@@ -2555,6 +2684,9 @@ def ensure_runtime_schema():
     ensure_model_column("coach_profile", "pregnancy_symptoms", "TEXT")
     ensure_model_column("coach_profile", "pregnancy_consent", "BOOLEAN")
     ensure_model_column("coach_plan", "plan_version", "VARCHAR")
+    ensure_model_column("coach_workout_exercise_log", "completion_status", "VARCHAR")
+    ensure_model_column("coach_workout_exercise_log", "skip_reason", "VARCHAR")
+    ensure_model_column("coach_active_workout", "elapsed_seconds", "INTEGER DEFAULT 0 NOT NULL")
     ensure_model_column("group_class_occurrence", "status", "VARCHAR DEFAULT 'scheduled' NOT NULL")
     ensure_model_column("member", "password_hash", "VARCHAR(512)")
     ensure_model_column("member", "password_set_at", "TIMESTAMP")
@@ -9265,6 +9397,14 @@ def nutrition_plan_context(member, profile=None, language=None):
     }
 
 
+def coach_workout_log_context(log):
+    if log.completion_status == "skipped":
+        return f"skipped (reason={log.skip_reason or 'unspecified'})"
+    if not log.completed:
+        return "not completed"
+    return f"completed, {log.weight_used or '-'} x {log.reps_completed or '-'}"
+
+
 def recent_coach_workout_summary(member_id, limit=3):
     sessions = (
         CoachWorkoutSession.query
@@ -9282,7 +9422,7 @@ def recent_coach_workout_summary(member_id, limit=3):
             .all()
         )
         exercise_text = ", ".join(
-            f"{log.exercise_name}: {log.weight_used or '-'} x {log.reps_completed or '-'}"
+            f"{log.exercise_name}: {coach_workout_log_context(log)}"
             for log in logs
         )
         summaries.append(f"{workout.completed_at.date()}: session {workout.session_number or '-'} {workout.focus or ''}; {exercise_text}")
@@ -9360,6 +9500,191 @@ def coach_workout_history(member_id, limit=6):
     return history
 
 
+WORKOUT_START_REQUEST_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
+
+
+def coach_active_workout_for_member(member_id):
+    return (
+        CoachActiveWorkout.query
+        .filter_by(member_id=member_id, status="active", active_member_id=member_id)
+        .order_by(CoachActiveWorkout.updated_at.desc(), CoachActiveWorkout.id.desc())
+        .first()
+    )
+
+
+def coach_active_workout_exercise_rows(workout):
+    if not workout:
+        return []
+    exercises = (
+        CoachActiveWorkoutExercise.query
+        .filter_by(active_workout_id=workout.id, member_id=workout.member_id)
+        .order_by(CoachActiveWorkoutExercise.exercise_order.asc())
+        .all()
+    )
+    exercise_ids = [exercise.id for exercise in exercises]
+    sets_by_exercise = {exercise_id: [] for exercise_id in exercise_ids}
+    if exercise_ids:
+        set_rows = (
+            CoachActiveWorkoutSet.query
+            .filter(CoachActiveWorkoutSet.active_exercise_id.in_(exercise_ids))
+            .filter_by(member_id=workout.member_id)
+            .order_by(
+                CoachActiveWorkoutSet.active_exercise_id.asc(),
+                CoachActiveWorkoutSet.set_number.asc(),
+            )
+            .all()
+        )
+        for set_row in set_rows:
+            sets_by_exercise.setdefault(set_row.active_exercise_id, []).append(set_row)
+    return [
+        {
+            "exercise": exercise,
+            "sets": sets_by_exercise.get(exercise.id, []),
+            "completed_sets": sum(
+                1 for set_row in sets_by_exercise.get(exercise.id, []) if set_row.completed
+            ),
+        }
+        for exercise in exercises
+    ]
+
+
+def coach_active_workout_summary(workout, exercise_rows=None):
+    exercise_rows = exercise_rows if exercise_rows is not None else coach_active_workout_exercise_rows(workout)
+    completed_sets = [
+        set_row
+        for row in exercise_rows
+        for set_row in row["sets"]
+        if set_row.completed
+    ]
+    elapsed_seconds = max(0, int(workout.elapsed_seconds or 0))
+    total_volume_kg = sum(
+        (set_row.weight_kg or Decimal("0")) * (set_row.reps_completed or 0)
+        for set_row in completed_sets
+        if set_row.weight_kg is not None
+    )
+    return {
+        "exercise_count": sum(1 for row in exercise_rows if row["exercise"].completed),
+        "set_count": len(completed_sets),
+        "duration_minutes": max(1, round(elapsed_seconds / 60)),
+        "total_volume_kg": float(round(total_volume_kg, 1)),
+    }
+
+
+def coach_planned_set_count(value):
+    match = re.search(r"\d+", str(value or ""))
+    if not match:
+        return 1
+    return max(1, min(int(match.group(0)), 12))
+
+
+def coach_exercise_tracking_mode(planned_reps):
+    value = str(planned_reps or "").lower()
+    duration_pattern = re.compile(
+        r"(?:\d+(?:[.,]\d+)?(?:\s*[-–]\s*\d+(?:[.,]\d+)?)?\s*)"
+        r"(?:s|sec(?:ond(?:s)?)?|seconde(?:n)?|sek(?:onde|onden)?|sekònde|"
+        r"seg(?:undo|undos)?|min(?:ute|utes|uten|uto|utos)?)\b",
+        re.IGNORECASE,
+    )
+    return "duration" if duration_pattern.search(value) else "reps"
+
+
+def bounded_workout_number(value, minimum, maximum, *, allow_empty=True):
+    if value in (None, "") and allow_empty:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError
+    if number < minimum or number > maximum:
+        raise ValueError
+    return number
+
+
+def workout_integer_value(value, minimum, maximum, *, allow_empty=True):
+    if value in (None, "") and allow_empty:
+        return None
+    if isinstance(value, bool):
+        raise ValueError
+    try:
+        number = int(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError
+    if str(value).strip() not in {str(number), f"{number}.0"}:
+        raise ValueError
+    if number < minimum or number > maximum:
+        raise ValueError
+    return number
+
+
+def workout_decimal_value(value, minimum, maximum, *, allow_empty=True):
+    if value in (None, "") and allow_empty:
+        return None
+    if isinstance(value, bool):
+        raise ValueError
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError
+    if not number.is_finite() or number < Decimal(str(minimum)) or number > Decimal(str(maximum)):
+        raise ValueError
+    return number.quantize(Decimal("0.01"))
+
+
+def valid_workout_request_id(value):
+    value = str(value or "").strip()
+    return value if WORKOUT_START_REQUEST_PATTERN.fullmatch(value) else None
+
+
+def coach_active_workout_url(workout):
+    return url_for("member_active_workout", public_id=workout.public_id)
+
+
+def coach_active_workout_response(workout, *, resumed=False):
+    return {
+        "status": workout.status,
+        "sessionId": workout.public_id,
+        "url": coach_active_workout_url(workout),
+        "resumed": resumed,
+        "workoutId": workout.completed_session_id,
+    }
+
+
+def completed_coach_active_workout_payload(workout):
+    try:
+        stored_response = json.loads(workout.finish_response_json or "{}")
+    except ValueError:
+        stored_response = {}
+    return stored_response or {
+        "status": "success",
+        "message": translated_text("active_workout_finished", current_language()),
+        "workoutId": workout.completed_session_id,
+        "url": coach_active_workout_url(workout),
+        "revision": workout.revision,
+    }
+
+
+def coach_plan_session_for_member(member, profile, session_number, language=None):
+    language = language or current_language()
+    plan = coach_plan_for_member(member, profile, language=language)
+    sessions = (
+        plan[0].get("sessions", [])
+        if plan and isinstance(plan[0], dict)
+        else []
+    )
+    requested_number = parse_optional_int(session_number)
+    if requested_number is None:
+        next_session = coach_next_session_context(profile, member.member_id, language=language)
+        requested_number = (
+            parse_optional_int(next_session["session"].get("number"))
+            if next_session and isinstance(next_session.get("session"), dict)
+            else None
+        )
+    for session_item in sessions:
+        if parse_optional_int(session_item.get("number")) == requested_number:
+            return session_item
+    return None
+
+
 def coach_data_counts(member_id):
     session_ids = [
         row[0]
@@ -9382,6 +9707,9 @@ def coach_data_counts(member_id):
         "progress": CoachProgressEntry.query.filter_by(member_id=member_id).count(),
         "workouts": CoachWorkoutSession.query.filter_by(member_id=member_id).count(),
         "exercises": exercise_count,
+        "active_workouts": CoachActiveWorkout.query.filter_by(member_id=member_id).count(),
+        "active_exercises": CoachActiveWorkoutExercise.query.filter_by(member_id=member_id).count(),
+        "active_sets": CoachActiveWorkoutSet.query.filter_by(member_id=member_id).count(),
     }
     counts["total"] = sum(counts.values())
     return counts
@@ -9412,6 +9740,21 @@ def reset_member_coach_data(member_id):
     progress_entries = CoachProgressEntry.query.filter_by(member_id=member_id).all()
     for entry in progress_entries:
         delete_coach_progress_photo(entry.photo_path)
+
+    active_exercise_ids = [
+        row[0]
+        for row in db.session.query(CoachActiveWorkoutExercise.id)
+        .filter_by(member_id=member_id)
+        .all()
+    ]
+    if active_exercise_ids:
+        (
+            CoachActiveWorkoutSet.query
+            .filter(CoachActiveWorkoutSet.active_exercise_id.in_(active_exercise_ids))
+            .delete(synchronize_session=False)
+        )
+    CoachActiveWorkoutExercise.query.filter_by(member_id=member_id).delete(synchronize_session=False)
+    CoachActiveWorkout.query.filter_by(member_id=member_id).delete(synchronize_session=False)
 
     session_ids = [
         row[0]
@@ -10326,7 +10669,8 @@ def generate_coach_reply(member, profile, user_message=None, workout_logs=None, 
     workout_text = ""
     if workout_logs:
         workout_text = "\n".join(
-            f"- {log.exercise_name}: planned {log.planned_sets} sets x {log.planned_reps}, actual {log.weight_used or '-'} x {log.reps_completed or '-'}"
+            f"- {log.exercise_name}: planned {log.planned_sets} sets x {log.planned_reps}, "
+            f"result {coach_workout_log_context(log)}"
             for log in workout_logs
         )
     prompt = (
@@ -11297,6 +11641,10 @@ def language_choice_from_request():
 
 
 def current_language():
+    if has_request_context():
+        request_override = valid_language_choice(getattr(g, "language_override", None))
+        if request_override:
+            return request_override
     return language_choice_from_request() or DEFAULT_LANGUAGE
 
 
@@ -11408,6 +11756,7 @@ def inject_csrf_token():
         "ui_build_marker": local_ui_build_marker(),
         "t": t,
         "current_language": current_language(),
+        "current_year": current_portal_datetime().year,
         "available_languages": LANGUAGES,
         "language_flags": LANGUAGE_FLAGS,
         "current_member_id": member_id,
@@ -12692,6 +13041,11 @@ def member_dashboard_context(member, staff_admin_view=False):
         None,
         lambda: coach_latest_workout(member.member_id),
     )
+    active_workout = optional_dashboard_value(
+        "coach_active_workout",
+        None,
+        lambda: coach_active_workout_for_member(member.member_id),
+    ) if not staff_admin_view else None
     nutrition_context = optional_dashboard_value(
         "nutrition_context",
         {"meal_plan": None, "nutrition_next_meal": None},
@@ -12785,6 +13139,7 @@ def member_dashboard_context(member, staff_admin_view=False):
         "coach_complete": bool(coach_profile and coach_completion == 100),
         "coach_next_session": coach_next_session,
         "coach_latest_workout": coach_latest,
+        "active_workout": active_workout,
         "nutrition_dashboard_plan": nutrition_dashboard_plan,
         "nutrition_next_meal": nutrition_next_meal,
         "coach_data_counts": coach_counts,
@@ -16321,6 +16676,7 @@ def member_progress():
         member_photo_available=bool(is_s3_uri(member.photo_path) or resolved_photo_path(member.photo_path)),
         profile=coach_profile_for_member(member),
         workout_history=coach_workout_history(member.member_id),
+        active_workout=coach_active_workout_for_member(member.member_id),
         progress_entries=coach_progress_history(member.member_id),
         group_class_attended_this_week=member_group_class_attendance_count(member.member_id, week_start, week_end),
         group_class_attended_total=member_group_class_attendance_count(member.member_id),
@@ -16402,11 +16758,13 @@ def member_coach():
 
     personal_plan = coach_plan_for_member(member, profile) if profile else None
     training_calendar = coach_week_calendar(member.member_id, profile, personal_plan) if profile and personal_plan else None
+    active_workout = coach_active_workout_for_member(member.member_id)
     return render_template(
         "coach.html",
         member=member,
         display_name=display_member_name(member.name),
         profile=profile,
+        active_workout=active_workout,
         completion=coach_profile_completion(profile, member),
         starter_guidance=coach_starter_guidance(profile),
         personal_plan=personal_plan,
@@ -16519,79 +16877,986 @@ def save_coach_progress():
     return redirect(url_for("member_coach", **redirect_args))
 
 
-@app.route("/coach/workout-log", methods=["POST"])
-def save_coach_workout_log():
-    member, redirect_response = current_member_or_redirect()
-    if redirect_response:
-        return jsonify({"status": "error", "message": "Login required."}), 401
-    validate_request_csrf_token()
+WORKOUT_SKIP_REASONS = {"pain", "equipment", "safety", "other"}
 
-    payload = request.get_json(silent=True) or {}
-    exercises = payload.get("exercises") if isinstance(payload.get("exercises"), list) else []
-    completed_exercises = [exercise for exercise in exercises if exercise.get("done")]
-    if not exercises or len(completed_exercises) != len(exercises):
-        return jsonify({"status": "error", "message": translated_text("coach_done_required", current_language())}), 400
 
-    workout = CoachWorkoutSession(
+def workout_api_response(payload, status=200):
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response, status
+
+
+def workout_api_error(code, message_key, status, **values):
+    payload = {
+        "status": "error",
+        "code": code,
+        "message": translated_text(message_key, current_language()),
+    }
+    payload.update(values)
+    return workout_api_response(payload, status)
+
+
+def workout_api_member():
+    member_id = str(session.get("member_id") or "").strip()
+    member = Member.query.filter_by(member_id=member_id).first() if member_id else None
+    if member:
+        return member, None
+    session.pop("member_id", None)
+    return None, workout_api_error("login_required", "active_workout_login_required", 401)
+
+
+def workout_api_csrf_valid():
+    expected = session.get("_csrf_token", "")
+    supplied = request.form.get("csrf_token", "") or request.headers.get("X-CSRF-Token", "")
+    return bool(expected and supplied and secrets.compare_digest(expected, supplied))
+
+
+def owned_active_workout(member, public_id, *, lock=False):
+    query = CoachActiveWorkout.query.filter_by(
+        public_id=str(public_id or "")[:64],
         member_id=member.member_id,
-        session_number=parse_optional_int(payload.get("sessionNumber")),
-        focus=str(payload.get("focus") or "")[:255],
-        planned_minutes=parse_optional_int(payload.get("minutes")),
-        language=current_language(),
-        completed_at=datetime.now(),
     )
-    db.session.add(workout)
-    db.session.flush()
+    if lock:
+        query = query.with_for_update()
+    return query.first()
 
-    workout_logs = []
-    for index, exercise in enumerate(exercises, start=1):
-        log = CoachWorkoutExerciseLog(
-            workout_session_id=workout.id,
-            member_id=member.member_id,
-            exercise_order=index,
-            exercise_name=str(exercise.get("name") or "")[:255],
-            equipment=str(exercise.get("equipment") or "")[:255],
-            planned_sets=str(exercise.get("sets") or "")[:50],
-            planned_reps=str(exercise.get("reps") or "")[:80],
-            planned_rest=str(exercise.get("rest") or "")[:80],
-            weight_used=str(exercise.get("weightUsed") or "")[:80],
-            reps_completed=str(exercise.get("repsCompleted") or "")[:80],
-            completed=bool(exercise.get("done")),
+
+def claim_active_workout_revision(active_workout, expected_revision, **updates):
+    values = dict(updates)
+    values["revision"] = expected_revision + 1
+    try:
+        updated_rows = (
+            CoachActiveWorkout.query
+            .filter_by(
+                id=active_workout.id,
+                member_id=active_workout.member_id,
+                status="active",
+                revision=expected_revision,
+            )
+            .update(values, synchronize_session=False)
         )
-        db.session.add(log)
-        workout_logs.append(log)
+        if updated_rows != 1:
+            db.session.rollback()
+            return False
+        db.session.flush()
+        db.session.expire(active_workout)
+        db.session.refresh(active_workout)
+        return True
+    except OperationalError:
+        db.session.rollback()
+        if db.engine.dialect.name == "sqlite":
+            return False
+        raise
+
+
+def coach_session_completed_this_week(member_id, session_number):
+    if session_number is None:
+        return False
+    today = current_portal_datetime().date()
+    week_start = today - timedelta(days=today.weekday())
+    recent = (
+        CoachWorkoutSession.query
+        .filter_by(member_id=member_id, session_number=session_number)
+        .order_by(CoachWorkoutSession.completed_at.desc())
+        .limit(8)
+        .all()
+    )
+    return any(
+        week_start <= local_datetime(workout.completed_at).date() <= today
+        for workout in recent
+        if workout.completed_at
+    )
+
+
+@app.post("/coach/workout-session/start")
+def start_coach_workout_session():
+    member, error_response = workout_api_member()
+    if error_response:
+        return error_response
+    if not workout_api_csrf_valid():
+        return workout_api_error("invalid_csrf", "active_workout_invalid_request", 400)
+    if not request.is_json:
+        return workout_api_error("json_required", "active_workout_invalid_request", 415)
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return workout_api_error("invalid_json", "active_workout_invalid_request", 400)
+    request_id = valid_workout_request_id(
+        request.headers.get("Idempotency-Key") or payload.get("requestId")
+    )
+    try:
+        session_number = workout_integer_value(
+            payload.get("sessionNumber"),
+            1,
+            50,
+            allow_empty=False,
+        )
+    except ValueError:
+        session_number = None
+    if not request_id or session_number is None:
+        return workout_api_error("invalid_start", "active_workout_invalid_session", 400)
+
+    existing_request = CoachActiveWorkout.query.filter_by(
+        member_id=member.member_id,
+        start_request_id=request_id,
+    ).first()
+    if existing_request:
+        if existing_request.session_number != session_number:
+            return workout_api_error(
+                "idempotency_conflict",
+                "active_workout_request_conflict",
+                409,
+                serverRevision=existing_request.revision,
+            )
+        return workout_api_response(
+            coach_active_workout_response(existing_request, resumed=True)
+        )
+
+    existing_active = coach_active_workout_for_member(member.member_id)
+    if existing_active:
+        return workout_api_response(
+            coach_active_workout_response(existing_active, resumed=True)
+        )
 
     profile = coach_profile_for_member(member)
-    reply, source, context = generate_coach_reply(member, profile, workout_logs=workout_logs, category="workout_feedback")
-    save_coach_interaction(
-        member.member_id,
-        "coach",
-        reply,
-        category="workout_feedback",
-        source=source,
-        context_summary=context,
-    )
-    CoachPlan.query.filter_by(member_id=member.member_id).delete()
-    db.session.commit()
-    milestones = unlock_member_milestones(
+    if not profile or coach_profile_completion(profile, member) != 100:
+        return workout_api_error(
+            "profile_incomplete",
+            "active_workout_profile_required",
+            422,
+        )
+    safety_status = pregnancy_safety_status(profile)
+    if safety_status in {"warning_symptoms", "not_cleared"}:
+        return workout_api_error(
+            "safety_blocked",
+            "active_workout_safety_blocked",
+            409,
+        )
+
+    plan_session = coach_plan_session_for_member(
         member,
-        [
-            "first_workout_completed",
-            "three_workouts_completed",
-            "ten_workouts_completed",
-            "seven_day_consistency_streak",
-        ],
+        profile,
+        session_number,
+        language=current_language(),
     )
-    if milestones:
+    exercises = (
+        plan_session.get("exercises")
+        if isinstance(plan_session, dict) and isinstance(plan_session.get("exercises"), list)
+        else []
+    )
+    if not plan_session or not exercises or len(exercises) > 20:
+        return workout_api_error(
+            "session_unavailable",
+            "active_workout_invalid_session",
+            422,
+        )
+    if coach_session_completed_this_week(member.member_id, session_number):
+        return workout_api_error(
+            "session_already_completed",
+            "active_workout_already_completed",
+            409,
+        )
+
+    now = datetime.now()
+    plan_record = CoachPlan.query.filter_by(member_id=member.member_id).first()
+    active_workout = CoachActiveWorkout(
+        public_id=secrets.token_hex(20),
+        member_id=member.member_id,
+        active_member_id=member.member_id,
+        start_request_id=request_id,
+        session_number=session_number,
+        focus=str(plan_session.get("focus") or "")[:255],
+        planned_minutes=parse_optional_int(plan_session.get("minutes")),
+        language=current_language(),
+        plan_version=plan_record.plan_version if plan_record else COACH_PLAN_SCHEMA_VERSION,
+        warmup=str(plan_session.get("warmup") or "")[:2000],
+        main_work=str(plan_session.get("main") or "")[:2000],
+        cooldown=str(plan_session.get("cooldown") or "")[:2000],
+        safety_status=safety_status,
+        status="active",
+        active_exercise_order=1,
+        revision=0,
+        elapsed_seconds=0,
+        started_at=now,
+        updated_at=now,
+    )
+    db.session.add(active_workout)
+    try:
+        db.session.flush()
+        for exercise_order, exercise_data in enumerate(exercises, start=1):
+            if not isinstance(exercise_data, dict):
+                raise ValueError
+            exercise_name = str(exercise_data.get("name") or "").strip()
+            if not exercise_name:
+                raise ValueError
+            planned_sets = str(exercise_data.get("sets") or "1")[:50]
+            set_count = coach_planned_set_count(planned_sets)
+            active_exercise = CoachActiveWorkoutExercise(
+                active_workout_id=active_workout.id,
+                member_id=member.member_id,
+                exercise_order=exercise_order,
+                exercise_name=exercise_name[:255],
+                equipment=str(exercise_data.get("equipment") or "")[:255],
+                planned_sets=planned_sets,
+                planned_set_count=set_count,
+                planned_reps=str(exercise_data.get("reps") or "")[:80],
+                planned_rest=str(exercise_data.get("rest") or "")[:80],
+                planned_load=str(exercise_data.get("load") or "")[:2000],
+                cue=str(exercise_data.get("cue") or "")[:2000],
+                tracking_mode=coach_exercise_tracking_mode(exercise_data.get("reps")),
+                completion_status="pending",
+                created_at=now,
+                updated_at=now,
+            )
+            db.session.add(active_exercise)
+            db.session.flush()
+            for set_number in range(1, set_count + 1):
+                db.session.add(
+                    CoachActiveWorkoutSet(
+                        active_exercise_id=active_exercise.id,
+                        member_id=member.member_id,
+                        set_number=set_number,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
         db.session.commit()
-    return jsonify(
-        {
+    except ValueError:
+        db.session.rollback()
+        return workout_api_error(
+            "invalid_plan_snapshot",
+            "active_workout_invalid_session",
+            422,
+        )
+    except IntegrityError:
+        db.session.rollback()
+        existing_request = CoachActiveWorkout.query.filter_by(
+            member_id=member.member_id,
+            start_request_id=request_id,
+        ).first()
+        if existing_request:
+            if existing_request.session_number != session_number:
+                return workout_api_error(
+                    "idempotency_conflict",
+                    "active_workout_request_conflict",
+                    409,
+                    serverRevision=existing_request.revision,
+                )
+            return workout_api_response(
+                coach_active_workout_response(existing_request, resumed=True)
+            )
+        existing_active = coach_active_workout_for_member(member.member_id)
+        if existing_active:
+            return workout_api_response(
+                coach_active_workout_response(existing_active, resumed=True)
+            )
+        raise
+
+    return workout_api_response(
+        coach_active_workout_response(active_workout),
+        201,
+    )
+
+
+@app.get("/coach/workout-session/<public_id>")
+def member_active_workout(public_id):
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    active_workout = owned_active_workout(member, public_id)
+    if not active_workout:
+        abort(404)
+    if active_workout.status == "abandoned":
+        flash(translated_text("active_workout_discarded", current_language()), "warning")
+        return redirect(url_for("member_coach"))
+
+    workout_language = normalize_language(active_workout.language)
+    g.language_override = workout_language
+    exercise_rows = coach_active_workout_exercise_rows(active_workout)
+    current_safety_status = pregnancy_safety_status(coach_profile_for_member(member))
+    response = app.make_response(render_template(
+        "coach_workout.html",
+        member=member,
+        display_name=display_member_name(member.name),
+        active_workout=active_workout,
+        exercise_rows=exercise_rows,
+        workout_summary=coach_active_workout_summary(active_workout, exercise_rows),
+        elapsed_seconds=max(0, int(active_workout.elapsed_seconds or 0)),
+        workout_safety_blocked=current_safety_status in {"warning_symptoms", "not_cleared"},
+        active_workout_mode=True,
+    ))
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@app.post("/coach/workout-session/<public_id>/autosave")
+def autosave_coach_workout_session(public_id):
+    member, error_response = workout_api_member()
+    if error_response:
+        return error_response
+    if not workout_api_csrf_valid():
+        return workout_api_error("invalid_csrf", "active_workout_invalid_request", 400)
+    if not request.is_json:
+        return workout_api_error("json_required", "active_workout_invalid_request", 415)
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return workout_api_error("invalid_json", "active_workout_invalid_request", 400)
+
+    save_request_id = valid_workout_request_id(payload.get("requestId"))
+    if not save_request_id:
+        return workout_api_error("invalid_save_request", "active_workout_invalid_request", 400)
+    payload_hash = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+    active_workout = owned_active_workout(member, public_id, lock=True)
+    if not active_workout:
+        return workout_api_error("workout_not_found", "active_workout_not_found", 404)
+    g.language_override = normalize_language(active_workout.language)
+    if active_workout.last_save_request_id == save_request_id:
+        if active_workout.last_save_payload_hash != payload_hash:
+            return workout_api_error(
+                "idempotency_conflict",
+                "active_workout_request_conflict",
+                409,
+                serverRevision=active_workout.revision,
+            )
+        try:
+            replay_payload = json.loads(active_workout.last_save_response_json or "{}")
+        except ValueError:
+            replay_payload = {}
+        return workout_api_response(replay_payload or {
             "status": "success",
-            "message": translated_text("coach_workout_saved", current_language()),
-            "workout_id": workout.id,
-            "coach_reply": reply,
+            "revision": active_workout.revision,
+            "message": translated_text("active_workout_saved", current_language()),
+        })
+    if active_workout.status != "active":
+        return workout_api_error(
+            "workout_not_active",
+            "active_workout_not_active",
+            409,
+            serverRevision=active_workout.revision,
+        )
+    current_safety_status = pregnancy_safety_status(coach_profile_for_member(member))
+    if current_safety_status in {"warning_symptoms", "not_cleared"}:
+        return workout_api_error(
+            "safety_blocked",
+            "active_workout_safety_blocked",
+            409,
+            serverRevision=active_workout.revision,
+        )
+
+    try:
+        expected_revision = workout_integer_value(
+            payload.get("revision"),
+            0,
+            1000000,
+            allow_empty=False,
+        )
+        elapsed_seconds = workout_integer_value(
+            payload.get("elapsedSeconds"),
+            0,
+            21600,
+        )
+        exercise_order = workout_integer_value(
+            payload.get("exerciseOrder"),
+            1,
+            50,
+            allow_empty=False,
+        )
+    except ValueError:
+        return workout_api_error("invalid_save", "active_workout_invalid_values", 422)
+    if expected_revision != active_workout.revision:
+        return workout_api_error(
+            "revision_conflict",
+            "active_workout_revision_conflict",
+            409,
+            serverRevision=active_workout.revision,
+        )
+
+    active_exercise = CoachActiveWorkoutExercise.query.filter_by(
+        active_workout_id=active_workout.id,
+        member_id=member.member_id,
+        exercise_order=exercise_order,
+    ).first()
+    if not active_exercise:
+        return workout_api_error("exercise_not_found", "active_workout_invalid_values", 404)
+    set_rows = (
+        CoachActiveWorkoutSet.query
+        .filter_by(active_exercise_id=active_exercise.id, member_id=member.member_id)
+        .order_by(CoachActiveWorkoutSet.set_number.asc())
+        .all()
+    )
+    sets_by_number = {set_row.set_number: set_row for set_row in set_rows}
+    supplied_sets = payload.get("sets")
+    if not isinstance(supplied_sets, list) or len(supplied_sets) > len(set_rows):
+        return workout_api_error("invalid_sets", "active_workout_invalid_values", 422)
+
+    normalized_sets = []
+    seen_set_numbers = set()
+    try:
+        for set_payload in supplied_sets:
+            if not isinstance(set_payload, dict):
+                raise ValueError
+            set_number = workout_integer_value(
+                set_payload.get("setNumber"),
+                1,
+                12,
+                allow_empty=False,
+            )
+            if set_number in seen_set_numbers or set_number not in sets_by_number:
+                raise ValueError
+            seen_set_numbers.add(set_number)
+            completed = set_payload.get("completed", False)
+            if not isinstance(completed, bool):
+                raise ValueError
+            reps_completed = workout_integer_value(
+                set_payload.get("reps"),
+                0,
+                1000,
+            )
+            duration_seconds = workout_integer_value(
+                set_payload.get("durationSeconds"),
+                0,
+                21600,
+            )
+            weight_kg = workout_decimal_value(
+                set_payload.get("weightKg"),
+                0,
+                2000,
+            )
+            rpe = workout_decimal_value(
+                set_payload.get("rpe"),
+                1,
+                10,
+            )
+            if completed:
+                if active_exercise.tracking_mode == "duration" and not duration_seconds:
+                    raise ValueError
+                if active_exercise.tracking_mode != "duration" and not reps_completed:
+                    raise ValueError
+            normalized_sets.append({
+                "set_number": set_number,
+                "completed": completed,
+                "reps_completed": reps_completed,
+                "duration_seconds": duration_seconds,
+                "weight_kg": weight_kg,
+                "rpe": rpe,
+            })
+    except ValueError:
+        return workout_api_error("invalid_set_values", "active_workout_invalid_values", 422)
+
+    exercise_status = str(payload.get("exerciseStatus") or active_exercise.completion_status or "pending")
+    if exercise_status not in {"pending", "completed", "skipped"}:
+        return workout_api_error("invalid_exercise_status", "active_workout_invalid_values", 422)
+    skip_reason = str(payload.get("skipReason") or "").strip()
+    if exercise_status == "skipped" and skip_reason not in WORKOUT_SKIP_REASONS:
+        return workout_api_error("skip_reason_required", "active_workout_skip_reason_required", 422)
+
+    projected_completion = {
+        set_row.set_number: set_row.completed
+        for set_row in set_rows
+    }
+    for normalized in normalized_sets:
+        projected_completion[normalized["set_number"]] = normalized["completed"]
+    if exercise_status == "completed" and not all(projected_completion.values()):
+        return workout_api_error("sets_incomplete", "active_workout_sets_incomplete", 422)
+
+    try:
+        next_exercise_order = workout_integer_value(
+            payload.get("activeExerciseOrder"),
+            1,
+            max(1, CoachActiveWorkoutExercise.query.filter_by(active_workout_id=active_workout.id).count()),
+        )
+    except ValueError:
+        return workout_api_error("invalid_active_exercise", "active_workout_invalid_values", 422)
+
+    if not claim_active_workout_revision(active_workout, expected_revision):
+        current_workout = owned_active_workout(member, public_id)
+        if not current_workout:
+            return workout_api_error("workout_not_found", "active_workout_not_found", 404)
+        g.language_override = normalize_language(current_workout.language)
+        if current_workout.last_save_request_id == save_request_id:
+            if current_workout.last_save_payload_hash != payload_hash:
+                return workout_api_error(
+                    "idempotency_conflict",
+                    "active_workout_request_conflict",
+                    409,
+                    serverRevision=current_workout.revision,
+                )
+            try:
+                replay_payload = json.loads(current_workout.last_save_response_json or "{}")
+            except ValueError:
+                replay_payload = {}
+            return workout_api_response(replay_payload or {
+                "status": "success",
+                "revision": current_workout.revision,
+                "message": translated_text("active_workout_saved", current_language()),
+            })
+        if current_workout.status != "active":
+            return workout_api_error(
+                "workout_not_active",
+                "active_workout_not_active",
+                409,
+                serverRevision=current_workout.revision,
+            )
+        return workout_api_error(
+            "revision_conflict",
+            "active_workout_revision_conflict",
+            409,
+            serverRevision=current_workout.revision,
+        )
+
+    now = datetime.now()
+    for normalized in normalized_sets:
+        set_row = sets_by_number[normalized["set_number"]]
+        set_row.reps_completed = normalized["reps_completed"]
+        set_row.duration_seconds = normalized["duration_seconds"]
+        set_row.weight_kg = normalized["weight_kg"]
+        set_row.rpe = normalized["rpe"]
+        set_row.completed = normalized["completed"]
+        set_row.completed_at = now if normalized["completed"] else None
+        set_row.updated_at = now
+    if exercise_status == "skipped":
+        for set_row in set_rows:
+            set_row.completed = False
+            set_row.completed_at = None
+            set_row.updated_at = now
+    active_exercise.completion_status = exercise_status
+    active_exercise.completed = exercise_status == "completed"
+    active_exercise.skip_reason = skip_reason if exercise_status == "skipped" else None
+    active_exercise.completed_at = now if exercise_status in {"completed", "skipped"} else None
+    active_exercise.updated_at = now
+    active_workout.active_exercise_order = next_exercise_order or exercise_order
+    if elapsed_seconds is not None:
+        active_workout.elapsed_seconds = max(
+            int(active_workout.elapsed_seconds or 0),
+            elapsed_seconds,
+        )
+    active_workout.updated_at = now
+    response_payload = {
+        "status": "success",
+        "revision": active_workout.revision,
+        "savedAt": now.isoformat(timespec="seconds"),
+        "message": translated_text("active_workout_saved", current_language()),
+    }
+    active_workout.last_save_request_id = save_request_id
+    active_workout.last_save_payload_hash = payload_hash
+    active_workout.last_save_response_json = json.dumps(response_payload, ensure_ascii=False)
+    db.session.commit()
+    return workout_api_response(response_payload)
+
+
+@app.post("/coach/workout-session/<public_id>/elapsed")
+def update_coach_workout_elapsed(public_id):
+    member, error_response = workout_api_member()
+    if error_response:
+        return error_response
+    if not workout_api_csrf_valid():
+        return workout_api_error("invalid_csrf", "active_workout_invalid_request", 400)
+    if not request.is_json:
+        return workout_api_error("json_required", "active_workout_invalid_request", 415)
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return workout_api_error("invalid_json", "active_workout_invalid_request", 400)
+    try:
+        elapsed_seconds = workout_integer_value(
+            payload.get("elapsedSeconds"),
+            0,
+            21600,
+            allow_empty=False,
+        )
+    except ValueError:
+        return workout_api_error("invalid_elapsed", "active_workout_invalid_values", 422)
+
+    active_workout = owned_active_workout(member, public_id)
+    if not active_workout:
+        return workout_api_error("workout_not_found", "active_workout_not_found", 404)
+    g.language_override = normalize_language(active_workout.language)
+    if active_workout.status != "active":
+        return workout_api_error(
+            "workout_not_active",
+            "active_workout_not_active",
+            409,
+            serverRevision=active_workout.revision,
+        )
+
+    elapsed_column = CoachActiveWorkout.elapsed_seconds
+    updated_rows = (
+        CoachActiveWorkout.query
+        .filter_by(
+            id=active_workout.id,
+            member_id=member.member_id,
+            status="active",
+        )
+        .update(
+            {
+                elapsed_column: case(
+                    (
+                        or_(
+                            elapsed_column.is_(None),
+                            elapsed_column < elapsed_seconds,
+                        ),
+                        elapsed_seconds,
+                    ),
+                    else_=elapsed_column,
+                ),
+            },
+            synchronize_session=False,
+        )
+    )
+    if updated_rows != 1:
+        db.session.rollback()
+        return workout_api_error(
+            "workout_not_active",
+            "active_workout_not_active",
+            409,
+            serverRevision=active_workout.revision,
+        )
+    db.session.commit()
+    db.session.refresh(active_workout)
+    return workout_api_response({
+        "status": "success",
+        "elapsedSeconds": max(0, int(active_workout.elapsed_seconds or 0)),
+        "revision": active_workout.revision,
+    })
+
+
+def completed_workout_set_text(set_rows, tracking_mode):
+    completed_sets = [set_row for set_row in set_rows if set_row.completed]
+    if tracking_mode == "duration":
+        reps_text = " / ".join(
+            f"{set_row.duration_seconds}s"
+            for set_row in completed_sets
+            if set_row.duration_seconds
+        )
+    else:
+        reps_text = " / ".join(
+            str(set_row.reps_completed)
+            for set_row in completed_sets
+            if set_row.reps_completed is not None
+        )
+    weight_values = []
+    for set_row in completed_sets:
+        if set_row.weight_kg is None:
+            continue
+        value = format(Decimal(set_row.weight_kg), "f")
+        if "." in value:
+            value = value.rstrip("0").rstrip(".")
+        weight_values.append(f"{value} kg")
+    weight_text = " / ".join(weight_values)
+    return weight_text, reps_text
+
+
+@app.post("/coach/workout-session/<public_id>/finish")
+def finish_coach_workout_session(public_id):
+    member, error_response = workout_api_member()
+    if error_response:
+        return error_response
+    if not workout_api_csrf_valid():
+        return workout_api_error("invalid_csrf", "active_workout_invalid_request", 400)
+    if not request.is_json:
+        return workout_api_error("json_required", "active_workout_invalid_request", 415)
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return workout_api_error("invalid_json", "active_workout_invalid_request", 400)
+    finish_request_id = valid_workout_request_id(payload.get("requestId"))
+    if not finish_request_id:
+        return workout_api_error("invalid_finish_request", "active_workout_invalid_request", 400)
+
+    active_workout = owned_active_workout(member, public_id, lock=True)
+    if not active_workout:
+        return workout_api_error("workout_not_found", "active_workout_not_found", 404)
+    g.language_override = normalize_language(active_workout.language)
+    if active_workout.status == "completed":
+        return workout_api_response(completed_coach_active_workout_payload(active_workout))
+    if active_workout.status != "active":
+        return workout_api_error("workout_not_active", "active_workout_not_active", 409)
+    current_safety_status = pregnancy_safety_status(coach_profile_for_member(member))
+    if current_safety_status in {"warning_symptoms", "not_cleared"}:
+        return workout_api_error("safety_blocked", "active_workout_safety_blocked", 409)
+    try:
+        expected_revision = workout_integer_value(
+            payload.get("revision"),
+            0,
+            1000000,
+            allow_empty=False,
+        )
+        elapsed_seconds = workout_integer_value(
+            payload.get("elapsedSeconds"),
+            0,
+            21600,
+        )
+    except ValueError:
+        return workout_api_error("invalid_finish", "active_workout_invalid_request", 422)
+    if expected_revision != active_workout.revision:
+        return workout_api_error(
+            "revision_conflict",
+            "active_workout_revision_conflict",
+            409,
+            serverRevision=active_workout.revision,
+        )
+
+    exercise_rows = coach_active_workout_exercise_rows(active_workout)
+    if not exercise_rows or any(
+        row["exercise"].completion_status not in {"completed", "skipped"}
+        for row in exercise_rows
+    ):
+        return workout_api_error("workout_incomplete", "active_workout_finish_blocked", 422)
+    if not any(row["exercise"].completion_status == "completed" for row in exercise_rows):
+        return workout_api_error("no_completed_exercises", "active_workout_finish_blocked", 422)
+    if any(
+        row["exercise"].completion_status == "completed"
+        and (not row["sets"] or not all(set_row.completed for set_row in row["sets"]))
+        for row in exercise_rows
+    ):
+        return workout_api_error("sets_incomplete", "active_workout_sets_incomplete", 422)
+    if any(
+        row["exercise"].completion_status == "skipped"
+        and row["exercise"].skip_reason not in WORKOUT_SKIP_REASONS
+        for row in exercise_rows
+    ):
+        return workout_api_error("skip_reason_required", "active_workout_skip_reason_required", 422)
+
+    if not claim_active_workout_revision(
+        active_workout,
+        expected_revision,
+        status="finishing",
+    ):
+        current_workout = owned_active_workout(member, public_id)
+        if not current_workout:
+            return workout_api_error("workout_not_found", "active_workout_not_found", 404)
+        g.language_override = normalize_language(current_workout.language)
+        if current_workout.status == "completed":
+            return workout_api_response(completed_coach_active_workout_payload(current_workout))
+        if current_workout.status != "active":
+            return workout_api_error(
+                "workout_not_active",
+                "active_workout_not_active",
+                409,
+                serverRevision=current_workout.revision,
+            )
+        return workout_api_error(
+            "revision_conflict",
+            "active_workout_revision_conflict",
+            409,
+            serverRevision=current_workout.revision,
+        )
+
+    completed_at = datetime.now()
+    completed_workout = CoachWorkoutSession(
+        member_id=member.member_id,
+        session_number=active_workout.session_number,
+        focus=active_workout.focus,
+        planned_minutes=active_workout.planned_minutes,
+        language=active_workout.language,
+        started_at=active_workout.started_at,
+        completed_at=completed_at,
+    )
+    db.session.add(completed_workout)
+    db.session.flush()
+    completed_logs = []
+    for row in exercise_rows:
+        exercise = row["exercise"]
+        weight_text, reps_text = completed_workout_set_text(
+            row["sets"],
+            exercise.tracking_mode,
+        )
+        if exercise.completion_status == "skipped":
+            weight_text = ""
+            reps_text = ""
+        completed_log = CoachWorkoutExerciseLog(
+            workout_session_id=completed_workout.id,
+            member_id=member.member_id,
+            exercise_order=exercise.exercise_order,
+            exercise_name=exercise.exercise_name,
+            equipment=exercise.equipment,
+            planned_sets=exercise.planned_sets,
+            planned_reps=exercise.planned_reps,
+            planned_rest=exercise.planned_rest,
+            weight_used=weight_text,
+            reps_completed=reps_text,
+            completed=exercise.completion_status == "completed",
+            completion_status=exercise.completion_status,
+            skip_reason=exercise.skip_reason if exercise.completion_status == "skipped" else None,
+        )
+        db.session.add(completed_log)
+        db.session.flush()
+        completed_logs.append(completed_log)
+        for set_row in row["sets"]:
+            set_row.completed_exercise_log_id = completed_log.id
+
+    active_workout.status = "completed"
+    active_workout.active_member_id = None
+    active_workout.completed_session_id = completed_workout.id
+    active_workout.completed_at = completed_at
+    active_workout.updated_at = completed_at
+    if elapsed_seconds is not None:
+        active_workout.elapsed_seconds = max(
+            int(active_workout.elapsed_seconds or 0),
+            elapsed_seconds,
+        )
+    active_workout.finish_request_id = finish_request_id
+    CoachPlan.query.filter_by(member_id=member.member_id).delete(synchronize_session=False)
+    summary = coach_active_workout_summary(active_workout, exercise_rows)
+    response_payload = {
+        "status": "success",
+        "message": translated_text("active_workout_finished", current_language()),
+        "workoutId": completed_workout.id,
+        "url": coach_active_workout_url(active_workout),
+        "revision": active_workout.revision,
+        "summary": summary,
+        "coachReply": "",
+        "milestones": [],
+    }
+    active_workout.finish_response_json = json.dumps(response_payload, ensure_ascii=False)
+    db.session.commit()
+
+    try:
+        milestones = unlock_member_milestones(
+            member,
+            [
+                "first_workout_completed",
+                "three_workouts_completed",
+                "ten_workouts_completed",
+                "seven_day_consistency_streak",
+            ],
+        )
+        milestone_response = {
+            **response_payload,
             "milestones": [milestone_payload(key) for key in milestones],
         }
+        active_workout.finish_response_json = json.dumps(milestone_response, ensure_ascii=False)
+        db.session.commit()
+        response_payload = milestone_response
+    except Exception:
+        db.session.rollback()
+        app.logger.exception(
+            "Workout %s was completed, but milestone processing could not be saved.",
+            active_workout.public_id,
+        )
+
+    try:
+        profile = coach_profile_for_member(member)
+        reply, source, context = generate_coach_reply(
+            member,
+            profile,
+            workout_logs=completed_logs,
+            category="workout_feedback",
+        )
+        save_coach_interaction(
+            member.member_id,
+            "coach",
+            reply,
+            category="workout_feedback",
+            source=source,
+            context_summary=context,
+        )
+        active_workout.coach_reply = reply
+        coach_response = {**response_payload, "coachReply": reply}
+        active_workout.finish_response_json = json.dumps(coach_response, ensure_ascii=False)
+        db.session.commit()
+        response_payload = coach_response
+    except Exception:
+        db.session.rollback()
+        app.logger.exception(
+            "Workout %s was completed, but post-workout coach feedback could not be saved.",
+            active_workout.public_id,
+        )
+
+    return workout_api_response(response_payload)
+
+
+@app.post("/coach/workout-session/<public_id>/discard")
+def discard_coach_workout_session(public_id):
+    member, error_response = workout_api_member()
+    if error_response:
+        return error_response
+    if not workout_api_csrf_valid():
+        return workout_api_error("invalid_csrf", "active_workout_invalid_request", 400)
+    if not request.is_json:
+        return workout_api_error("json_required", "active_workout_invalid_request", 415)
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return workout_api_error("invalid_json", "active_workout_invalid_request", 400)
+
+    active_workout = owned_active_workout(member, public_id, lock=True)
+    if not active_workout:
+        return workout_api_error("workout_not_found", "active_workout_not_found", 404)
+    g.language_override = normalize_language(active_workout.language)
+    if active_workout.status == "completed":
+        return workout_api_error("workout_completed", "active_workout_not_active", 409)
+    if active_workout.status == "abandoned":
+        return workout_api_response({
+            "status": "success",
+            "message": translated_text("active_workout_discarded", current_language()),
+            "url": url_for("member_coach"),
+            "revision": active_workout.revision,
+        })
+    try:
+        expected_revision = workout_integer_value(
+            payload.get("revision"),
+            0,
+            1000000,
+            allow_empty=False,
+        )
+    except ValueError:
+        return workout_api_error("invalid_discard", "active_workout_invalid_request", 422)
+    if expected_revision != active_workout.revision:
+        return workout_api_error(
+            "revision_conflict",
+            "active_workout_revision_conflict",
+            409,
+            serverRevision=active_workout.revision,
+        )
+    now = datetime.now()
+    if not claim_active_workout_revision(
+        active_workout,
+        expected_revision,
+        status="abandoned",
+        active_member_id=None,
+        abandoned_at=now,
+        updated_at=now,
+    ):
+        current_workout = owned_active_workout(member, public_id)
+        if not current_workout:
+            return workout_api_error("workout_not_found", "active_workout_not_found", 404)
+        g.language_override = normalize_language(current_workout.language)
+        if current_workout.status == "abandoned":
+            return workout_api_response({
+                "status": "success",
+                "message": translated_text("active_workout_discarded", current_language()),
+                "url": url_for("member_coach"),
+                "revision": current_workout.revision,
+            })
+        if current_workout.status == "completed":
+            return workout_api_error("workout_completed", "active_workout_not_active", 409)
+        return workout_api_error(
+            "revision_conflict",
+            "active_workout_revision_conflict",
+            409,
+            serverRevision=current_workout.revision,
+        )
+    db.session.commit()
+    return workout_api_response({
+        "status": "success",
+        "message": translated_text("active_workout_discarded", current_language()),
+        "url": url_for("member_coach"),
+        "revision": active_workout.revision,
+    })
+
+
+@app.route("/coach/workout-log", methods=["POST"])
+def save_coach_workout_log():
+    member, error_response = workout_api_member()
+    if error_response:
+        return error_response
+    if not workout_api_csrf_valid():
+        return workout_api_error("invalid_csrf", "active_workout_invalid_request", 400)
+    return workout_api_error(
+        "legacy_workout_endpoint_retired",
+        "active_workout_legacy_retired",
+        410,
     )
 
 

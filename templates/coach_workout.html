@@ -1,0 +1,386 @@
+{% extends "base.html" %}
+{% block title %}{{ t('active_workout_title') }} | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<section
+  class="active-workout-shell"
+  data-active-workout
+  data-status="{{ active_workout.status }}"
+  data-safety-blocked="{{ 'true' if workout_safety_blocked else 'false' }}"
+>
+  <div class="active-workout-topbar">
+    <a href="{{ url_for('member_coach', tab='sessions') }}" class="active-workout-exit" data-workout-exit>
+      <span aria-hidden="true">&larr;</span>
+      <span>{{ t('active_workout_leave') }}</span>
+    </a>
+    {% if active_workout.status == 'active' %}
+      <div class="active-workout-save-state" role="status" aria-live="polite" data-workout-save-state>
+        {{ t('active_workout_saved') }}
+      </div>
+    {% else %}
+      <div class="active-workout-save-state is-saved">{{ t('active_workout_finished') }}</div>
+    {% endif %}
+  </div>
+
+  <header class="active-workout-header">
+    <div>
+      <div class="active-workout-eyebrow">
+        {{ t('coach_plan_session') }} {{ active_workout.session_number }}
+      </div>
+      <h1>{{ active_workout.focus }}</h1>
+      <div class="active-workout-meta">
+        <span>{{ active_workout.planned_minutes }} {{ t('minutes_short') }}</span>
+        <span aria-hidden="true">&middot;</span>
+        <span>{{ exercise_rows|length }} {{ t('active_workout_exercises') }}</span>
+      </div>
+    </div>
+    <div class="active-workout-timer" aria-label="{{ t('active_workout_elapsed_time') }}">
+      <span data-workout-timer>00:00</span>
+      <small>{{ t('active_workout_elapsed') }}</small>
+    </div>
+  </header>
+
+  {% if active_workout.status == 'completed' %}
+    <section class="active-workout-complete-card">
+      <div class="active-workout-complete-icon" aria-hidden="true">&#10003;</div>
+      <div class="active-workout-eyebrow">{{ t('active_workout_complete_label') }}</div>
+      <h2>{{ t('active_workout_complete_title') }}</h2>
+      <p>{{ t('active_workout_complete_intro') }}</p>
+      <div class="active-workout-summary-grid">
+        <div>
+          <strong>{{ workout_summary.duration_minutes }}</strong>
+          <span>{{ t('active_workout_minutes') }}</span>
+        </div>
+        <div>
+          <strong>{{ workout_summary.exercise_count }}</strong>
+          <span>{{ t('active_workout_exercises') }}</span>
+        </div>
+        <div>
+          <strong>{{ workout_summary.set_count }}</strong>
+          <span>{{ t('active_workout_sets_completed') }}</span>
+        </div>
+        <div>
+          <strong>{{ workout_summary.total_volume_kg|round(1) }}</strong>
+          <span>{{ t('active_workout_volume_kg') }}</span>
+        </div>
+      </div>
+      {% if active_workout.coach_reply %}
+        <div class="active-workout-coach-reply">
+          <div class="active-workout-eyebrow">{{ t('dreamz_coach') }}</div>
+          <div class="mt-2 text-sm leading-6 text-green-50">{{ active_workout.coach_reply|coach_message_html }}</div>
+        </div>
+      {% endif %}
+      <div class="active-workout-complete-actions">
+        <a href="{{ url_for('member_progress') }}" class="dreamz-button-primary">{{ t('view_progress') }}</a>
+        <a href="{{ url_for('member_coach') }}" class="dreamz-button-secondary">{{ t('active_workout_back_to_coach') }}</a>
+      </div>
+    </section>
+  {% else %}
+    {% if workout_safety_blocked %}
+      <div class="active-workout-safety-alert" role="alert">
+        <strong>{{ t('active_workout_safety_title') }}</strong>
+        <p>{{ t('active_workout_safety_blocked') }}</p>
+        <a href="{{ url_for('member_coach', edit='profile', field='provider_cleared_exercise') }}">
+          {{ t('active_workout_review_safety') }}
+        </a>
+      </div>
+    {% endif %}
+
+    <div class="active-workout-progress-wrap">
+      <div class="active-workout-progress-copy">
+        <span data-workout-progress-label></span>
+        <span data-workout-progress-percent></span>
+      </div>
+      <div class="active-workout-progress-track" aria-hidden="true">
+        <span data-workout-progress-bar></span>
+      </div>
+    </div>
+
+    <details class="active-workout-prep">
+      <summary>{{ t('active_workout_session_guidance') }}</summary>
+      <div class="active-workout-prep-grid">
+        <div>
+          <strong>{{ t('coach_warmup') }}</strong>
+          <p>{{ active_workout.warmup }}</p>
+        </div>
+        <div>
+          <strong>{{ t('coach_main_work') }}</strong>
+          <p>{{ active_workout.main_work }}</p>
+        </div>
+        <div>
+          <strong>{{ t('coach_cooldown') }}</strong>
+          <p>{{ active_workout.cooldown }}</p>
+        </div>
+      </div>
+    </details>
+
+    <div class="active-workout-exercises">
+      {% for row in exercise_rows %}
+        {% set exercise = row.exercise %}
+        <article
+          class="active-exercise-card {% if exercise.exercise_order != active_workout.active_exercise_order %}hidden{% endif %}"
+          data-workout-exercise
+          data-exercise-order="{{ exercise.exercise_order }}"
+          data-exercise-status="{{ exercise.completion_status }}"
+          data-tracking-mode="{{ exercise.tracking_mode }}"
+        >
+          <div class="active-exercise-heading">
+            <div>
+              <div class="active-workout-eyebrow">
+                {{ t('active_workout_exercise_progress')|replace('{current}', exercise.exercise_order|string)|replace('{total}', exercise_rows|length|string) }}
+              </div>
+              <h2 tabindex="-1" data-exercise-heading>{{ exercise.exercise_name }}</h2>
+              <p>{{ exercise.equipment }}</p>
+            </div>
+            <span class="active-exercise-status" data-exercise-status-label></span>
+          </div>
+
+          <div class="active-exercise-plan">
+            <div>
+              <span>{{ t('sets') }}</span>
+              <strong>{{ exercise.planned_sets }}</strong>
+            </div>
+            <div>
+              <span>{{ t('reps') }}</span>
+              <strong>{{ exercise.planned_reps }}</strong>
+            </div>
+            <div>
+              <span>{{ t('rest') }}</span>
+              <strong>{{ exercise.planned_rest }}</strong>
+            </div>
+          </div>
+
+          <details class="active-exercise-guidance">
+            <summary>{{ t('active_workout_form_guidance') }}</summary>
+            <p>{{ exercise.cue }}</p>
+            {% if exercise.planned_load %}
+              <div>{{ exercise.planned_load }}</div>
+            {% endif %}
+          </details>
+
+          <div class="workout-set-list">
+            {% for set_row in row.sets %}
+              <div class="workout-set-row" data-workout-set data-set-number="{{ set_row.set_number }}">
+                <div class="workout-set-number">
+                  <span>{{ t('active_workout_set') }}</span>
+                  <strong>{{ set_row.set_number }}</strong>
+                </div>
+                {% if exercise.tracking_mode == 'duration' %}
+                  <label>
+                    <span>{{ t('active_workout_duration_minutes') }}</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="360"
+                      step="0.5"
+                      inputmode="decimal"
+                      value="{{ (set_row.duration_seconds / 60)|round(2) if set_row.duration_seconds is not none else '' }}"
+                      data-set-duration
+                      {% if workout_safety_blocked %}disabled{% endif %}
+                    >
+                  </label>
+                {% else %}
+                  <label>
+                    <span>{{ t('reps') }}</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="1000"
+                      step="1"
+                      inputmode="numeric"
+                      value="{{ set_row.reps_completed if set_row.reps_completed is not none else '' }}"
+                      data-set-reps
+                      {% if workout_safety_blocked %}disabled{% endif %}
+                    >
+                  </label>
+                {% endif %}
+                <label>
+                  <span>{{ t('active_workout_weight_kg') }}</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="2000"
+                    step="0.25"
+                    inputmode="decimal"
+                    value="{{ set_row.weight_kg if set_row.weight_kg is not none else '' }}"
+                    data-set-weight
+                    {% if workout_safety_blocked %}disabled{% endif %}
+                  >
+                </label>
+                <label>
+                  <span>{{ t('active_workout_rpe') }}</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    step="0.5"
+                    inputmode="decimal"
+                    value="{{ set_row.rpe if set_row.rpe is not none else '' }}"
+                    placeholder="-"
+                    data-set-rpe
+                    {% if workout_safety_blocked %}disabled{% endif %}
+                  >
+                </label>
+                <label class="workout-set-done">
+                  <input
+                    type="checkbox"
+                    data-set-completed
+                    {% if set_row.completed %}checked{% endif %}
+                    {% if workout_safety_blocked %}disabled{% endif %}
+                  >
+                  <span>{{ t('coach_done') }}</span>
+                </label>
+              </div>
+            {% endfor %}
+          </div>
+
+          <div class="active-exercise-actions">
+            <button
+              type="button"
+              class="dreamz-button-primary"
+              data-complete-exercise
+              {% if workout_safety_blocked %}disabled{% endif %}
+            >
+              {{ t('active_workout_complete_exercise') }}
+            </button>
+            <details class="active-workout-skip">
+              <summary>{{ t('active_workout_skip_exercise') }}</summary>
+              <label>
+                <span>{{ t('active_workout_skip_reason') }}</span>
+                <select data-skip-reason {% if workout_safety_blocked %}disabled{% endif %}>
+                  <option value="">{{ t('choose_option') }}</option>
+                  <option value="pain" {% if exercise.skip_reason == 'pain' %}selected{% endif %}>{{ t('active_workout_skip_pain') }}</option>
+                  <option value="equipment" {% if exercise.skip_reason == 'equipment' %}selected{% endif %}>{{ t('active_workout_skip_equipment') }}</option>
+                  <option value="safety" {% if exercise.skip_reason == 'safety' %}selected{% endif %}>{{ t('active_workout_skip_safety') }}</option>
+                  <option value="other" {% if exercise.skip_reason == 'other' %}selected{% endif %}>{{ t('active_workout_skip_other') }}</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                class="dreamz-button-ghost"
+                data-skip-exercise
+                {% if workout_safety_blocked %}disabled{% endif %}
+              >
+                {{ t('active_workout_confirm_skip') }}
+              </button>
+            </details>
+          </div>
+          <div class="active-workout-inline-error hidden" role="alert" data-exercise-error></div>
+        </article>
+      {% endfor %}
+    </div>
+
+    <nav class="workout-sticky-controls" aria-label="{{ t('active_workout_exercise_navigation') }}">
+      <button type="button" class="dreamz-button-secondary" data-previous-exercise>
+        <span aria-hidden="true">&larr;</span> {{ t('active_workout_previous_exercise') }}
+      </button>
+      <button type="button" class="dreamz-button-primary" data-next-exercise>
+        {{ t('coach_next_exercise') }} <span aria-hidden="true">&rarr;</span>
+      </button>
+    </nav>
+
+    <details class="active-workout-overview">
+      <summary>{{ t('active_workout_overview') }}</summary>
+      <div class="active-workout-overview-list">
+        {% for row in exercise_rows %}
+          <button
+            type="button"
+            data-jump-exercise="{{ row.exercise.exercise_order }}"
+            data-overview-status="{{ row.exercise.completion_status }}"
+          >
+            <span data-overview-icon aria-hidden="true"></span>
+            <span>
+              <strong>{{ row.exercise.exercise_name }}</strong>
+              <small>{{ row.completed_sets }}/{{ row.sets|length }} {{ t('sets')|lower }}</small>
+              <span class="sr-only" data-overview-status-label>
+                {{ t('active_workout_status_' ~ row.exercise.completion_status) }}
+              </span>
+            </span>
+          </button>
+        {% endfor %}
+      </div>
+    </details>
+
+    <section class="active-workout-review hidden" data-workout-review>
+      <div class="active-workout-eyebrow">{{ t('active_workout_review_label') }}</div>
+      <h2 tabindex="-1" data-workout-review-heading>{{ t('active_workout_review_title') }}</h2>
+      <p>{{ t('active_workout_review_intro') }}</p>
+      <div class="active-workout-summary-grid">
+        <div>
+          <strong data-review-exercises>0</strong>
+          <span>{{ t('active_workout_exercises') }}</span>
+        </div>
+        <div>
+          <strong data-review-sets>0</strong>
+          <span>{{ t('active_workout_sets_completed') }}</span>
+        </div>
+        <div>
+          <strong data-review-skipped>0</strong>
+          <span>{{ t('active_workout_skipped') }}</span>
+        </div>
+      </div>
+      <button
+        type="button"
+        class="dreamz-button-primary w-full"
+        data-finish-workout
+        {% if workout_safety_blocked %}disabled{% endif %}
+      >
+        {{ t('active_workout_finish') }}
+      </button>
+      <div class="active-workout-inline-error hidden" role="alert" data-finish-error></div>
+    </section>
+
+    <details class="active-workout-discard">
+      <summary>{{ t('active_workout_stop_title') }}</summary>
+      <p>{{ t('active_workout_stop_intro') }}</p>
+      <button
+        type="button"
+        class="dreamz-button-danger"
+        data-discard-workout
+      >
+        {{ t('active_workout_discard') }}
+      </button>
+    </details>
+  {% endif %}
+</section>
+
+<script id="active-workout-config" type="application/json">
+  {{ {
+    "autosaveUrl": url_for("autosave_coach_workout_session", public_id=active_workout.public_id),
+    "elapsedUrl": url_for("update_coach_workout_elapsed", public_id=active_workout.public_id),
+    "finishUrl": url_for("finish_coach_workout_session", public_id=active_workout.public_id),
+    "discardUrl": url_for("discard_coach_workout_session", public_id=active_workout.public_id),
+    "coachUrl": url_for("member_coach"),
+    "csrfToken": csrf_token(),
+    "revision": active_workout.revision,
+    "activeExerciseOrder": active_workout.active_exercise_order,
+    "elapsedSeconds": elapsed_seconds,
+    "status": active_workout.status,
+    "texts": {
+      "saving": t("active_workout_saving"),
+      "saved": t("active_workout_saved"),
+      "saveError": t("active_workout_save_error"),
+      "offline": t("active_workout_offline"),
+      "conflict": t("active_workout_revision_conflict"),
+      "invalidValues": t("active_workout_invalid_values"),
+      "setsIncomplete": t("active_workout_sets_incomplete"),
+      "skipReason": t("active_workout_skip_reason_required"),
+      "finishBlocked": t("active_workout_finish_blocked"),
+      "finishConfirm": t("active_workout_finish_confirm"),
+      "finishing": t("active_workout_finishing"),
+      "discardConfirm": t("active_workout_discard_confirm"),
+      "discarding": t("active_workout_discarding"),
+      "discard": t("active_workout_discard"),
+      "finish": t("active_workout_finish"),
+      "setsLabel": t("sets"),
+      "pending": t("active_workout_status_pending"),
+      "completed": t("active_workout_status_completed"),
+      "skipped": t("active_workout_status_skipped"),
+      "exerciseProgress": t("active_workout_exercise_progress"),
+      "percentComplete": t("active_workout_percent_complete"),
+      "reviewWorkout": t("active_workout_review_workout")
+    }
+  }|tojson }}
+</script>
+<script src="{{ url_for('static', filename='js/coach-workout.js', v=static_asset_version('js/coach-workout.js')) }}" defer></script>
+{% endblock %}

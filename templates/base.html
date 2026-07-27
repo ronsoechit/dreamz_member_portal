@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ current_language }}">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -14,13 +14,13 @@
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
   <link href="{{ url_for('static', filename='css/premium.css', v=static_asset_version('css/premium.css')) }}" rel="stylesheet">
 </head>
-<body class="app-body {% if current_staff_role %}staff-app-body{% endif %} bg-gray-900 text-white min-h-screen flex flex-col">
+<body class="app-body {% if current_staff_role %}staff-app-body{% elif current_member_id %}member-app-body{% endif %} {% if active_workout_mode %}active-workout-body{% endif %} bg-gray-900 text-white min-h-screen flex flex-col">
   {% include "_loading_state.html" %}
 
   <header class="app-header {% if current_staff_role %}staff-header{% endif %} bg-gray-800 shadow-md">
     <div class="container mx-auto flex flex-col gap-4 px-5 py-4">
       <div class="header-top-row flex items-center justify-between gap-3">
-        <a href="{% if current_staff_role == 'manager' %}{{ url_for('staff_daily_changes') }}{% elif current_staff_role %}{{ url_for('staff_home') }}{% else %}/{% endif %}" class="brand-mark shrink-0">
+        <a href="{% if current_staff_role == 'manager' %}{{ url_for('staff_daily_changes') }}{% elif current_staff_role %}{{ url_for('staff_home') }}{% elif current_member_id %}{{ url_for('dashboard', id=current_member_id) }}{% else %}/{% endif %}" class="brand-mark shrink-0">
           <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Logo" class="h-10">
         </a>
         {% if current_staff_role %}
@@ -33,7 +33,7 @@
               {% endfor %}
             </select>
           </form>
-        {% else %}
+        {% elif not active_workout_mode %}
           <div class="language-switcher flex items-center justify-end gap-1 text-xs">
             {% for code, label in available_languages.items() %}
               <a
@@ -92,39 +92,21 @@
           <div class="flex justify-end">
             <a class="rounded border border-gray-700 bg-gray-900/40 px-3 py-2 text-sm text-yellow-400 hover:bg-gray-700 hover:text-yellow-300" href="{{ url_for('staff_logout') }}">{{ t('staff_logout_nav') }}</a>
           </div>
-        {% elif current_member_id %}
+        {% elif current_member_id and not active_workout_mode %}
           <nav class="app-nav member-nav flex flex-wrap items-center gap-1 rounded border border-gray-700 bg-gray-900/40 p-1 text-xs sm:text-sm" aria-label="{{ t('member_navigation') }}">
-            <a class="member-nav-link rounded px-2 py-2 sm:px-3 {% if request.endpoint == 'dashboard' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('dashboard', id=current_member_id) }}">
+            <a class="member-nav-link rounded px-2 py-2 sm:px-3 {% if request.endpoint == 'dashboard' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('dashboard', id=current_member_id) }}" {% if request.endpoint == 'dashboard' %}aria-current="page"{% endif %}>
               <span class="member-nav-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" fill="none"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1v-9.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
               </span>
               <span class="member-nav-text">{{ t('dashboard') }}</span>
             </a>
-            <a class="member-nav-link rounded px-2 py-2 sm:px-3 {% if request.endpoint == 'member_coach' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('member_coach') }}">
+            <a class="member-nav-link rounded px-2 py-2 sm:px-3 {% if request.endpoint in ['member_coach', 'member_nutrition', 'member_group_classes', 'member_group_class_preferences_save', 'member_group_class_plan_add', 'member_group_class_plan_remove', 'member_group_class_attendance_save', 'member_equipment_library', 'member_equipment_detail'] %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('member_coach') }}" {% if request.endpoint in ['member_coach', 'member_nutrition', 'member_group_classes', 'member_group_class_preferences_save', 'member_group_class_plan_add', 'member_group_class_plan_remove', 'member_group_class_attendance_save', 'member_equipment_library', 'member_equipment_detail'] %}aria-current="page"{% endif %}>
               <span class="member-nav-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" fill="none"><path d="M6 14 3.8 11.8m16.4 0L18 14M7 17l10-10m-8 8 6-6M5 12l7 7 7-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </span>
               <span class="member-nav-text">{{ t('my_coach') }}</span>
             </a>
-            <a class="member-nav-link rounded px-2 py-2 sm:px-3 {% if request.endpoint == 'member_nutrition' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('member_nutrition') }}">
-              <span class="member-nav-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none"><path d="M12 7c4.4 0 7 2.8 7 6.4 0 4.3-3.2 7.1-7 7.1s-7-2.8-7-7.1C5 9.8 7.6 7 12 7Z" stroke="currentColor" stroke-width="1.8"/><path d="M12 7c.2-2 1.2-3.4 3-4M12 7C10.8 5.6 9.3 5 7.5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-              </span>
-              <span class="member-nav-text">{{ t('nutrition') }}</span>
-            </a>
-            <a class="member-nav-link rounded px-2 py-2 sm:px-3 {% if request.endpoint in ['member_group_classes', 'member_group_class_preferences_save', 'member_group_class_plan_add', 'member_group_class_plan_remove', 'member_group_class_attendance_save'] %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('member_group_classes') }}">
-              <span class="member-nav-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none"><path d="M7 4v3m10-3v3M5 8h14M6 6h12a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M8.5 13h2.5m2 0h2.5M8.5 16h2.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-              </span>
-              <span class="member-nav-text">{{ t('nav_group_classes') }}</span>
-            </a>
-            <a class="member-nav-link rounded px-2 py-2 sm:px-3 {% if request.endpoint in ['member_equipment_library', 'member_equipment_detail'] %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('member_equipment_library') }}">
-              <span class="member-nav-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none"><path d="M4 8h16M4 16h16M6 6v4m12-4v4M6 14v4m12-4v4M9 12h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-              </span>
-              <span class="member-nav-text">{{ t('equipment') }}</span>
-            </a>
-            <a class="member-nav-link rounded px-2 py-2 sm:px-3 {% if request.endpoint == 'member_progress' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('member_progress') }}">
+            <a class="member-nav-link rounded px-2 py-2 sm:px-3 {% if request.endpoint == 'member_progress' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('member_progress') }}" {% if request.endpoint == 'member_progress' %}aria-current="page"{% endif %}>
               <span class="member-nav-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" fill="none"><path d="M5 19V5m0 14h14M9 16v-5m4 5V8m4 8v-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </span>
@@ -134,6 +116,7 @@
               class="account-nav-link member-nav-link relative rounded px-2 py-2 sm:px-3 {% if account_notification_count %}pr-6{% endif %} {% if request.endpoint in ['member_account', 'member_account_membership', 'member_account_billing', 'member_account_invoices', 'member_download_invoice', 'member_agreements', 'member_account_documents', 'member_account_profile', 'member_account_preferences', 'member_account_security', 'member_membership_options', 'set_member_password'] %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}"
               href="{{ url_for('member_account') }}"
               aria-label="{{ t('account') }}{% if account_notification_count %}, {{ t('account_notifications')|replace('{count}', account_notification_count|string) }}{% endif %}"
+              {% if request.endpoint in ['member_account', 'member_account_membership', 'member_account_billing', 'member_account_invoices', 'member_download_invoice', 'member_agreements', 'member_account_documents', 'member_account_profile', 'member_account_preferences', 'member_account_security', 'member_membership_options', 'set_member_password'] %}aria-current="page"{% endif %}
             >
               <span class="member-nav-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" fill="none"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4.5 20c1.1-3.2 3.7-5 7.5-5s6.4 1.8 7.5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
@@ -165,7 +148,7 @@
 		{% endif %}
 	  {% endwith %}
 
-    {% if current_member_id and not current_staff_role %}
+    {% if current_member_id and not current_staff_role and not active_workout_mode %}
       <section class="pwa-install-card hidden mb-5" data-pwa-install hidden>
         <div>
           <div class="text-xs font-semibold uppercase tracking-wide text-yellow-300">{{ t('pwa_install_label') }}</div>
@@ -190,7 +173,7 @@
 	  {% block content %}{% endblock %}
   </main>
 
-  {% if current_member_id and not current_staff_role %}
+  {% if current_member_id and not current_staff_role and not active_workout_mode %}
     <div class="dreamz-coach-widget" data-floating-coach data-message-url="{{ url_for('coach_message') }}" data-csrf-token="{{ csrf_token() }}">
       <button type="button" class="dreamz-coach-fab" data-floating-coach-toggle aria-label="{{ t('open_dreamz_coach') }}" aria-expanded="false">
         <span class="dreamz-coach-avatar" aria-hidden="true">DC</span>

@@ -22,7 +22,8 @@ os.environ["SECRET_KEY"] = "test-secret"
 
 from cancellation_policy import evaluate_cancellation_policy  # noqa: E402
 from translations import LANGUAGES, TRANSLATIONS  # noqa: E402
-from dreamz_portal import AppSetting, AgreementCategory, CancellationConfirmation, CancellationRequest, CancellationWindow, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, DigitalSignatureAuditTrail, DigitalSignatureRecord, EmailLog, EquipmentCategory, EquipmentItem, FeatureAccessRule, GroupClassOccurrence, GroupClassSchedule, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, MealLog, Member, MemberAgreementAcceptance, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, MemberSignedDocument, MembershipApplication, MembershipApplicationAuditEvent, MembershipApplicationDocument, MembershipApplicationStatus, MembershipApplicationStep, PricingCategory, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, SignedPdfRecord, app, cancellation_message, coach_context_summary, coach_equipment_direct_reply, coach_plan_for_member, coach_profile_completion, coach_today_group_class_reply, db, equipment_context_for_ai, is_group_class_schedule_question, matching_equipment_for_exercise, member_access_profile, member_account_notification_count, next_date_for_group_class, pricing_item_access_tags, pricing_visibility_list, seed_equipment_library, seed_feature_access_rules, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
+import dreamz_portal as portal_module  # noqa: E402
+from dreamz_portal import AppSetting, AgreementCategory, CancellationConfirmation, CancellationRequest, CancellationWindow, CoachActiveWorkout, CoachActiveWorkoutExercise, CoachActiveWorkoutSet, CoachActivityLog, CoachInteraction, CoachPlan, CoachProfile, CoachProgressEntry, CoachWorkoutExerciseLog, CoachWorkoutSession, COACH_PLAN_SCHEMA_VERSION, DigitalSignatureAuditTrail, DigitalSignatureRecord, EmailLog, EquipmentCategory, EquipmentItem, FeatureAccessRule, GroupClassOccurrence, GroupClassSchedule, GroupClassType, LegalDocument, LegalDocumentVersion, LegalTranslation, MealLog, Member, MemberAgreementAcceptance, MemberClassAttendance, MemberClassPlan, MemberClassPreference, MemberDocument, MemberLoginCode, MemberSignedDocument, MembershipApplication, MembershipApplicationAuditEvent, MembershipApplicationDocument, MembershipApplicationStatus, MembershipApplicationStep, PricingCategory, PricingItem, RequiredAgreementRule, ScheduleChangeNotification, SignedPdfRecord, app, cancellation_message, coach_context_summary, coach_equipment_direct_reply, coach_exercise_tracking_mode, coach_plan_for_member, coach_profile_completion, coach_today_group_class_reply, db, equipment_context_for_ai, is_group_class_schedule_question, matching_equipment_for_exercise, member_access_profile, member_account_notification_count, next_date_for_group_class, pricing_item_access_tags, pricing_visibility_list, recent_coach_workout_summary, seed_equipment_library, seed_feature_access_rules, seed_group_class_schedule, seed_legal_documents, seed_pricing_catalog  # noqa: E402
 from dreamz_portal import WhatsAppAuditLog, WhatsAppLoginOtp, WhatsAppTokenRecord  # noqa: E402
 from whatsapp_auth import WhatsAppSendResult, normalize_phone_number, phone_digits  # noqa: E402
 
@@ -137,6 +138,89 @@ class PortalRouteTests(unittest.TestCase):
         with self.client.session_transaction() as sess:
             sess["_csrf_token"] = "test-csrf-token"
         return {"csrf_token": "test-csrf-token", **data}
+
+    def add_complete_coach_profile(self, member_id="13659", **overrides):
+        member = Member.query.filter_by(member_id=member_id).first()
+        if member is not None and member.birthdate is None:
+            member.birthdate = date(1990, 1, 1)
+        data = {
+            "member_id": member_id,
+            "sex": "male",
+            "primary_goal": "build_muscle",
+            "experience_level": "intermediate",
+            "training_days": 2,
+            "session_minutes": 45,
+            "training_place": "dreamz_gym",
+            "height_cm": 180,
+            "weight_kg": 82,
+            "injuries": "none",
+            "nutrition_goal": "muscle_gain",
+            "dietary_preferences": "none",
+            "allergies": "none",
+        }
+        data.update(overrides)
+        profile = CoachProfile(**data)
+        db.session.add(profile)
+        db.session.commit()
+        return profile
+
+    def start_active_workout(self, session_number=1, request_id="workout-start-request-001"):
+        with self.client.session_transaction() as browser_session:
+            browser_session["_csrf_token"] = "csrf-test-token"
+        return self.client.post(
+            "/coach/workout-session/start",
+            json={
+                "requestId": request_id,
+                "sessionNumber": session_number,
+            },
+            headers={
+                "X-CSRF-Token": "csrf-test-token",
+                "Idempotency-Key": request_id,
+            },
+        )
+
+    def autosave_active_exercise(
+        self,
+        workout,
+        exercise,
+        *,
+        revision,
+        status="completed",
+        request_id=None,
+        skip_reason="",
+        set_completed=None,
+        elapsed_seconds=125,
+    ):
+        set_rows = (
+            CoachActiveWorkoutSet.query
+            .filter_by(active_exercise_id=exercise.id)
+            .order_by(CoachActiveWorkoutSet.set_number.asc())
+            .all()
+        )
+        set_payloads = []
+        for set_row in set_rows:
+            set_payloads.append({
+                "setNumber": set_row.set_number,
+                "reps": None if exercise.tracking_mode == "duration" else 10 + set_row.set_number,
+                "durationSeconds": 600 if exercise.tracking_mode == "duration" else None,
+                "weightKg": 40 + set_row.set_number,
+                "rpe": 7.5,
+                "completed": status == "completed" if set_completed is None else set_completed,
+            })
+        return self.client.post(
+            f"/coach/workout-session/{workout.public_id}/autosave",
+            json={
+                "requestId": request_id or f"save-{exercise.id}-{revision}-request",
+                "revision": revision,
+                "exerciseOrder": exercise.exercise_order,
+                "activeExerciseOrder": exercise.exercise_order,
+                "exerciseStatus": status,
+                "skipReason": skip_reason,
+                "elapsedSeconds": elapsed_seconds,
+                "sets": set_payloads,
+            },
+            headers={"X-CSRF-Token": "csrf-test-token"},
+        )
 
     def get_login_csrf_token(self):
         response = self.client.get("/login")
@@ -302,6 +386,16 @@ class PortalRouteTests(unittest.TestCase):
 
         for language in LANGUAGES:
             self.assertEqual(key_sets[language], expected_keys, language)
+            self.assertIn(
+                TRANSLATIONS[language]["my_coach"],
+                TRANSLATIONS[language]["active_workout_back_to_coach"],
+                language,
+            )
+            self.assertIn(
+                TRANSLATIONS[language]["my_coach"],
+                TRANSLATIONS[language]["active_workout_legacy_retired"],
+                language,
+            )
 
     def test_group_class_member_page_renders_in_all_languages(self):
         self.add_member(member_id="13659", name="Ron Soechit")
@@ -378,6 +472,7 @@ class PortalRouteTests(unittest.TestCase):
                 response = client.get("/login")
                 self.assertEqual(response.status_code, 200)
                 body = response.get_data(as_text=True)
+                self.assertIn(f'<html lang="{language}">', body)
                 for expected in expected_texts:
                     self.assertIn(expected, body)
 
@@ -636,8 +731,8 @@ class PortalRouteTests(unittest.TestCase):
         self.assertNotIn("View membership options", body)
         self.assertIn("Current term ends", body)
         self.assertIn("Open gym balance", body)
-        self.assertLess(body.index("Continue your Dreamz training"), body.index("Nutrition plan"))
-        self.assertLess(body.index("Nutrition plan"), body.index("Today at Dreamz"))
+        self.assertLess(body.index("Continue your Dreamz training"), body.index("Today at Dreamz"))
+        self.assertLess(body.index("Today at Dreamz"), body.index("Nutrition plan"))
         self.assertNotIn("Set your goals, training rhythm", body)
 
     def test_coach_profile_complete_status_is_compact(self):
@@ -672,6 +767,8 @@ class PortalRouteTests(unittest.TestCase):
         body = response.get_data(as_text=True)
         self.assertIn("Coach profile 100% complete", body)
         self.assertIn("Edit", body)
+        self.assertIn("Next workout ready", body)
+        self.assertNotIn("Today is ready", body)
         self.assertIn("Equipment Library", body)
         self.assertIn('href="/equipment"', body)
         self.assertNotIn("Update coach profile</button>", body)
@@ -1055,17 +1152,22 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Sets", body)
         self.assertIn("Reps", body)
         self.assertIn("Start session", body)
+        self.assertIn("data-start-workout", body)
         self.assertIn("Watch demo", body)
         self.assertIn("Warm-up", body)
-        self.assertIn("Finish session", body)
-        self.assertIn("Mark this exercise as done before continuing.", body)
+        self.assertIn("automatic saving", body)
+        self.assertNotIn("Finish session", body)
         self.assertIn("Bonaire-friendly basics", body)
-        self.assertIn("data-save-url", body)
+        self.assertIn("/coach/workout-session/start", body)
         self.assertIn("data-activity-log-form", body)
         self.assertIn("data-session-tab", body)
         self.assertIn("data-calendar-day", body)
         self.assertIn("data-calendar-day-detail", body)
         self.assertIn("data-exercise-toggle", body)
+        self.assertIn('role="tab" id="coach-view-tab-training"', body)
+        self.assertIn('aria-controls="coach-panel-sessions"', body)
+        self.assertIn('role="tabpanel" aria-labelledby="coach-view-tab-sessions"', body)
+        self.assertIn('aria-expanded="false" aria-controls="coach-exercise-detail-', body)
         self.assertIn("Use a controlled weight", body)
         self.assertIn("Build muscle", body)
 
@@ -1367,55 +1469,697 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(CoachProfile.query.filter_by(member_id="13659").count(), 0)
         self.assertIn("Please complete the pregnancy safety questions", response.get_data(as_text=True))
 
-    def test_coach_workout_log_can_be_saved(self):
+    def test_legacy_coach_workout_log_is_retired_without_writing_history(self):
         self.add_member(member_id="13659", name="Ron Soechit")
-        db.session.add(CoachPlan(member_id="13659", plan_json="[]"))
-        db.session.commit()
         self.login_as("13659")
         with self.client.session_transaction() as browser_session:
             browser_session["_csrf_token"] = "csrf-test-token"
 
         response = self.client.post(
             "/coach/workout-log",
-            json={
-                "sessionNumber": 1,
-                "focus": "lower body muscle building",
-                "minutes": 45,
-                "exercises": [
-                    {
-                        "name": "Leg press",
-                        "equipment": "Machine",
-                        "sets": "3",
-                        "reps": "10-12",
-                        "rest": "90 sec",
-                        "weightUsed": "50",
-                        "repsCompleted": "12",
-                        "done": True,
-                    },
-                    {
-                        "name": "Hip thrust",
-                        "equipment": "Machine or barbell",
-                        "sets": "3",
-                        "reps": "10-12",
-                        "rest": "90 sec",
-                        "weightUsed": "40",
-                        "repsCompleted": "10",
-                        "done": True,
-                    },
-                ],
-            },
+            json={"sessionNumber": 1, "exercises": []},
             headers={"X-CSRF-Token": "csrf-test-token"},
         )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("coach_reply", response.get_json())
-        self.assertEqual(CoachWorkoutSession.query.filter_by(member_id="13659").count(), 1)
-        self.assertEqual(CoachWorkoutExerciseLog.query.filter_by(member_id="13659").count(), 2)
+        self.assertEqual(response.status_code, 410)
+        self.assertEqual(response.get_json()["code"], "legacy_workout_endpoint_retired")
+        self.assertEqual(CoachWorkoutSession.query.filter_by(member_id="13659").count(), 0)
+        self.assertEqual(CoachWorkoutExerciseLog.query.filter_by(member_id="13659").count(), 0)
+
+    def test_active_workout_start_is_durable_and_idempotent(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.add_complete_coach_profile()
+        self.login_as("13659")
+
+        first_response = self.start_active_workout()
+        self.assertEqual(first_response.status_code, 201)
+        first_payload = first_response.get_json()
+        workout = CoachActiveWorkout.query.filter_by(member_id="13659").one()
+        exercises = (
+            CoachActiveWorkoutExercise.query
+            .filter_by(active_workout_id=workout.id)
+            .order_by(CoachActiveWorkoutExercise.exercise_order.asc())
+            .all()
+        )
+
+        self.assertEqual(first_payload["sessionId"], workout.public_id)
+        self.assertEqual(workout.status, "active")
+        self.assertEqual(workout.active_member_id, "13659")
+        self.assertEqual(workout.revision, 0)
+        self.assertEqual(workout.session_number, 1)
+        self.assertEqual(workout.plan_version, COACH_PLAN_SCHEMA_VERSION)
+        self.assertGreater(len(exercises), 0)
+        self.assertEqual(
+            CoachActiveWorkoutSet.query.filter_by(member_id="13659").count(),
+            sum(exercise.planned_set_count for exercise in exercises),
+        )
+        self.assertEqual(CoachWorkoutSession.query.filter_by(member_id="13659").count(), 0)
+        self.assertEqual(CoachInteraction.query.filter_by(member_id="13659").count(), 0)
+
+        retry_response = self.start_active_workout()
+        self.assertEqual(retry_response.status_code, 200)
+        self.assertEqual(retry_response.get_json()["sessionId"], workout.public_id)
+        self.assertTrue(retry_response.get_json()["resumed"])
+        self.assertEqual(CoachActiveWorkout.query.filter_by(member_id="13659").count(), 1)
+
+        conflicting_retry = self.start_active_workout(
+            session_number=2,
+            request_id="workout-start-request-001",
+        )
+        self.assertEqual(conflicting_retry.status_code, 409)
+        self.assertEqual(conflicting_retry.get_json()["code"], "idempotency_conflict")
+
+        second_request = self.start_active_workout(
+            session_number=2,
+            request_id="workout-start-request-002",
+        )
+        self.assertEqual(second_request.status_code, 200)
+        self.assertEqual(second_request.get_json()["sessionId"], workout.public_id)
+        self.assertEqual(CoachActiveWorkout.query.filter_by(member_id="13659").count(), 1)
+
+        coach_page = self.client.get("/coach").get_data(as_text=True)
+        dashboard_page = self.client.get("/dashboard?id=13659").get_data(as_text=True)
+        self.assertIn("Resume workout", coach_page)
+        self.assertIn(first_payload["url"], coach_page)
+        second_session_panel = re.search(
+            r'id="coach-session-panel-1".*?</article>',
+            coach_page,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(second_session_panel)
+        self.assertNotIn(first_payload["url"], second_session_panel.group(0))
+        self.assertIn("Workout in progress", second_session_panel.group(0))
+        self.assertIn("Continue your workout", dashboard_page)
+        self.assertIn(first_payload["url"], dashboard_page)
+
+    def test_active_workout_start_requires_auth_csrf_profile_and_safe_session(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+
+        anonymous = self.client.post(
+            "/coach/workout-session/start",
+            json={"requestId": "anonymous-start-request", "sessionNumber": 1},
+            headers={"X-CSRF-Token": "csrf-test-token"},
+        )
+        self.assertEqual(anonymous.status_code, 401)
+        self.assertEqual(anonymous.get_json()["code"], "login_required")
+
+        self.login_as("13659")
+        no_csrf = self.client.post(
+            "/coach/workout-session/start",
+            json={"requestId": "missing-csrf-request", "sessionNumber": 1},
+        )
+        self.assertEqual(no_csrf.status_code, 400)
+        self.assertEqual(no_csrf.get_json()["code"], "invalid_csrf")
+
+        incomplete_profile = self.start_active_workout()
+        self.assertEqual(incomplete_profile.status_code, 422)
+        self.assertEqual(incomplete_profile.get_json()["code"], "profile_incomplete")
+        self.assertEqual(CoachActiveWorkout.query.count(), 0)
+
+        self.add_complete_coach_profile()
+        unavailable = self.start_active_workout(
+            session_number=50,
+            request_id="unavailable-session-request",
+        )
+        self.assertEqual(unavailable.status_code, 422)
+        self.assertEqual(unavailable.get_json()["code"], "session_unavailable")
+        self.assertEqual(CoachActiveWorkout.query.count(), 0)
+
+    def test_active_workout_start_is_blocked_by_current_pregnancy_warning(self):
+        self.add_member(member_id="13659", name="Pregnant Member")
+        self.add_complete_coach_profile(
+            sex="female",
+            pregnancy_status="pregnant",
+            gestational_weeks=22,
+            multiple_pregnancy="no",
+            provider_cleared_exercise="yes",
+            pregnancy_symptoms=json.dumps(["vaginal_bleeding"]),
+            pregnancy_consent=True,
+        )
+        self.login_as("13659")
+
+        response = self.start_active_workout()
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["code"], "safety_blocked")
+        self.assertEqual(CoachActiveWorkout.query.count(), 0)
+        self.assertEqual(CoachWorkoutSession.query.count(), 0)
+
+    def test_active_workout_duration_detection_and_nonfinite_numbers_are_safe(self):
+        for planned_reps in (
+            "30 sec",
+            "30 seconden",
+            "30 sekònde",
+            "30 segundos",
+            "45s",
+            "10-20 min",
+        ):
+            with self.subTest(planned_reps=planned_reps):
+                self.assertEqual(coach_exercise_tracking_mode(planned_reps), "duration")
+        self.assertEqual(coach_exercise_tracking_mode("8-12"), "reps")
+
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.add_complete_coach_profile()
+        self.login_as("13659")
+        response = self.start_active_workout(
+            session_number=float("inf"),
+            request_id="nonfinite-start-request",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["code"], "invalid_start")
+        self.assertEqual(CoachActiveWorkout.query.count(), 0)
+
+    def test_active_workout_external_script_is_valid_and_guards_lifecycle_races(self):
+        script_path = Path(__file__).resolve().parents[1] / "static" / "js" / "coach-workout.js"
+        script = script_path.read_text(encoding="utf-8")
+        self.assertIn("Number(payload.revision) !== revision", script)
+        self.assertIn("dreamz-active-workout-draft:", script)
+        self.assertIn("visibilitychange", script)
+        self.assertIn("persistElapsedTime", script)
+        self.assertIn("window.clearTimeout(autosaveTimer)", script)
+        node_path = shutil.which("node")
+        if not node_path:
+            self.skipTest("Node.js is not available for workout JavaScript syntax check")
+        result = subprocess.run(
+            [node_path, "--check", str(script_path)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_active_workout_blocks_saves_when_safety_changes_after_start(self):
+        self.add_member(member_id="13659", name="Pregnant Member")
+        profile = self.add_complete_coach_profile()
+        self.login_as("13659")
+        self.assertEqual(self.start_active_workout().status_code, 201)
+        workout = CoachActiveWorkout.query.filter_by(member_id="13659").one()
+        exercise = (
+            CoachActiveWorkoutExercise.query
+            .filter_by(active_workout_id=workout.id)
+            .order_by(CoachActiveWorkoutExercise.exercise_order.asc())
+            .first()
+        )
+        profile.sex = "female"
+        profile.pregnancy_status = "pregnant"
+        profile.gestational_weeks = 22
+        profile.multiple_pregnancy = "no"
+        profile.provider_cleared_exercise = "no"
+        profile.pregnancy_symptoms = json.dumps([])
+        profile.pregnancy_consent = True
+        db.session.commit()
+
+        save_response = self.autosave_active_exercise(
+            workout,
+            exercise,
+            revision=0,
+            request_id="safety-change-save-request",
+        )
+        finish_response = self.client.post(
+            f"/coach/workout-session/{workout.public_id}/finish",
+            json={"requestId": "safety-change-finish-request", "revision": 0},
+            headers={"X-CSRF-Token": "csrf-test-token"},
+        )
+        resume_page = self.client.get(f"/coach/workout-session/{workout.public_id}")
+
+        self.assertEqual(save_response.status_code, 409)
+        self.assertEqual(save_response.get_json()["code"], "safety_blocked")
+        self.assertEqual(finish_response.status_code, 409)
+        self.assertEqual(finish_response.get_json()["code"], "safety_blocked")
+        self.assertEqual(CoachWorkoutSession.query.filter_by(member_id="13659").count(), 0)
+        self.assertIn("data-safety-blocked=\"true\"", resume_page.get_data(as_text=True))
+
+    def test_active_workout_autosave_resumes_and_rejects_stale_or_foreign_updates(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.add_member(member_id="24680", name="Other Member")
+        self.add_complete_coach_profile()
+        self.login_as("13659")
+        self.assertEqual(self.start_active_workout().status_code, 201)
+        workout = CoachActiveWorkout.query.filter_by(member_id="13659").one()
+        exercise = (
+            CoachActiveWorkoutExercise.query
+            .filter_by(active_workout_id=workout.id)
+            .order_by(CoachActiveWorkoutExercise.exercise_order.asc())
+            .first()
+        )
+
+        saved = self.autosave_active_exercise(
+            workout,
+            exercise,
+            revision=0,
+            request_id="stable-autosave-request-001",
+        )
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(saved.get_json()["revision"], 1)
+        db.session.refresh(workout)
+        db.session.refresh(exercise)
+        first_set = (
+            CoachActiveWorkoutSet.query
+            .filter_by(active_exercise_id=exercise.id, set_number=1)
+            .one()
+        )
+        self.assertEqual(workout.revision, 1)
+        self.assertEqual(exercise.completion_status, "completed")
+        self.assertTrue(first_set.completed)
+        self.assertEqual(first_set.reps_completed, 11)
+        self.assertEqual(float(first_set.weight_kg), 41.0)
+        self.assertEqual(float(first_set.rpe), 7.5)
+
+        replay = self.autosave_active_exercise(
+            workout,
+            exercise,
+            revision=0,
+            request_id="stable-autosave-request-001",
+        )
+        self.assertEqual(replay.status_code, 200)
+        self.assertEqual(replay.get_json()["revision"], 1)
+        self.assertEqual(CoachActiveWorkoutSet.query.filter_by(active_exercise_id=exercise.id).count(), exercise.planned_set_count)
+
+        stale = self.autosave_active_exercise(
+            workout,
+            exercise,
+            revision=0,
+            request_id="stale-autosave-request-002",
+        )
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(stale.get_json()["code"], "revision_conflict")
+        self.assertEqual(stale.get_json()["serverRevision"], 1)
+
+        with self.client.session_transaction() as browser_session:
+            browser_session["language"] = "nl"
+        resume_page = self.client.get(f"/coach/workout-session/{workout.public_id}")
+        resume_body = resume_page.get_data(as_text=True)
+        self.assertEqual(resume_page.status_code, 200)
+        self.assertEqual(resume_page.headers["Cache-Control"], "private, no-store")
+        self.assertIn("active-workout-body", resume_body)
+        self.assertIn('<html lang="en">', resume_body)
+        self.assertIn("Active workout", resume_body)
+        self.assertNotIn("Actieve training", resume_body)
+        self.assertIn('value="41.00"', resume_body)
+        self.assertIn(f"/coach/workout-session/{workout.public_id}/elapsed", resume_body)
+        self.assertIn('tabindex="-1" data-exercise-heading', resume_body)
+        self.assertIn('tabindex="-1" data-workout-review-heading', resume_body)
+        self.assertIn("data-overview-status-label", resume_body)
+        self.assertNotIn('class="app-nav member-nav', resume_body)
+        with self.client.session_transaction() as browser_session:
+            self.assertEqual(browser_session["language"], "nl")
+
+        elapsed_update = self.client.post(
+            f"/coach/workout-session/{workout.public_id}/elapsed",
+            json={"elapsedSeconds": 500},
+            headers={"X-CSRF-Token": "csrf-test-token"},
+        )
+        elapsed_replay = self.client.post(
+            f"/coach/workout-session/{workout.public_id}/elapsed",
+            json={"elapsedSeconds": 300},
+            headers={"X-CSRF-Token": "csrf-test-token"},
+        )
+        self.assertEqual(elapsed_update.status_code, 200)
+        self.assertEqual(elapsed_replay.status_code, 200)
+        self.assertEqual(elapsed_replay.get_json()["elapsedSeconds"], 500)
+        db.session.refresh(workout)
+        self.assertEqual(workout.elapsed_seconds, 500)
+        self.assertEqual(workout.revision, 1)
+
+        self.login_as("24680")
+        foreign_page = self.client.get(f"/coach/workout-session/{workout.public_id}")
+        foreign_save = self.client.post(
+            f"/coach/workout-session/{workout.public_id}/autosave",
+            json={
+                "requestId": "foreign-autosave-request",
+                "revision": 1,
+                "exerciseOrder": 1,
+                "activeExerciseOrder": 1,
+                "exerciseStatus": "pending",
+                "sets": [],
+            },
+            headers={"X-CSRF-Token": "test-csrf-token"},
+        )
+        foreign_finish = self.client.post(
+            f"/coach/workout-session/{workout.public_id}/finish",
+            json={"requestId": "foreign-finish-request", "revision": 1},
+            headers={"X-CSRF-Token": "test-csrf-token"},
+        )
+        foreign_elapsed = self.client.post(
+            f"/coach/workout-session/{workout.public_id}/elapsed",
+            json={"elapsedSeconds": 600},
+            headers={"X-CSRF-Token": "test-csrf-token"},
+        )
+        foreign_discard = self.client.post(
+            f"/coach/workout-session/{workout.public_id}/discard",
+            json={"revision": 1},
+            headers={"X-CSRF-Token": "test-csrf-token"},
+        )
+        self.assertEqual(foreign_page.status_code, 404)
+        self.assertEqual(foreign_save.status_code, 404)
+        self.assertEqual(foreign_save.get_json()["code"], "workout_not_found")
+        self.assertEqual(foreign_finish.status_code, 404)
+        self.assertEqual(foreign_finish.get_json()["code"], "workout_not_found")
+        self.assertEqual(foreign_elapsed.status_code, 404)
+        self.assertEqual(foreign_elapsed.get_json()["code"], "workout_not_found")
+        self.assertEqual(foreign_discard.status_code, 404)
+        self.assertEqual(foreign_discard.get_json()["code"], "workout_not_found")
+
+    def test_active_workout_finish_is_transactional_and_idempotent(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.add_complete_coach_profile()
+        self.login_as("13659")
+        self.assertEqual(self.start_active_workout().status_code, 201)
+        workout = CoachActiveWorkout.query.filter_by(member_id="13659").one()
+        workout.started_at = datetime.now() - timedelta(days=1)
+        db.session.commit()
+        exercises = (
+            CoachActiveWorkoutExercise.query
+            .filter_by(active_workout_id=workout.id)
+            .order_by(CoachActiveWorkoutExercise.exercise_order.asc())
+            .all()
+        )
+        revision = 0
+        for exercise in exercises:
+            save_response = self.autosave_active_exercise(
+                workout,
+                exercise,
+                revision=revision,
+                request_id=f"complete-exercise-{exercise.exercise_order}-request",
+            )
+            self.assertEqual(save_response.status_code, 200)
+            revision = save_response.get_json()["revision"]
+
+        finish_response = self.client.post(
+            f"/coach/workout-session/{workout.public_id}/finish",
+            json={
+                "requestId": "finish-workout-request-001",
+                "revision": revision,
+                "elapsedSeconds": 130,
+            },
+            headers={"X-CSRF-Token": "csrf-test-token"},
+        )
+        self.assertEqual(finish_response.status_code, 200)
+        finish_payload = finish_response.get_json()
+        completed_workout = CoachWorkoutSession.query.filter_by(member_id="13659").one()
+        db.session.refresh(workout)
+
+        self.assertEqual(finish_payload["workoutId"], completed_workout.id)
+        self.assertEqual(workout.status, "completed")
+        self.assertIsNone(workout.active_member_id)
+        self.assertEqual(workout.completed_session_id, completed_workout.id)
+        self.assertEqual(workout.elapsed_seconds, 130)
+        self.assertEqual(finish_payload["summary"]["duration_minutes"], 2)
+        self.assertEqual(completed_workout.started_at, workout.started_at)
+        self.assertEqual(
+            CoachWorkoutExerciseLog.query.filter_by(workout_session_id=completed_workout.id).count(),
+            len(exercises),
+        )
+        self.assertEqual(
+            CoachActiveWorkoutSet.query.filter(
+                CoachActiveWorkoutSet.completed_exercise_log_id.isnot(None)
+            ).count(),
+            CoachActiveWorkoutSet.query.filter_by(member_id="13659").count(),
+        )
         self.assertEqual(CoachInteraction.query.filter_by(member_id="13659", category="workout_feedback").count(), 1)
         self.assertEqual(CoachPlan.query.filter_by(member_id="13659").count(), 0)
-        log = CoachWorkoutExerciseLog.query.filter_by(exercise_name="Leg press").one()
-        self.assertEqual(log.weight_used, "50")
-        self.assertEqual(log.reps_completed, "12")
+        self.assertIsNone(
+            CoachActiveWorkout.query.filter_by(
+                member_id="13659",
+                status="active",
+            ).first()
+        )
+
+        retry = self.client.post(
+            f"/coach/workout-session/{workout.public_id}/finish",
+            json={"requestId": "finish-workout-request-002", "revision": workout.revision},
+            headers={"X-CSRF-Token": "csrf-test-token"},
+        )
+        self.assertEqual(retry.status_code, 200)
+        self.assertEqual(retry.get_json()["workoutId"], completed_workout.id)
+        self.assertEqual(CoachWorkoutSession.query.filter_by(member_id="13659").count(), 1)
+        self.assertEqual(CoachInteraction.query.filter_by(member_id="13659", category="workout_feedback").count(), 1)
+
+        completed_page = self.client.get(f"/coach/workout-session/{workout.public_id}")
+        self.assertEqual(completed_page.status_code, 200)
+        self.assertIn("Strong work", completed_page.get_data(as_text=True))
+        self.assertIn("sets completed", completed_page.get_data(as_text=True))
+
+    def test_active_workout_feedback_failure_preserves_completion_and_milestones(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.add_complete_coach_profile()
+        self.login_as("13659")
+        self.assertEqual(self.start_active_workout().status_code, 201)
+        workout = CoachActiveWorkout.query.filter_by(member_id="13659").one()
+        exercises = (
+            CoachActiveWorkoutExercise.query
+            .filter_by(active_workout_id=workout.id)
+            .order_by(CoachActiveWorkoutExercise.exercise_order.asc())
+            .all()
+        )
+        revision = 0
+        for exercise in exercises:
+            saved = self.autosave_active_exercise(
+                workout,
+                exercise,
+                revision=revision,
+                request_id=f"feedback-failure-exercise-{exercise.exercise_order}",
+            )
+            self.assertEqual(saved.status_code, 200)
+            revision = saved.get_json()["revision"]
+
+        with self.assertLogs("dreamz_portal", level="ERROR") as logs:
+            with patch(
+                "dreamz_portal.generate_coach_reply",
+                side_effect=RuntimeError("feedback unavailable"),
+            ):
+                finish = self.client.post(
+                    f"/coach/workout-session/{workout.public_id}/finish",
+                    json={
+                        "requestId": "feedback-failure-finish-request",
+                        "revision": revision,
+                        "elapsedSeconds": 180,
+                    },
+                    headers={"X-CSRF-Token": "csrf-test-token"},
+                )
+
+        self.assertEqual(finish.status_code, 200)
+        self.assertEqual(CoachWorkoutSession.query.filter_by(member_id="13659").count(), 1)
+        self.assertEqual(
+            CoachInteraction.query.filter_by(
+                member_id="13659",
+                category="milestone_unlock",
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            CoachInteraction.query.filter_by(
+                member_id="13659",
+                category="workout_feedback",
+            ).count(),
+            0,
+        )
+        self.assertEqual(len(finish.get_json()["milestones"]), 1)
+        self.assertTrue(any("feedback could not be saved" in line for line in logs.output))
+
+        retry = self.client.post(
+            f"/coach/workout-session/{workout.public_id}/finish",
+            json={"requestId": "feedback-failure-retry", "revision": revision + 1},
+            headers={"X-CSRF-Token": "csrf-test-token"},
+        )
+        self.assertEqual(retry.status_code, 200)
+        self.assertEqual(CoachWorkoutSession.query.filter_by(member_id="13659").count(), 1)
+        self.assertEqual(
+            CoachInteraction.query.filter_by(
+                member_id="13659",
+                category="milestone_unlock",
+            ).count(),
+            1,
+        )
+
+    def test_active_workout_milestone_commit_failure_does_not_return_ghost_reward(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.add_complete_coach_profile()
+        self.login_as("13659")
+        self.assertEqual(self.start_active_workout().status_code, 201)
+        workout = CoachActiveWorkout.query.filter_by(member_id="13659").one()
+        exercises = (
+            CoachActiveWorkoutExercise.query
+            .filter_by(active_workout_id=workout.id)
+            .order_by(CoachActiveWorkoutExercise.exercise_order.asc())
+            .all()
+        )
+        revision = 0
+        for exercise in exercises:
+            saved = self.autosave_active_exercise(
+                workout,
+                exercise,
+                revision=revision,
+                request_id=f"milestone-failure-exercise-{exercise.exercise_order}",
+            )
+            self.assertEqual(saved.status_code, 200)
+            revision = saved.get_json()["revision"]
+
+        original_commit = db.session.commit
+        original_unlock = portal_module.unlock_member_milestones
+        commit_state = {"fail_next": False}
+
+        def mark_milestone_commit(*args, **kwargs):
+            result = original_unlock(*args, **kwargs)
+            commit_state["fail_next"] = bool(result)
+            return result
+
+        def fail_milestone_commit():
+            if commit_state["fail_next"]:
+                commit_state["fail_next"] = False
+                raise SQLAlchemyError("milestone commit unavailable")
+            return original_commit()
+
+        with self.assertLogs("dreamz_portal", level="ERROR") as logs:
+            with patch(
+                "dreamz_portal.unlock_member_milestones",
+                side_effect=mark_milestone_commit,
+            ), patch.object(db.session, "commit", side_effect=fail_milestone_commit):
+                finish = self.client.post(
+                    f"/coach/workout-session/{workout.public_id}/finish",
+                    json={
+                        "requestId": "milestone-failure-finish-request",
+                        "revision": revision,
+                        "elapsedSeconds": 180,
+                    },
+                    headers={"X-CSRF-Token": "csrf-test-token"},
+                )
+
+        self.assertEqual(finish.status_code, 200)
+        self.assertEqual(finish.get_json()["milestones"], [])
+        self.assertEqual(CoachWorkoutSession.query.filter_by(member_id="13659").count(), 1)
+        self.assertEqual(
+            CoachInteraction.query.filter_by(
+                member_id="13659",
+                category="milestone_unlock",
+            ).count(),
+            0,
+        )
+        stored_payload = json.loads(
+            CoachActiveWorkout.query.filter_by(member_id="13659").one().finish_response_json
+        )
+        self.assertEqual(stored_payload["milestones"], [])
+        self.assertTrue(any("milestone processing could not be saved" in line for line in logs.output))
+
+    def test_active_workout_finish_requires_resolved_exercises_and_allows_safe_skip(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.add_complete_coach_profile()
+        self.login_as("13659")
+        self.assertEqual(self.start_active_workout().status_code, 201)
+        workout = CoachActiveWorkout.query.filter_by(member_id="13659").one()
+        exercises = (
+            CoachActiveWorkoutExercise.query
+            .filter_by(active_workout_id=workout.id)
+            .order_by(CoachActiveWorkoutExercise.exercise_order.asc())
+            .all()
+        )
+
+        incomplete_finish = self.client.post(
+            f"/coach/workout-session/{workout.public_id}/finish",
+            json={"requestId": "incomplete-finish-request", "revision": 0},
+            headers={"X-CSRF-Token": "csrf-test-token"},
+        )
+        self.assertEqual(incomplete_finish.status_code, 422)
+        self.assertEqual(incomplete_finish.get_json()["code"], "workout_incomplete")
+
+        revision = 0
+        for index, exercise in enumerate(exercises):
+            if index == len(exercises) - 1:
+                completed_before_skip = self.autosave_active_exercise(
+                    workout,
+                    exercise,
+                    revision=revision,
+                    request_id=f"complete-before-skip-{exercise.exercise_order}-request",
+                )
+                self.assertEqual(completed_before_skip.status_code, 200)
+                revision = completed_before_skip.get_json()["revision"]
+            status = "skipped" if index == len(exercises) - 1 else "completed"
+            save_response = self.autosave_active_exercise(
+                workout,
+                exercise,
+                revision=revision,
+                status=status,
+                skip_reason="pain" if status == "skipped" else "",
+                set_completed=True if status == "skipped" else None,
+                request_id=f"resolved-exercise-{exercise.exercise_order}-request",
+            )
+            self.assertEqual(save_response.status_code, 200)
+            revision = save_response.get_json()["revision"]
+
+        finish_response = self.client.post(
+            f"/coach/workout-session/{workout.public_id}/finish",
+            json={"requestId": "safe-skip-finish-request", "revision": revision},
+            headers={"X-CSRF-Token": "csrf-test-token"},
+        )
+        self.assertEqual(finish_response.status_code, 200)
+        skipped = CoachActiveWorkoutExercise.query.filter_by(
+            active_workout_id=workout.id,
+            completion_status="skipped",
+        ).one()
+        self.assertEqual(skipped.skip_reason, "pain")
+        self.assertEqual(
+            CoachActiveWorkoutSet.query.filter_by(
+                active_exercise_id=skipped.id,
+                completed=True,
+            ).count(),
+            0,
+        )
+        skipped_log = CoachWorkoutExerciseLog.query.filter_by(
+            workout_session_id=finish_response.get_json()["workoutId"],
+            exercise_order=skipped.exercise_order,
+        ).one()
+        self.assertFalse(skipped_log.completed)
+        self.assertEqual(skipped_log.reps_completed, "")
+        self.assertEqual(skipped_log.completion_status, "skipped")
+        self.assertEqual(skipped_log.skip_reason, "pain")
+        self.assertTrue(any(
+            f"{skipped_log.exercise_name}: skipped (reason=pain)" in summary
+            for summary in recent_coach_workout_summary("13659")
+        ))
+        history_page = self.client.get("/coach?tab=history").get_data(as_text=True)
+        self.assertIn("Skipped", history_page)
+        self.assertIn("Pain or discomfort", history_page)
+
+    def test_active_workout_discard_is_idempotent_and_preserves_completed_history(self):
+        self.add_member(member_id="13659", name="Ron Soechit")
+        self.add_complete_coach_profile()
+        historical = CoachWorkoutSession(
+            member_id="13659",
+            session_number=2,
+            focus="Historical workout",
+            completed_at=datetime(2026, 7, 1, 12, 0),
+        )
+        db.session.add(historical)
+        db.session.commit()
+        self.login_as("13659")
+        self.assertEqual(self.start_active_workout().status_code, 201)
+        workout = CoachActiveWorkout.query.filter_by(status="active").one()
+
+        discard = self.client.post(
+            f"/coach/workout-session/{workout.public_id}/discard",
+            json={"revision": 0},
+            headers={"X-CSRF-Token": "csrf-test-token"},
+        )
+        self.assertEqual(discard.status_code, 200)
+        db.session.refresh(workout)
+        self.assertEqual(workout.status, "abandoned")
+        self.assertIsNone(workout.active_member_id)
+        self.assertEqual(CoachWorkoutSession.query.filter_by(member_id="13659").count(), 1)
+        self.assertEqual(CoachWorkoutSession.query.one().focus, "Historical workout")
+
+        retry = self.client.post(
+            f"/coach/workout-session/{workout.public_id}/discard",
+            json={"revision": 0},
+            headers={"X-CSRF-Token": "csrf-test-token"},
+        )
+        self.assertEqual(retry.status_code, 200)
+        self.assertEqual(CoachActiveWorkout.query.filter_by(member_id="13659").count(), 1)
+        self.assertEqual(CoachWorkoutSession.query.filter_by(member_id="13659").count(), 1)
+
+        new_start = self.start_active_workout(request_id="workout-start-after-discard")
+        self.assertEqual(new_start.status_code, 201)
+        self.assertEqual(CoachActiveWorkout.query.filter_by(member_id="13659", status="active").count(), 1)
 
     def test_coach_extra_activity_log_can_be_saved(self):
         self.add_member(member_id="13659", name="Ron Soechit")
@@ -1499,7 +2243,7 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn("Starting point", body)
         self.assertIn("84.5 kg", body)
 
-    def test_coach_workout_log_requires_completed_exercises(self):
+    def test_legacy_coach_workout_log_does_not_accept_incomplete_payloads(self):
         self.add_member(member_id="13659", name="Ron Soechit")
         self.login_as("13659")
         with self.client.session_transaction() as browser_session:
@@ -1514,7 +2258,7 @@ class PortalRouteTests(unittest.TestCase):
             headers={"X-CSRF-Token": "csrf-test-token"},
         )
 
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 410)
         self.assertEqual(CoachWorkoutSession.query.count(), 0)
 
     def test_coach_question_can_be_answered_and_logged(self):
@@ -1650,6 +2394,32 @@ class PortalRouteTests(unittest.TestCase):
                 completed=True,
             )
         )
+        active_workout = CoachActiveWorkout(
+            public_id="reset-active-workout",
+            member_id="13659",
+            active_member_id="13659",
+            start_request_id="reset-active-request",
+            session_number=2,
+            status="active",
+        )
+        db.session.add(active_workout)
+        db.session.flush()
+        active_exercise = CoachActiveWorkoutExercise(
+            active_workout_id=active_workout.id,
+            member_id="13659",
+            exercise_order=1,
+            exercise_name="Chest press",
+            planned_set_count=1,
+        )
+        db.session.add(active_exercise)
+        db.session.flush()
+        db.session.add(
+            CoachActiveWorkoutSet(
+                active_exercise_id=active_exercise.id,
+                member_id="13659",
+                set_number=1,
+            )
+        )
         db.session.commit()
         self.login_staff(role="admin")
 
@@ -1667,6 +2437,9 @@ class PortalRouteTests(unittest.TestCase):
         self.assertEqual(CoachProgressEntry.query.filter_by(member_id="13659").count(), 0)
         self.assertEqual(CoachWorkoutSession.query.filter_by(member_id="13659").count(), 0)
         self.assertEqual(CoachWorkoutExerciseLog.query.filter_by(member_id="13659").count(), 0)
+        self.assertEqual(CoachActiveWorkout.query.filter_by(member_id="13659").count(), 0)
+        self.assertEqual(CoachActiveWorkoutExercise.query.filter_by(member_id="13659").count(), 0)
+        self.assertEqual(CoachActiveWorkoutSet.query.filter_by(member_id="13659").count(), 0)
         self.assertFalse(progress_photo.exists())
         self.assertIsNotNone(Member.query.filter_by(member_id="13659").first())
 
@@ -3653,9 +4426,22 @@ class PortalRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
-        nav_order = [body.index(label) for label in ["Dashboard", "My Coach", "Progress", "Account"]]
+        self.assertIn('class="app-body member-app-body ', body)
+        member_nav_match = re.search(
+            r'<nav class="app-nav member-nav.*?</nav>',
+            body,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(member_nav_match)
+        member_nav = member_nav_match.group(0)
+        nav_order = [member_nav.index(label) for label in ["Dashboard", "My Coach", "Progress", "Account"]]
         self.assertEqual(nav_order, sorted(nav_order))
+        self.assertEqual(member_nav.count("member-nav-link"), 4)
+        self.assertNotIn('href="/nutrition"', member_nav)
+        self.assertNotIn('href="/group-classes"', member_nav)
+        self.assertNotIn('href="/equipment"', member_nav)
         self.assertIn("Today at Dreamz", body)
+        self.assertLess(body.index("Today at Dreamz"), body.index("Nutrition plan"))
         self.assertIn("My Coach", body)
         self.assertIn("Quick to Dreamz", body)
         self.assertIn('href="/equipment"', body)
@@ -3663,6 +4449,30 @@ class PortalRouteTests(unittest.TestCase):
         self.assertNotIn("Documents 0", body)
         self.assertNotIn("Password and security", body)
         self.assertNotIn("Submit cancellation request", body)
+
+    def test_secondary_training_pages_keep_my_coach_active_in_four_item_navigation(self):
+        self.add_member(member_id="13659", name="Ron Soechit", birthdate=date(1990, 1, 1))
+        self.login_as("13659")
+        seed_group_class_schedule()
+
+        for route in ("/nutrition", "/group-classes", "/equipment"):
+            with self.subTest(route=route):
+                response = self.client.get(route)
+                self.assertEqual(response.status_code, 200)
+                member_nav_match = re.search(
+                    r'<nav class="app-nav member-nav.*?</nav>',
+                    response.get_data(as_text=True),
+                    flags=re.DOTALL,
+                )
+                self.assertIsNotNone(member_nav_match)
+                member_nav = member_nav_match.group(0)
+                self.assertEqual(member_nav.count("member-nav-link"), 4)
+                self.assertRegex(
+                    member_nav,
+                    r'(?s)<a class="member-nav-link[^"]*bg-yellow-500[^"]*" href="/coach"[^>]*'
+                    r'aria-current="page"[^>]*>.*?'
+                    r'<span class="member-nav-text">My Coach</span>',
+                )
 
     def test_coach_context_includes_group_classes_without_male_pregnancy_context(self):
         member = self.add_member(member_id="13659", name="Ron Soechit")
@@ -3861,7 +4671,7 @@ class PortalRouteTests(unittest.TestCase):
         db.session.add(profile)
         schedule = seed_group_class_schedule()
         combat_type = GroupClassType.query.filter_by(name="BODYCOMBAT").one()
-        combat = GroupClassOccurrence(
+        safety_sensitive_class = GroupClassOccurrence(
             schedule_id=schedule.id,
             class_type_id=combat_type.id,
             day_of_week=0,
@@ -3872,15 +4682,19 @@ class PortalRouteTests(unittest.TestCase):
             is_bookable=True,
             is_published=True,
         )
-        db.session.add(combat)
+        db.session.add(safety_sensitive_class)
         db.session.flush()
-        db.session.add(MemberClassPlan(member_id="13659", occurrence_id=combat.id, class_date=next_date_for_group_class(combat.day_of_week)))
+        db.session.add(MemberClassPlan(
+            member_id="13659",
+            occurrence_id=safety_sensitive_class.id,
+            class_date=next_date_for_group_class(safety_sensitive_class.day_of_week),
+        ))
         db.session.commit()
 
         context = coach_context_summary(member, profile)
 
         self.assertIn("biological_sex=female, pregnancy_status=pregnant", context)
-        self.assertIn("BODYCOMBAT", context)
+        self.assertIn(safety_sensitive_class.class_type.name, context)
         self.assertIn("pregnancy_safety_level=not_recommended_or_requires_modification", context)
 
     def test_coach_plan_prompt_context_records_group_class_load(self):
