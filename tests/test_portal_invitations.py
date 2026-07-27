@@ -1,14 +1,17 @@
 import importlib.util
+import hashlib
+import json
 import os
 import unittest
 from unittest.mock import patch
-
 
 if importlib.util.find_spec("flask") is None or importlib.util.find_spec("flask_sqlalchemy") is None:
     raise unittest.SkipTest("Flask app dependencies are not installed in this Python runtime")
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
+
+from sqlalchemy import inspect, text  # noqa: E402
 
 from dreamz_portal import (  # noqa: E402
     EmailLog,
@@ -17,6 +20,7 @@ from dreamz_portal import (  # noqa: E402
     app,
     build_portal_activation_email,
     db,
+    ensure_runtime_schema,
 )
 
 
@@ -27,6 +31,9 @@ class PortalInvitationTests(unittest.TestCase):
         app.config["MEMBER_PORTAL_PUBLIC_URL"] = "https://dreamzfitness.app"
         app.config["SIGNUP_PORTAL_INTEGRATION_TOKEN"] = "signup-portal-test-token-0123456789"
         app.config["SYNC_API_TOKEN"] = "sync-test-token"
+        app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED"] = False
+        app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS"] = set()
+        app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS"] = set()
         app.config["_RUNTIME_SCHEMA_READY"] = False
         self.ctx = app.app_context()
         self.ctx.push()
@@ -40,6 +47,9 @@ class PortalInvitationTests(unittest.TestCase):
         self.ctx.pop()
         app.config["SIGNUP_PORTAL_INTEGRATION_TOKEN"] = None
         app.config["SYNC_API_TOKEN"] = None
+        app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED"] = False
+        app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS"] = set()
+        app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS"] = set()
         app.config["_RUNTIME_SCHEMA_READY"] = False
 
     @staticmethod
@@ -65,6 +75,62 @@ class PortalInvitationTests(unittest.TestCase):
             headers=self.invitation_headers(),
         )
 
+    @staticmethod
+    def existing_member_payload(**overrides):
+        canonical = {
+            "request_type": "existing_member_reverification",
+            "reference": "DF-20260726-900001",
+            "member_number": "42001",
+            "expected_email": "existing.member@example.com",
+            "language": "nl",
+            "signup_plan": "six",
+        }
+        canonical.update(overrides)
+        idempotency_key = hashlib.sha256(
+            json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        return {**canonical, "idempotency_key": idempotency_key}
+
+    def post_existing_member(self, payload=None, authorization=True, idempotency_key=None):
+        payload = payload or self.existing_member_payload()
+        headers = self.invitation_headers() if authorization else {}
+        headers["Idempotency-Key"] = (
+            payload.get("idempotency_key")
+            if idempotency_key is None
+            else idempotency_key
+        )
+        return self.client.post(
+            "/api/integrations/signup/portal-invitations",
+            json=payload,
+            headers=headers,
+        )
+
+    def enable_existing_member_pilot(
+        self,
+        member_id="42001",
+        email="existing.member@example.com",
+    ):
+        app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED"] = True
+        app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS"] = {member_id}
+        app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS"] = {email}
+
+    @staticmethod
+    def add_existing_member(
+        member_id="42001",
+        email="existing.member@example.com",
+        plan_type="Contract 6 months 2024",
+        name="Member, Existing",
+    ):
+        member = Member(
+            member_id=member_id,
+            email=email,
+            plan_type=plan_type,
+            name=name,
+        )
+        db.session.add(member)
+        db.session.commit()
+        return member
+
     def test_integration_requires_dedicated_token(self):
         response = self.client.post(
             "/api/integrations/signup/portal-invitations",
@@ -72,10 +138,214 @@ class PortalInvitationTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
+    def test_existing_member_integration_requires_dedicated_token(self):
+        response = self.post_existing_member(authorization=False)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(PortalInvitation.query.count(), 0)
+
+    def test_existing_member_flow_is_disabled_by_default_and_response_has_no_pii(self):
+        self.add_existing_member()
+        response = self.post_existing_member()
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json["request_type"], "existing_member_reverification")
+        self.assertEqual(response.json["status"], "waiting_for_feature_enablement")
+        self.assertNotIn("member_number", response.json)
+        self.assertNotIn("expected_email", response.json)
+        self.assertNotIn("idempotency_key", response.json)
+        self.assertEqual(EmailLog.query.count(), 0)
+        record = PortalInvitation.query.one()
+        self.assertEqual(record.request_type, "existing_member_reverification")
+
+    def test_existing_member_pilot_requires_both_member_and_email_allowlists(self):
+        self.add_existing_member()
+        app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED"] = True
+        app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS"] = {"42001"}
+        app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS"] = set()
+
+        waiting = self.post_existing_member()
+        self.assertEqual(waiting.status_code, 202)
+        self.assertEqual(waiting.json["status"], "waiting_for_pilot_allowlist")
+        self.assertEqual(EmailLog.query.count(), 0)
+
+        app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS"] = {
+            "EXISTING.MEMBER@example.com"
+        }
+        released = self.client.get(
+            "/api/integrations/signup/portal-invitations/DF-20260726-900001",
+            headers=self.invitation_headers(),
+        )
+        self.assertEqual(released.status_code, 200)
+        self.assertEqual(released.json["status"], "sent")
+        self.assertEqual(EmailLog.query.count(), 1)
+
+    def test_existing_member_with_unchanged_synced_email_sends_exactly_once(self):
+        self.enable_existing_member_pilot()
+        self.add_existing_member()
+
+        sent = self.post_existing_member()
+        self.assertEqual(sent.status_code, 200)
+        self.assertEqual(sent.json["status"], "sent")
+        self.assertFalse(sent.json["duplicate"])
+        record = PortalInvitation.query.one()
+        self.assertEqual(record.attempts, 1)
+        self.assertIsNotNone(record.sent_at)
+        self.assertEqual(EmailLog.query.count(), 1)
+
+        duplicate = self.post_existing_member()
+        self.assertEqual(duplicate.status_code, 200)
+        self.assertTrue(duplicate.json["duplicate"])
+        self.assertEqual(duplicate.json["status"], "sent")
+        db.session.refresh(record)
+        self.assertEqual(record.attempts, 1)
+        self.assertEqual(EmailLog.query.count(), 1)
+
+    def test_existing_member_changed_email_waits_for_sync_then_sends(self):
+        self.enable_existing_member_pilot()
+        self.add_existing_member(email="old.member@example.com")
+
+        waiting = self.post_existing_member()
+        self.assertEqual(waiting.status_code, 202)
+        self.assertEqual(waiting.json["status"], "waiting_for_gym_assistant_email")
+        self.assertEqual(EmailLog.query.count(), 0)
+
+        sync_response = self.client.post(
+            "/api/sync/members",
+            headers={"X-Sync-Token": "sync-test-token"},
+            json={
+                "source": "existing-member-reverification-test",
+                "members": [{
+                    "member_id": "42001",
+                    "name": "Member, Existing",
+                    "email": "existing.member@example.com",
+                    "plan_type": "Contract 6 months 2024",
+                }],
+            },
+        )
+        self.assertEqual(sync_response.status_code, 200)
+        self.assertEqual(sync_response.json["portal_invitations"]["sent"], 1)
+        record = PortalInvitation.query.one()
+        self.assertEqual(record.status, "sent")
+        self.assertEqual(record.attempts, 1)
+        self.assertEqual(EmailLog.query.count(), 1)
+
+    def test_existing_member_missing_email_waits_for_gym_assistant_sync(self):
+        self.enable_existing_member_pilot()
+        self.add_existing_member(email="")
+        response = self.post_existing_member()
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json["status"], "waiting_for_gym_assistant_email")
+        self.assertEqual(EmailLog.query.count(), 0)
+
+    def test_existing_member_duplicate_email_requires_manual_review(self):
+        self.enable_existing_member_pilot()
+        db.session.add_all([
+            Member(
+                member_id="42001",
+                name="Member, Existing",
+                email="existing.member@example.com",
+                plan_type="Contract 6 months 2024",
+            ),
+            Member(
+                member_id="42002",
+                name="Member, Duplicate",
+                email="EXISTING.MEMBER@example.com",
+                plan_type="Contract 6 months 2024",
+            ),
+        ])
+        db.session.commit()
+        response = self.post_existing_member()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["status"], "manual_review")
+        self.assertTrue(response.json["requires_manual_review"])
+        self.assertEqual(EmailLog.query.count(), 0)
+
+    def test_existing_member_ineligible_live_plan_requires_manual_review(self):
+        self.enable_existing_member_pilot()
+        self.add_existing_member(plan_type="Week Pass Dreamz")
+        response = self.post_existing_member()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["status"], "manual_review")
+        self.assertEqual(EmailLog.query.count(), 0)
+
+    def test_existing_member_live_plan_must_exactly_match_signup_plan(self):
+        self.enable_existing_member_pilot()
+        self.add_existing_member(plan_type="Contract 12 months 2024")
+        response = self.post_existing_member()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["status"], "manual_review")
+        record = PortalInvitation.query.one()
+        self.assertEqual(
+            record.last_error,
+            "gym_assistant_plan_does_not_match_signup",
+        )
+        self.assertEqual(EmailLog.query.count(), 0)
+
+    def test_existing_member_idempotency_key_binds_header_body_and_payload(self):
+        valid_payload = self.existing_member_payload()
+
+        header_mismatch = self.post_existing_member(
+            payload=valid_payload,
+            idempotency_key="0" * 64,
+        )
+        self.assertEqual(header_mismatch.status_code, 422)
+        self.assertEqual(PortalInvitation.query.count(), 0)
+
+        tampered_payload = dict(valid_payload)
+        tampered_payload["member_number"] = "42002"
+        tampered = self.post_existing_member(payload=tampered_payload)
+        self.assertEqual(tampered.status_code, 422)
+        self.assertEqual(PortalInvitation.query.count(), 0)
+
+        accepted = self.post_existing_member(payload=valid_payload)
+        self.assertEqual(accepted.status_code, 202)
+        self.assertEqual(PortalInvitation.query.count(), 1)
+
+        changed = self.existing_member_payload(language="es")
+        conflict = self.post_existing_member(payload=changed)
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(conflict.json["status"], "conflict")
+        self.assertEqual(
+            conflict.json["request_type"],
+            "existing_member_reverification",
+        )
+        self.assertNotIn("member_number", conflict.json)
+        self.assertEqual(PortalInvitation.query.count(), 1)
+
+    def test_request_type_is_validated_and_bound_to_reference(self):
+        invalid = self.existing_member_payload(request_type="unexpected_flow")
+        rejected = self.post_existing_member(payload=invalid)
+        self.assertEqual(rejected.status_code, 422)
+        self.assertEqual(PortalInvitation.query.count(), 0)
+
+        existing = self.post_existing_member()
+        self.assertEqual(existing.status_code, 202)
+        legacy_payload = self.invitation_payload(reference="DF-20260726-900001")
+        conflict = self.client.post(
+            "/api/integrations/signup/portal-invitations",
+            json=legacy_payload,
+            headers=self.invitation_headers(),
+        )
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(
+            conflict.json["request_type"],
+            "existing_member_reverification",
+        )
+
+    def test_existing_member_activation_uses_requested_language(self):
+        self.enable_existing_member_pilot()
+        member = self.add_existing_member()
+        payload = self.existing_member_payload(language="es")
+        response = self.post_existing_member(payload=payload)
+        self.assertEqual(response.status_code, 200)
+        expected_subject, _, _ = build_portal_activation_email(member, "es")
+        self.assertEqual(EmailLog.query.one().subject, expected_subject)
+
     def test_invitation_waits_for_exact_synced_member_then_sends_once(self):
         waiting = self.post_invitation()
         self.assertEqual(waiting.status_code, 202)
+        self.assertEqual(waiting.json["request_type"], "new_member")
         self.assertEqual(waiting.json["status"], "waiting_for_member")
+        self.assertNotIn("member_number", waiting.json)
         self.assertEqual(EmailLog.query.count(), 0)
 
         sync_response = self.client.post(
@@ -105,6 +375,95 @@ class PortalInvitationTests(unittest.TestCase):
         self.assertTrue(duplicate.json["duplicate"])
         self.assertEqual(duplicate.json["status"], "sent")
         self.assertEqual(EmailLog.query.count(), 1)
+
+    def test_legacy_new_member_hash_remains_idempotent_after_schema_upgrade(self):
+        legacy_canonical = self.invitation_payload()
+        legacy_hash = hashlib.sha256(
+            json.dumps(
+                legacy_canonical,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        db.session.add(PortalInvitation(
+            source_reference=legacy_canonical["reference"],
+            request_type="new_member",
+            member_id=legacy_canonical["member_number"],
+            expected_email_hash=hashlib.sha256(
+                legacy_canonical["expected_email"].encode("utf-8")
+            ).hexdigest(),
+            language=legacy_canonical["language"],
+            signup_plan=legacy_canonical["signup_plan"],
+            request_payload_hash=legacy_hash,
+        ))
+        db.session.commit()
+
+        duplicate = self.post_invitation()
+        self.assertEqual(duplicate.status_code, 202)
+        self.assertTrue(duplicate.json["duplicate"])
+        self.assertEqual(duplicate.json["request_type"], "new_member")
+        self.assertEqual(duplicate.json["status"], "waiting_for_member")
+        self.assertEqual(PortalInvitation.query.count(), 1)
+
+    def test_runtime_schema_adds_and_backfills_request_type(self):
+        db.session.execute(text("DROP TABLE portal_invitation"))
+        db.session.execute(text("""
+            CREATE TABLE portal_invitation (
+                id INTEGER PRIMARY KEY,
+                source_reference VARCHAR(64) UNIQUE NOT NULL,
+                member_id VARCHAR NOT NULL,
+                expected_email_hash VARCHAR(64) NOT NULL,
+                language VARCHAR(8) NOT NULL,
+                signup_plan VARCHAR(32) NOT NULL,
+                request_payload_hash VARCHAR(64) NOT NULL,
+                status VARCHAR(40) NOT NULL,
+                attempts INTEGER NOT NULL,
+                manual_review_required BOOLEAN NOT NULL,
+                last_error TEXT,
+                email_log_id INTEGER,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                ready_at DATETIME,
+                send_started_at DATETIME,
+                sent_at DATETIME
+            )
+        """))
+        db.session.execute(text("""
+            INSERT INTO portal_invitation (
+                source_reference,
+                member_id,
+                expected_email_hash,
+                language,
+                signup_plan,
+                request_payload_hash,
+                status,
+                attempts,
+                manual_review_required,
+                created_at,
+                updated_at
+            ) VALUES (
+                'DF-20260716-1234',
+                '42001',
+                'email-hash',
+                'nl',
+                'month',
+                'payload-hash',
+                'waiting_for_member',
+                0,
+                0,
+                CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP
+            )
+        """))
+        db.session.commit()
+        app.config["_RUNTIME_SCHEMA_READY"] = False
+
+        ensure_runtime_schema()
+
+        columns = {column["name"] for column in inspect(db.engine).get_columns("portal_invitation")}
+        self.assertIn("request_type", columns)
+        record = PortalInvitation.query.one()
+        self.assertEqual(record.request_type, "new_member")
 
     def test_same_reference_with_changed_payload_is_a_conflict(self):
         self.post_invitation()

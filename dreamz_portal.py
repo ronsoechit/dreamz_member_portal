@@ -114,6 +114,26 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["STAFF_TOKEN"] = os.getenv("STAFF_TOKEN")
 app.config["SYNC_API_TOKEN"] = os.getenv("SYNC_API_TOKEN")
 app.config["SIGNUP_PORTAL_INTEGRATION_TOKEN"] = os.getenv("SIGNUP_PORTAL_INTEGRATION_TOKEN")
+app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED"] = os.getenv(
+    "PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED",
+    "false",
+).lower() in ("1", "true", "yes")
+app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS"] = {
+    member_id.strip()
+    for member_id in os.getenv(
+        "PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS",
+        "",
+    ).split(",")
+    if member_id.strip().isdigit() and int(member_id.strip()) > 0
+}
+app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS"] = {
+    email.strip().lower()
+    for email in os.getenv(
+        "PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS",
+        "",
+    ).split(",")
+    if email.strip()
+}
 app.config["FEP_API_TOKEN"] = os.getenv("FEP_API_TOKEN")
 app.config["STAFF_ADMIN_USERNAME"] = os.getenv("STAFF_ADMIN_USERNAME", "ron")
 app.config["STAFF_ADMIN_PASSWORD"] = os.getenv("STAFF_ADMIN_PASSWORD", "dreamz-admin-dev")
@@ -685,6 +705,7 @@ class EmailLog(db.Model):
 class PortalInvitation(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     source_reference = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    request_type = db.Column(db.String(40), default="new_member", nullable=False, index=True)
     member_id = db.Column(db.String, nullable=False, index=True)
     expected_email_hash = db.Column(db.String(64), nullable=False)
     language = db.Column(db.String(8), default=DEFAULT_LANGUAGE, nullable=False)
@@ -2366,6 +2387,10 @@ def backfill_runtime_schema_defaults():
     ))
     db.session.execute(text(
         "UPDATE sync_run SET documents_received = 0 WHERE documents_received IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE portal_invitation SET request_type = 'new_member' "
+        "WHERE request_type IS NULL OR TRIM(request_type) = ''"
     ))
     db.session.execute(text(
         f"UPDATE group_class_type SET default_bookable = {true_value} WHERE default_bookable IS NULL"
@@ -11697,8 +11722,23 @@ Dreamz Fitness
     return subject, body, html_body
 
 
+PORTAL_INVITATION_REQUEST_TYPE_NEW_MEMBER = "new_member"
+PORTAL_INVITATION_REQUEST_TYPE_EXISTING_MEMBER_REVERIFICATION = (
+    "existing_member_reverification"
+)
+PORTAL_INVITATION_REQUEST_TYPES = {
+    PORTAL_INVITATION_REQUEST_TYPE_NEW_MEMBER,
+    PORTAL_INVITATION_REQUEST_TYPE_EXISTING_MEMBER_REVERIFICATION,
+}
 PORTAL_INVITATION_SIGNUP_PLANS = {"month", "under18", "six", "twelve"}
 PORTAL_INVITATION_TERMINAL_STATUSES = {"sent", "manual_review"}
+PORTAL_INVITATION_RECONCILABLE_STATUSES = {
+    "waiting_for_member",
+    "waiting_for_gym_assistant_email",
+    "waiting_for_feature_enablement",
+    "waiting_for_pilot_allowlist",
+    "ready",
+}
 PORTAL_INVITATION_STALE_SEND_MINUTES = 15
 
 
@@ -11715,28 +11755,71 @@ def valid_portal_email(email):
     )
 
 
-def portal_eligible_member_plan(plan_type):
+def portal_member_signup_plan(plan_type):
     normalized = re.sub(r"[^a-z0-9]+", " ", str(plan_type or "").lower()).strip()
     if not normalized:
-        return False
+        return None
     if any(blocked in normalized for blocked in ("day pass", "week pass", "delfins", "hotel", "guest")):
-        return False
+        return None
     if "under 18" in normalized:
-        return True
+        return "under18"
     if "no contract" in normalized and re.search(r"\b1\s*(?:m|month|months)\b", normalized):
-        return True
-    if "paid in full" in normalized and re.search(r"\b(?:6|12)\s*(?:m|month|months)\b", normalized):
-        return True
-    return bool(
-        "contract" in normalized
-        and re.search(r"\b(?:6|12)\s*(?:m|month|months)\b", normalized)
+        return "month"
+    term = re.search(r"\b(6|12)\s*(?:m|month|months)\b", normalized)
+    if term and ("paid in full" in normalized or "contract" in normalized):
+        return "six" if term.group(1) == "6" else "twelve"
+    return None
+
+
+def portal_eligible_member_plan(plan_type):
+    return portal_member_signup_plan(plan_type) is not None
+
+
+def portal_invitation_payload_hash(canonical):
+    return hashlib.sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def portal_invitation_config_values(config_key):
+    configured = app.config.get(config_key)
+    if isinstance(configured, str):
+        return [value.strip() for value in configured.split(",") if value.strip()]
+    return list(configured or [])
+
+
+def existing_member_reverification_enabled():
+    configured = app.config.get("PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED", False)
+    if isinstance(configured, str):
+        return configured.strip().lower() in {"1", "true", "yes"}
+    return bool(configured)
+
+
+def existing_member_reverification_pilot_allowed(record):
+    member_ids = {
+        str(member_id).strip()
+        for member_id in portal_invitation_config_values(
+            "PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS"
+        )
+        if str(member_id).strip()
+    }
+    allowed_email_hashes = {
+        portal_invitation_email_hash(email)
+        for email in portal_invitation_config_values(
+            "PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS"
+        )
+        if valid_portal_email(email)
+    }
+    return (
+        str(record.member_id or "").strip() in member_ids
+        and record.expected_email_hash in allowed_email_hashes
     )
 
 
 def portal_invitation_public(record, duplicate=False):
     return {
         "reference": record.source_reference,
-        "member_number": record.member_id,
+        "request_type": record.request_type or PORTAL_INVITATION_REQUEST_TYPE_NEW_MEMBER,
         "status": record.status,
         "ready": record.ready_at is not None,
         "sent": record.sent_at is not None,
@@ -11747,7 +11830,7 @@ def portal_invitation_public(record, duplicate=False):
     }
 
 
-def normalize_portal_invitation_payload(payload):
+def normalize_portal_invitation_payload(payload, idempotency_key_header=None):
     if not isinstance(payload, dict):
         raise ValueError("Expected a JSON object.")
     reference = str(payload.get("reference") or "").strip().upper()
@@ -11755,6 +11838,11 @@ def normalize_portal_invitation_payload(payload):
     expected_email = normalize_email(payload.get("expected_email"))
     language = normalize_language(payload.get("language") or DEFAULT_LANGUAGE)
     signup_plan = str(payload.get("signup_plan") or "").strip().lower()
+    request_type_value = payload.get(
+        "request_type",
+        PORTAL_INVITATION_REQUEST_TYPE_NEW_MEMBER,
+    )
+    request_type = str(request_type_value or "").strip().lower()
 
     if not re.fullmatch(r"DF-\d{8}-\d{4,6}", reference):
         raise ValueError("Invalid signup reference.")
@@ -11764,6 +11852,8 @@ def normalize_portal_invitation_payload(payload):
         raise ValueError("Invalid expected member email.")
     if signup_plan not in PORTAL_INVITATION_SIGNUP_PLANS:
         raise ValueError("Signup plan is not eligible for a portal invitation.")
+    if request_type not in PORTAL_INVITATION_REQUEST_TYPES:
+        raise ValueError("Invalid portal invitation request type.")
 
     canonical = {
         "reference": reference,
@@ -11771,11 +11861,45 @@ def normalize_portal_invitation_payload(payload):
         "expected_email": expected_email,
         "language": language,
         "signup_plan": signup_plan,
+        "request_type": request_type,
     }
-    payload_hash = hashlib.sha256(
-        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    return canonical, payload_hash
+    payload_hash = portal_invitation_payload_hash(canonical)
+    body_idempotency_key = payload.get("idempotency_key")
+    idempotency_required = (
+        request_type == PORTAL_INVITATION_REQUEST_TYPE_EXISTING_MEMBER_REVERIFICATION
+        or body_idempotency_key is not None
+        or idempotency_key_header is not None
+    )
+    if idempotency_required:
+        if (
+            not isinstance(body_idempotency_key, str)
+            or not re.fullmatch(r"[a-f0-9]{64}", body_idempotency_key)
+            or not isinstance(idempotency_key_header, str)
+            or not secrets.compare_digest(body_idempotency_key, idempotency_key_header)
+            or not secrets.compare_digest(body_idempotency_key, payload_hash)
+        ):
+            raise ValueError("Invalid or inconsistent portal invitation idempotency key.")
+    accepted_payload_hashes = {payload_hash}
+    if request_type == PORTAL_INVITATION_REQUEST_TYPE_NEW_MEMBER:
+        legacy_canonical = dict(canonical)
+        legacy_canonical.pop("request_type")
+        accepted_payload_hashes.add(portal_invitation_payload_hash(legacy_canonical))
+    return canonical, payload_hash, accepted_payload_hashes
+
+
+def wait_for_portal_invitation(record, status):
+    changed = (
+        record.status != status
+        or bool(record.manual_review_required)
+        or record.last_error is not None
+    )
+    record.status = status
+    record.manual_review_required = False
+    record.last_error = None
+    if changed:
+        record.updated_at = datetime.now()
+        db.session.commit()
+    return record
 
 
 def mark_portal_invitation_for_review(record, reason):
@@ -11833,16 +11957,38 @@ def reconcile_portal_invitation(record):
             return mark_portal_invitation_for_review(record, "email_delivery_outcome_uncertain")
         return record
 
+    request_type = record.request_type or PORTAL_INVITATION_REQUEST_TYPE_NEW_MEMBER
+    if request_type not in PORTAL_INVITATION_REQUEST_TYPES:
+        return mark_portal_invitation_for_review(record, "invalid_request_type")
+    if request_type == PORTAL_INVITATION_REQUEST_TYPE_EXISTING_MEMBER_REVERIFICATION:
+        if not existing_member_reverification_enabled():
+            return wait_for_portal_invitation(record, "waiting_for_feature_enablement")
+        if not existing_member_reverification_pilot_allowed(record):
+            return wait_for_portal_invitation(record, "waiting_for_pilot_allowlist")
+
     member = Member.query.filter_by(member_id=record.member_id).first()
     if not member:
-        if record.status != "waiting_for_member":
-            record.status = "waiting_for_member"
-            record.updated_at = now
-            db.session.commit()
-        return record
+        return wait_for_portal_invitation(record, "waiting_for_member")
+
+    live_signup_plan = portal_member_signup_plan(member.plan_type)
+    if not live_signup_plan:
+        return mark_portal_invitation_for_review(record, "gym_assistant_plan_not_eligible")
+    if (
+        request_type == PORTAL_INVITATION_REQUEST_TYPE_EXISTING_MEMBER_REVERIFICATION
+        and not secrets.compare_digest(live_signup_plan, str(record.signup_plan or ""))
+    ):
+        return mark_portal_invitation_for_review(
+            record,
+            "gym_assistant_plan_does_not_match_signup",
+        )
 
     member_email = normalize_email(member.email)
     if not valid_portal_email(member_email):
+        if request_type == PORTAL_INVITATION_REQUEST_TYPE_EXISTING_MEMBER_REVERIFICATION:
+            return wait_for_portal_invitation(
+                record,
+                "waiting_for_gym_assistant_email",
+            )
         return mark_portal_invitation_for_review(record, "gym_assistant_email_missing_or_invalid")
 
     matching_members = (
@@ -11854,16 +12000,19 @@ def reconcile_portal_invitation(record):
     if len(matching_members) != 1:
         return mark_portal_invitation_for_review(record, "gym_assistant_email_not_unique")
     if portal_invitation_email_hash(member_email) != record.expected_email_hash:
+        if request_type == PORTAL_INVITATION_REQUEST_TYPE_EXISTING_MEMBER_REVERIFICATION:
+            return wait_for_portal_invitation(
+                record,
+                "waiting_for_gym_assistant_email",
+            )
         return mark_portal_invitation_for_review(record, "signup_email_does_not_match_gym_assistant")
-    if not portal_eligible_member_plan(member.plan_type):
-        return mark_portal_invitation_for_review(record, "gym_assistant_plan_not_eligible")
 
     subject, body, html_body = build_portal_activation_email(member, language=record.language)
     send_started_at = datetime.now()
     claimed = (
         PortalInvitation.query
         .filter(PortalInvitation.id == record.id)
-        .filter(PortalInvitation.status.in_(["waiting_for_member", "ready"]))
+        .filter(PortalInvitation.status.in_(PORTAL_INVITATION_RECONCILABLE_STATUSES))
         .update(
             {
                 PortalInvitation.status: "sending",
@@ -11922,7 +12071,7 @@ def reconcile_pending_portal_invitations(limit=100):
 
     records = (
         PortalInvitation.query
-        .filter(PortalInvitation.status.in_(["waiting_for_member", "ready"]))
+        .filter(PortalInvitation.status.in_(PORTAL_INVITATION_RECONCILABLE_STATUSES))
         .order_by(PortalInvitation.created_at.asc())
         .limit(limit)
         .all()
@@ -12836,24 +12985,35 @@ def api_signup_portal_invitation():
     require_signup_portal_integration_access()
     ensure_runtime_schema()
     try:
-        normalized, payload_hash = normalize_portal_invitation_payload(request.get_json(silent=True))
+        normalized, payload_hash, accepted_payload_hashes = normalize_portal_invitation_payload(
+            request.get_json(silent=True),
+            request.headers.get("Idempotency-Key"),
+        )
     except ValueError as exc:
         return jsonify({"status": "rejected", "error": str(exc)}), 422
 
     record = PortalInvitation.query.filter_by(source_reference=normalized["reference"]).first()
     if record:
-        if record.request_payload_hash != payload_hash:
+        stored_request_type = (
+            record.request_type or PORTAL_INVITATION_REQUEST_TYPE_NEW_MEMBER
+        )
+        if (
+            stored_request_type != normalized["request_type"]
+            or record.request_payload_hash not in accepted_payload_hashes
+        ):
             return jsonify({
                 "status": "conflict",
                 "reference": record.source_reference,
+                "request_type": stored_request_type,
                 "requires_manual_review": True,
             }), 409
         reconcile_portal_invitation(record)
-        status_code = 202 if record.status in {"waiting_for_member", "ready", "sending"} else 200
+        status_code = 200 if record.status in PORTAL_INVITATION_TERMINAL_STATUSES else 202
         return jsonify(portal_invitation_public(record, duplicate=True)), status_code
 
     record = PortalInvitation(
         source_reference=normalized["reference"],
+        request_type=normalized["request_type"],
         member_id=normalized["member_number"],
         expected_email_hash=portal_invitation_email_hash(normalized["expected_email"]),
         language=normalized["language"],
@@ -12866,15 +13026,22 @@ def api_signup_portal_invitation():
     except IntegrityError:
         db.session.rollback()
         record = PortalInvitation.query.filter_by(source_reference=normalized["reference"]).one()
-        if record.request_payload_hash != payload_hash:
+        stored_request_type = (
+            record.request_type or PORTAL_INVITATION_REQUEST_TYPE_NEW_MEMBER
+        )
+        if (
+            stored_request_type != normalized["request_type"]
+            or record.request_payload_hash not in accepted_payload_hashes
+        ):
             return jsonify({
                 "status": "conflict",
                 "reference": record.source_reference,
+                "request_type": stored_request_type,
                 "requires_manual_review": True,
             }), 409
 
     reconcile_portal_invitation(record)
-    status_code = 202 if record.status in {"waiting_for_member", "ready", "sending"} else 200
+    status_code = 200 if record.status in PORTAL_INVITATION_TERMINAL_STATUSES else 202
     return jsonify(portal_invitation_public(record)), status_code
 
 

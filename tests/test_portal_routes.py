@@ -1899,14 +1899,21 @@ class PortalRouteTests(unittest.TestCase):
         self.assertIn(f"/documents/item/{contract.id}", body)
 
     def test_member_document_file_serves_pdf_for_logged_in_owner(self):
-        self.add_member(member_id="1206")
-        document = self.add_document(member_id="1206", path="contracts/1206_contract.pdf")
-        self.login_as("1206")
+        with tempfile.TemporaryDirectory(dir=Path(app.instance_path)) as tmp:
+            root = Path(tmp)
+            pdf = root / "contracts" / "1206_contract.pdf"
+            pdf.parent.mkdir(parents=True, exist_ok=True)
+            pdf.write_bytes(b"%PDF-1.4")
+            app.config["DOCUMENT_CACHE_ROOT"] = str(root)
+            self.add_member(member_id="1206")
+            document = self.add_document(member_id="1206", path=str(pdf))
+            self.login_as("1206")
 
-        response = self.client.get(f"/documents/item/{document.id}/file")
+            response = self.client.get(f"/documents/item/{document.id}/file")
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.mimetype, "application/pdf")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.mimetype, "application/pdf")
+            response.close()
 
     def test_member_document_file_serves_s3_pdf_for_logged_in_owner(self):
         self.add_member(member_id="1206")
@@ -2006,13 +2013,20 @@ class PortalRouteTests(unittest.TestCase):
         self.assertNotIn("View payment", body)
 
     def test_document_file_serves_pdf_for_logged_in_member(self):
-        self.add_member(member_id="1206", contract_path="contracts/1206_contract.pdf")
-        self.login_as("1206")
+        with tempfile.TemporaryDirectory(dir=Path(app.instance_path)) as tmp:
+            root = Path(tmp)
+            pdf = root / "contracts" / "1206_contract.pdf"
+            pdf.parent.mkdir(parents=True, exist_ok=True)
+            pdf.write_bytes(b"%PDF-1.4")
+            app.config["DOCUMENT_CACHE_ROOT"] = str(root)
+            self.add_member(member_id="1206", contract_path=str(pdf))
+            self.login_as("1206")
 
-        response = self.client.get("/documents/contract/file")
+            response = self.client.get("/documents/contract/file")
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.mimetype, "application/pdf")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.mimetype, "application/pdf")
+            response.close()
 
     def test_document_file_serves_allowed_external_pdf_for_logged_in_member(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3845,13 +3859,21 @@ class PortalRouteTests(unittest.TestCase):
             pregnancy_consent=True,
         )
         db.session.add(profile)
-        seed_group_class_schedule()
-        combat = (
-            GroupClassOccurrence.query
-            .join(GroupClassType)
-            .filter(GroupClassType.name == "BODYCOMBAT", GroupClassOccurrence.is_bookable.is_(True))
-            .first()
+        schedule = seed_group_class_schedule()
+        combat_type = GroupClassType.query.filter_by(name="BODYCOMBAT").one()
+        combat = GroupClassOccurrence(
+            schedule_id=schedule.id,
+            class_type_id=combat_type.id,
+            day_of_week=0,
+            start_time=datetime.strptime("18:00", "%H:%M").time(),
+            end_time=datetime.strptime("19:00", "%H:%M").time(),
+            room="AEROBICS ROOM",
+            status="scheduled",
+            is_bookable=True,
+            is_published=True,
         )
+        db.session.add(combat)
+        db.session.flush()
         db.session.add(MemberClassPlan(member_id="13659", occurrence_id=combat.id, class_date=next_date_for_group_class(combat.day_of_week)))
         db.session.commit()
 

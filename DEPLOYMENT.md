@@ -26,6 +26,9 @@ STAFF_TOKEN=<long random staff token>
 SYNC_API_TOKEN=<long random sync token>
 FEP_API_TOKEN=<long random FEP token>
 SIGNUP_PORTAL_INTEGRATION_TOKEN=<shared random token of at least 32 characters>
+PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED=false
+PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS=
+PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS=
 MEMBER_PORTAL_PUBLIC_URL=https://dreamzfitness.app
 WORDPRESS_SCHEDULE_WEBHOOK_URL=https://dreamzfitness.com/wp-json/dreamz/v1/group-class-schedule
 WORDPRESS_SCHEDULE_WEBHOOK_TOKEN=<shared random token used only for schedule publication>
@@ -96,6 +99,17 @@ Existing signups are marked for legacy reconciliation and do not receive a bulk
 activation email. Existing members entered manually in GymAssistant can request a
 normal one-time login code from the portal after the sync has imported their
 unique email address.
+
+The existing-member reverification handoff is a separate closed pilot. Deploy it
+with `PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED=false`; this is also the
+runtime default. Enabling the flag alone cannot release an activation email.
+The exact member number must be present in
+`PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS` **and** the exact
+verified email address must be present in
+`PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS`. Empty or one-sided
+allowlists deny every pilot request. Add only the single controlled pilot
+identity during a reviewed rollout, and never commit real member numbers or
+email addresses to this file.
 
 ### Sync monitoring
 
