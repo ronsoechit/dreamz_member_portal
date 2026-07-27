@@ -5495,7 +5495,7 @@ def prepare_runtime_schema():
 
 def can_skip_runtime_schema_prepare():
     endpoint = request.endpoint or ""
-    if endpoint in {"static", "web_manifest", "service_worker"}:
+    if endpoint in {"static", "web_manifest", "service_worker", "healthz"}:
         return True
     if endpoint == "staff_login" and request.method == "GET":
         return True
@@ -5508,6 +5508,48 @@ def can_skip_runtime_schema_prepare():
     ):
         return True
     return False
+
+
+def deployment_status_payload(status):
+    payload = {"status": status}
+    environment = (os.getenv("RAILWAY_ENVIRONMENT_NAME") or "").strip()
+    release = (
+        os.getenv("DREAMZ_RELEASE_SHA")
+        or os.getenv("RAILWAY_GIT_COMMIT_SHA")
+        or ""
+    ).strip()
+    if environment:
+        payload["environment"] = environment
+    if release:
+        payload["release"] = release
+    return payload
+
+
+@app.get("/healthz")
+def healthz():
+    return jsonify(deployment_status_payload("ok"))
+
+
+@app.get("/readyz")
+def readyz():
+    from sqlalchemy import text
+
+    payload = deployment_status_payload("ready")
+    payload["runtimeSchemaReady"] = bool(app.config.get("_RUNTIME_SCHEMA_READY"))
+    if not payload["runtimeSchemaReady"]:
+        payload["status"] = "not_ready"
+        payload["database"] = "unknown"
+        return jsonify(payload), 503
+    try:
+        db.session.execute(text("SELECT 1")).scalar_one()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Readiness database check failed.")
+        payload["status"] = "not_ready"
+        payload["database"] = "unavailable"
+        return jsonify(payload), 503
+    payload["database"] = "ok"
+    return jsonify(payload)
 
 
 def staff_data_warning(section_key="staff"):

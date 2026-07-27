@@ -2,7 +2,14 @@
 
 ## Railway staging setup
 
-Create a staging project first. Do not use the staging URL publicly until the data, storage, and staff flow are verified.
+Create a separate staging project first. A branch or environment name alone
+does not provide isolation. Staging must use its own PostgreSQL service, private
+bucket, Railway hostname and staging-only secrets. Do not copy production
+variables into staging.
+
+The staging database starts empty. Never populate it from a Gym Assistant
+production export. Keep outbound email in log-only mode and all production
+integrations disabled.
 
 ### Services
 
@@ -16,12 +23,12 @@ Set these on the Railway web service:
 
 ```text
 SECRET_KEY=<long random value>
-DATABASE_URL=<Railway Postgres connection URL>
-STAFF_ADMIN_USERNAME=ron
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+STAFF_ADMIN_USERNAME=staging_admin
 STAFF_ADMIN_PASSWORD=<strong temporary password>
-STAFF_MANAGER_USERNAME=manager
+STAFF_MANAGER_USERNAME=staging_manager
 STAFF_MANAGER_PASSWORD=<strong temporary password>
-STAFF_ADMIN_EMAIL=ron@dreamzfitness.com
+STAFF_ADMIN_EMAIL=staging-no-reply@dreamzfitness.invalid
 STAFF_TOKEN=<long random staff token>
 SYNC_API_TOKEN=<long random sync token>
 FEP_API_TOKEN=<long random FEP token>
@@ -29,47 +36,64 @@ SIGNUP_PORTAL_INTEGRATION_TOKEN=<shared random token of at least 32 characters>
 PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED=false
 PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS=
 PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS=
-MEMBER_PORTAL_PUBLIC_URL=https://dreamzfitness.app
-WORDPRESS_SCHEDULE_WEBHOOK_URL=https://dreamzfitness.com/wp-json/dreamz/v1/group-class-schedule
-WORDPRESS_SCHEDULE_WEBHOOK_TOKEN=<shared random token used only for schedule publication>
+MEMBER_PORTAL_PUBLIC_URL=https://<staging-service>.up.railway.app
+WORDPRESS_SCHEDULE_WEBHOOK_URL=
+WORDPRESS_SCHEDULE_WEBHOOK_TOKEN=
 SYNC_STALE_AFTER_MINUTES=30
 SESSION_COOKIE_SECURE=true
-EMAIL_DELIVERY_MODE=smtp
-SMTP_HOST=<smtp host>
-SMTP_PORT=465
-SMTP_USER=<smtp username>
-SMTP_PASS=<smtp password>
-SMTP_FROM=<sender email>
-SMTP_FROM_NAME=Dreamz Fitness
-SMTP_TIMEOUT_SECONDS=20
+EMAIL_DELIVERY_MODE=log
+COACH_AI_MODE=fallback
+WHATSAPP_LOGIN_ENABLED=false
+INVOICE_GA_PILOT_ENABLED=false
+INVOICE_ISSUING_ENABLED=false
+INVOICE_NUMBER_SERIES_APPROVED=false
+RUNTIME_SCHEMA_STRICT=true
 DIRECT_DEBIT_DAY=28
 STORAGE_BACKEND=s3
-S3_BUCKET=<bucket name>
-S3_ENDPOINT_URL=<S3-compatible endpoint URL>
-S3_REGION=<region, or auto>
-S3_ACCESS_KEY_ID=<storage access key>
-S3_SECRET_ACCESS_KEY=<storage secret key>
-S3_PREFIX=gymassistant
+S3_BUCKET=${{memberportalstagingfiles.BUCKET}}
+S3_ENDPOINT_URL=${{memberportalstagingfiles.ENDPOINT}}
+S3_REGION=${{memberportalstagingfiles.REGION}}
+S3_ACCESS_KEY_ID=${{memberportalstagingfiles.ACCESS_KEY_ID}}
+S3_SECRET_ACCESS_KEY=${{memberportalstagingfiles.SECRET_ACCESS_KEY}}
+S3_PREFIX=staging/gymassistant
 S3_ADDRESSING_STYLE=virtual
 ```
 
+Generate staging secrets directly in Railway or pass them through the Railway
+CLI's stdin option. Never put secret values in shell arguments, source files,
+chat, logs or local `.env` files.
+
 ### First staging test
 
-1. Deploy web + Postgres.
-2. Open `/staff/login` and log in as admin.
-3. Confirm `/staff/sync` loads.
-4. Run the sync agent locally with a small member limit:
+1. Deploy the web service against the empty staging Postgres and bucket.
+2. Verify `/healthz` returns process status `ok`.
+3. Verify `/readyz` returns database status `ok`, runtime schema ready and the
+   expected release SHA.
+4. Audit the target PostgreSQL catalog against the active-workout constraint,
+   index and foreign-key contract.
+5. Verify `/login` and `/staff/login` render over HTTPS.
+6. Use only a clearly synthetic member fixture for authenticated flow testing.
+   If no reviewed fixture loader exists yet, leave staging member data empty.
+7. Confirm the bucket remains private and empty until an explicit synthetic
+   upload smoke is performed.
+8. Record the deployment ID and release SHA before any later rollout.
 
-```powershell
-$env:SYNC_API_TOKEN="<same token as Railway>"
-.\.venv\Scripts\python.exe sync_agent.py `
-  --source-root "D:\Dreamz Fitness\Gym Assistant 2.6" `
-  --portal-url "https://<railway-app-url>" `
-  --push-members `
-  --member-limit 10
-```
+Do not run the sync agent, FEP writer, signup integration, WordPress schedule
+publication, SMTP delivery or a Gym Assistant file upload against isolated
+staging.
 
-5. Check `/staff/sync`, `/staff/data-audit`, and `/staff/email-log`.
+### Staging rollback
+
+For a failed first deployment, stop the staging web deployment and keep its
+domain away from reviewers until corrected. Because the initial database and
+bucket contain no member data, recreate them rather than attempting a partial
+schema downgrade.
+
+Before any later schema-changing staging release that contains synthetic test
+data, create and verify a Railway volume backup. Record the previous deployment
+ID and exact Git SHA so the application can be rolled back independently of
+the database. Never use these staging instructions as production rollback
+authority.
 
 ### Signup portal activation rollout
 
@@ -113,7 +137,13 @@ email addresses to this file.
 
 ### Sync monitoring
 
-The portal shows a warning on `/staff/sync` when no completed GymAssistant sync has been received for `SYNC_STALE_AFTER_MINUTES` minutes. The sync agent itself performs one scan and push per run, so automatic recovery after a power outage depends on the Windows Task Scheduler task or service on the frontdesk computer starting again after reboot. Configure that task to run on startup/login, repeat every few minutes, and run missed tasks as soon as possible.
+The portal shows a warning on `/staff/sync` when no completed GymAssistant sync
+has been received for `SYNC_STALE_AFTER_MINUTES` minutes. The sync agent itself
+performs one scan and push per run. Do not create or change its frontdesk
+Scheduled Task from this guide. First verify the live task, active data root,
+installer, impact and rollback against the shared Dreamz remote-operations
+runbook. Any frontdesk task change requires an exact owner-approved scope and a
+safe maintenance window.
 
 ### FEP payment write-back
 
@@ -127,7 +157,7 @@ The frontdesk sync agent can listen for an explicit FEP command before pushing n
 $env:SYNC_API_TOKEN="<same token as Railway>"
 $env:FEP_PAYMENT_WRITER_COMMAND="<local command that writes one payment update to GymAssistant>"
 .\.venv\Scripts\python.exe sync_agent.py `
-  --source-root "D:\Dreamz Fitness\Gym Assistant 2.6" `
+  --source-root "C:\Gym Assistant 2.6" `
   --portal-url "https://<railway-app-url>" `
   --agent-id "frontdesk_dreamz" `
   --process-fep-command `
@@ -140,7 +170,7 @@ For controlled/manual sessions, the frontdesk sync agent can also process queued
 $env:SYNC_API_TOKEN="<same token as Railway>"
 $env:FEP_PAYMENT_WRITER_COMMAND="<local command that writes one payment update to GymAssistant>"
 .\.venv\Scripts\python.exe sync_agent.py `
-  --source-root "D:\Dreamz Fitness\Gym Assistant 2.6" `
+  --source-root "C:\Gym Assistant 2.6" `
   --portal-url "https://<railway-app-url>" `
   --process-fep-payments `
   --push-members
@@ -232,7 +262,7 @@ $env:S3_PREFIX="gymassistant"
 $env:S3_ADDRESSING_STYLE="virtual"
 
 .\.venv\Scripts\python.exe sync_agent.py `
-  --source-root "D:\Dreamz Fitness\Gym Assistant 2.6" `
+  --source-root "C:\Gym Assistant 2.6" `
   --portal-url "https://<railway-app-url>" `
   --push-members `
   --upload-files

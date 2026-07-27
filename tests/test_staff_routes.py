@@ -1094,6 +1094,41 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("Staff Login", staff_home.get_data(as_text=True))
         self.assertIn("Staff Login", admin_home.get_data(as_text=True))
 
+    def test_healthz_skips_runtime_schema_prepare(self):
+        with patch("dreamz_portal.ensure_runtime_schema", side_effect=RuntimeError("should skip")):
+            response = self.client.get("/healthz")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"status": "ok"})
+
+    def test_readyz_verifies_runtime_schema_and_database(self):
+        response = self.client.get("/readyz")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["status"], "ready")
+        self.assertEqual(response.get_json()["database"], "ok")
+        self.assertTrue(response.get_json()["runtimeSchemaReady"])
+
+    def test_readyz_fails_closed_when_runtime_schema_prepare_fails(self):
+        with (
+            patch.dict(
+                app.config,
+                {"TESTING": False, "PROPAGATE_EXCEPTIONS": False},
+                clear=False,
+            ),
+            patch.dict(os.environ, {"RUNTIME_SCHEMA_STRICT": ""}, clear=False),
+            patch(
+                "dreamz_portal.ensure_runtime_schema",
+                side_effect=RuntimeError("schema unavailable"),
+            ),
+        ):
+            response = self.client.get("/readyz")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.get_json()["status"], "not_ready")
+        self.assertEqual(response.get_json()["database"], "unknown")
+        self.assertFalse(response.get_json()["runtimeSchemaReady"])
+
     def test_unauthorized_sync_api_skips_runtime_schema_prepare(self):
         with patch("dreamz_portal.ensure_runtime_schema", side_effect=RuntimeError("should skip")):
             response = self.client.post("/api/sync/members", json={})
