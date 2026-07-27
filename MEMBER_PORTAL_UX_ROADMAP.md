@@ -1,7 +1,7 @@
 # Dreamz Member Portal UX roadmap
 
 Status: canonical working plan for the URL-based member portal
-Baseline: production commit `84734ce7c53871e3a1db4d5544e4305614078a34`
+Integration base: remote staging commit `1e3da9a4ae44b56012d50b944719177206bb7bbe`
 Integration branch: `codex/member-portal-ux-integration`
 
 ## Product boundary
@@ -73,10 +73,32 @@ gamification:
 - progress autosaves and resumes after refresh, reconnect or device change;
 - start, save and finish requests are idempotent;
 - completed workout history remains immutable;
-- finishing produces a concise summary and explicit next action.
+- finishing produces a concise summary and explicit next action;
+- PostgreSQL runtime bootstrap is serialized across web workers and the
+  workout concurrency contract has a disposable PostgreSQL smoke test.
 
 This phase is the data foundation for trustworthy personal records, volume
 charts, streaks and level progression.
+
+## Release gate
+
+Do not treat the `codex/railway-staging` branch name as proof of an isolated
+staging environment. Before deployment, verify the exact Railway project,
+PostgreSQL database, object-storage bucket and public hostname.
+
+The member-portal release requires:
+
+- staging-only public and webhook URLs;
+- disabled or log-only outbound email;
+- synthetic smoke members rather than Gym Assistant production exports;
+- `RUNTIME_SCHEMA_STRICT=true` during schema verification;
+- the fail-closed disposable PostgreSQL workout concurrency smoke;
+- a target catalog audit for every workout unique constraint, index and foreign
+  key, because runtime column additions do not repair an incomplete existing
+  schema;
+- a verified backup, rollback and roll-forward procedure.
+
+No production deployment is authorized by this roadmap.
 
 ## Phase 3: useful progress visualisations and gamification
 

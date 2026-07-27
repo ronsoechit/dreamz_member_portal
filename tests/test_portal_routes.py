@@ -397,6 +397,20 @@ class PortalRouteTests(unittest.TestCase):
                 language,
             )
 
+    def test_active_workout_elapsed_schema_helpers_are_idempotent_on_sqlite(self):
+        elapsed_column = next(
+            column
+            for column in portal_module.inspect(db.engine).get_columns("coach_active_workout")
+            if column["name"] == "elapsed_seconds"
+        )
+
+        self.assertFalse(elapsed_column["nullable"])
+        self.assertTrue(portal_module.column_default_is_zero(elapsed_column["default"]))
+        self.assertTrue(portal_module.column_default_is_zero("0::integer"))
+        self.assertFalse(portal_module.column_default_is_zero(None))
+        with portal_module.runtime_schema_lock():
+            pass
+
     def test_group_class_member_page_renders_in_all_languages(self):
         self.add_member(member_id="13659", name="Ron Soechit")
         seed_group_class_schedule()

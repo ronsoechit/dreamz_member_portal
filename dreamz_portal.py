@@ -6,6 +6,7 @@ import os
 import platform
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 from time import perf_counter
 
@@ -2437,6 +2438,25 @@ def runtime_model_column_definition(table, column):
     return runtime_column_definition(column)
 
 
+RUNTIME_SCHEMA_ADVISORY_LOCK_ID = 0x445245414D5A
+
+
+@contextmanager
+def runtime_schema_lock():
+    if db.engine.dialect.name != "postgresql":
+        yield
+        return
+
+    from sqlalchemy import text
+
+    with db.engine.begin() as lock_connection:
+        lock_connection.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_id)"),
+            {"lock_id": RUNTIME_SCHEMA_ADVISORY_LOCK_ID},
+        )
+        yield
+
+
 def ensure_runtime_model_columns():
     if db.engine.dialect.name == "postgresql":
         inspector = inspect(db.engine)
@@ -2463,19 +2483,58 @@ def ensure_runtime_model_columns():
             ensure_model_column(table.name, column.name, runtime_model_column_definition(table, column))
 
 
+def column_default_is_zero(default_value):
+    normalized = str(default_value or "").strip().lower()
+    normalized = normalized.replace("::integer", "").replace("::bigint", "")
+    normalized = normalized.strip("()'\" ")
+    return normalized == "0"
+
+
+def active_workout_elapsed_column(inspector):
+    if "coach_active_workout" not in inspector.get_table_names():
+        return None
+    return next(
+        (
+            column
+            for column in inspector.get_columns("coach_active_workout")
+            if column["name"] == "elapsed_seconds"
+        ),
+        None,
+    )
+
+
 def enforce_active_workout_elapsed_schema():
     from sqlalchemy import text
 
-    inspector = inspect(db.engine)
-    if "coach_active_workout" not in inspector.get_table_names():
+    elapsed_column = active_workout_elapsed_column(inspect(db.engine))
+    if elapsed_column is None:
         return
-    db.session.execute(text(
-        "UPDATE coach_active_workout SET elapsed_seconds = 0 WHERE elapsed_seconds IS NULL"
-    ))
+
+    needs_default = not column_default_is_zero(elapsed_column.get("default"))
+    needs_not_null = bool(elapsed_column.get("nullable", True))
+    if not needs_default and not needs_not_null:
+        return
+
     if db.engine.dialect.name == "postgresql":
+        db.session.execute(text(
+            "LOCK TABLE coach_active_workout IN ACCESS EXCLUSIVE MODE"
+        ))
+        elapsed_column = active_workout_elapsed_column(inspect(db.session.connection()))
+        if elapsed_column is None:
+            db.session.commit()
+            return
+        needs_default = not column_default_is_zero(elapsed_column.get("default"))
+        needs_not_null = bool(elapsed_column.get("nullable", True))
+
+    if needs_not_null:
+        db.session.execute(text(
+            "UPDATE coach_active_workout SET elapsed_seconds = 0 WHERE elapsed_seconds IS NULL"
+        ))
+    if db.engine.dialect.name == "postgresql" and needs_default:
         db.session.execute(text(
             "ALTER TABLE coach_active_workout ALTER COLUMN elapsed_seconds SET DEFAULT 0"
         ))
+    if db.engine.dialect.name == "postgresql" and needs_not_null:
         db.session.execute(text(
             "ALTER TABLE coach_active_workout ALTER COLUMN elapsed_seconds SET NOT NULL"
         ))
@@ -2642,6 +2701,13 @@ def ensure_runtime_schema():
     if app.config.get("_RUNTIME_SCHEMA_READY") and not app.config.get("TESTING"):
         return
 
+    with runtime_schema_lock():
+        if app.config.get("_RUNTIME_SCHEMA_READY") and not app.config.get("TESTING"):
+            return
+        ensure_runtime_schema_unlocked()
+
+
+def ensure_runtime_schema_unlocked():
     db.create_all()
     ensure_runtime_model_columns()
     enforce_active_workout_elapsed_schema()
@@ -9346,7 +9412,8 @@ def coach_plan_for_member(member, profile, language=None, force=False):
     if not plan:
         return None
 
-    if not record:
+    created_record = record is None
+    if created_record:
         record = CoachPlan(member_id=member.member_id)
     record.language = language
     record.source = source
@@ -9355,7 +9422,30 @@ def coach_plan_for_member(member, profile, language=None, force=False):
     record.prompt_context = context or coach_context_summary(member, profile)
     record.updated_at = datetime.now()
     db.session.add(record)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        if not created_record:
+            raise
+        db.session.rollback()
+        winning_record = CoachPlan.query.filter_by(member_id=member.member_id).first()
+        if winning_record is None:
+            raise
+        winning_plan = stored_coach_plan(winning_record)
+        if (
+            winning_plan
+            and winning_record.language == language
+            and winning_record.plan_version == COACH_PLAN_SCHEMA_VERSION
+        ):
+            return winning_plan
+
+        winning_record.language = language
+        winning_record.source = source
+        winning_record.plan_version = COACH_PLAN_SCHEMA_VERSION
+        winning_record.plan_json = json.dumps(plan, ensure_ascii=False)
+        winning_record.prompt_context = context or coach_context_summary(member, profile)
+        winning_record.updated_at = datetime.now()
+        db.session.commit()
     return plan
 
 
