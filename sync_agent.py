@@ -692,9 +692,48 @@ def build_sync_payload(
             f"No live Members.btx or GymAssistant .gbu backup found under {data_root(source_root)}"
         )
 
+    member_source_before = member_source.stat()
     import_result = parse_members_with_live_logs(member_source) if member_source.suffix.lower() == ".gbu" else parse_gymassistant_export(member_source)
+    member_source_after = member_source.stat()
+    member_source_stable = (
+        member_source_before.st_size == member_source_after.st_size
+        and member_source_before.st_mtime_ns == member_source_after.st_mtime_ns
+    )
     source_members = import_result.members[:member_limit] if member_limit else import_result.members
     members = [dict(member) for member in source_members]
+    member_ids = [str(member.get("member_id") or "").strip() for member in members]
+    unique_member_ids = sorted(set(member_ids))
+    source_warning = live_member_data_warning(source_root, backup)
+    scope_complete = member_limit is None
+    skipped_record_count = sum(
+        1
+        for issue in import_result.issues
+        if str(issue.message or "").casefold().startswith("skipped ")
+    )
+    complete_member_source = member_source.name.casefold() == "members.btx"
+    member_snapshot = {
+        "schema_version": 1,
+        "scope_complete": scope_complete,
+        "source_stable_during_read": member_source_stable,
+        "authoritative_for_absence": bool(
+            scope_complete
+            and complete_member_source
+            and member_source_stable
+            and not source_warning
+            and members
+            and len(unique_member_ids) == len(member_ids)
+            and all(member_id.isdigit() and int(member_id) > 0 for member_id in member_ids)
+            and skipped_record_count == 0
+        ),
+        "source_count": len(import_result.members),
+        "sent_count": len(members),
+        "unique_count": len(unique_member_ids),
+        "member_ids_sha256": hashlib.sha256(
+            "\n".join(unique_member_ids).encode("utf-8")
+        ).hexdigest(),
+        "parse_issue_count": len(import_result.issues),
+        "skipped_record_count": skipped_record_count,
+    }
     selected_invoice_member_ids = (
         configured_invoice_pilot_member_ids()
         if invoice_member_ids is None
@@ -823,8 +862,9 @@ def build_sync_payload(
         "source": str(source_root),
         "backup": str(backup),
         "member_source": str(member_source),
-        "warning": live_member_data_warning(source_root, backup),
+        "warning": source_warning,
         "generated_at": utc_now_iso(),
+        "member_snapshot": member_snapshot,
         "members": [json_safe_member(member) for member in members],
         "documents": documents,
         "invoice_pilot_member_ids": sorted(selected_invoice_member_ids),

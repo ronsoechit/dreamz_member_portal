@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+import hashlib
 import tempfile
 import unittest
 import os
@@ -8,7 +9,7 @@ import zipfile
 from unittest.mock import patch
 from urllib.error import URLError
 
-from sync_agent import build_sync_payload, diff_manifest, get_invoice_monitor_member_ids, load_manifest, main, process_fep_payment_command, process_fep_payment_updates, read_stable_file_snapshot, run_fep_payment_writer, save_manifest, scan_source
+from sync_agent import build_sync_payload, diff_manifest, get_invoice_monitor_member_ids, load_manifest, main, parse_gymassistant_export, process_fep_payment_command, process_fep_payment_updates, read_stable_file_snapshot, run_fep_payment_writer, save_manifest, scan_source
 
 
 PHOTO_VERSIONED_KEY = "portal/Data/Pictures/0000100-55c64d0fcd6f9d5f.jpg"
@@ -44,6 +45,26 @@ def write_members_btx(path: Path, member_id: str = "100") -> None:
     ]), encoding="latin-1")
 
 
+def write_members_btx_members(path: Path, member_ids: list[str]) -> None:
+    lines = [
+        "CLASS=contract Dreamz 6 months",
+        "MEMBERTYPE_ID=900000101",
+        "OPTION=1 MONTHS EFT 6500 0",
+        "-",
+    ]
+    for member_id in member_ids:
+        lines.extend([
+            f"MN={member_id}",
+            f"LN=Tester {member_id}",
+            "FN=Snapshot",
+            "MTN=contract Dreamz 6 months",
+            "EM=snapshot@example.com",
+            "-",
+        ])
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="latin-1")
+
+
 def write_member_log(path: Path, member_id: str = "101") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -58,6 +79,77 @@ def write_member_log(path: Path, member_id: str = "101") -> None:
 
 
 class SyncAgentTests(unittest.TestCase):
+    def test_build_sync_payload_marks_full_member_snapshot_authoritative(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            data_dir.mkdir(parents=True)
+            write_members_btx_members(
+                data_dir / "Members.btx",
+                ["200", "100"],
+            )
+
+            payload = build_sync_payload(root)
+
+        snapshot = payload["member_snapshot"]
+        self.assertTrue(snapshot["scope_complete"])
+        self.assertTrue(snapshot["source_stable_during_read"])
+        self.assertTrue(snapshot["authoritative_for_absence"])
+        self.assertEqual(snapshot["source_count"], 2)
+        self.assertEqual(snapshot["sent_count"], 2)
+        self.assertEqual(snapshot["unique_count"], 2)
+        self.assertEqual(
+            snapshot["member_ids_sha256"],
+            hashlib.sha256(b"100\n200").hexdigest(),
+        )
+
+    def test_build_sync_payload_rejects_source_changed_during_member_parse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            data_dir.mkdir(parents=True)
+            members_path = data_dir / "Members.btx"
+            write_members_btx_members(members_path, ["100", "200"])
+            original_parser = parse_gymassistant_export
+
+            def parse_then_change(path):
+                result = original_parser(path)
+                members_path.write_bytes(members_path.read_bytes() + b"\n")
+                return result
+
+            with patch(
+                "sync_agent.parse_gymassistant_export",
+                side_effect=parse_then_change,
+            ):
+                payload = build_sync_payload(root)
+
+        snapshot = payload["member_snapshot"]
+        self.assertFalse(snapshot["source_stable_during_read"])
+        self.assertFalse(snapshot["authoritative_for_absence"])
+
+    def test_build_sync_payload_marks_member_limited_snapshot_non_authoritative(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            data_dir.mkdir(parents=True)
+            write_members_btx_members(
+                data_dir / "Members.btx",
+                ["200", "100"],
+            )
+
+            payload = build_sync_payload(root, member_limit=1)
+
+        snapshot = payload["member_snapshot"]
+        self.assertFalse(snapshot["scope_complete"])
+        self.assertFalse(snapshot["authoritative_for_absence"])
+        self.assertEqual(snapshot["source_count"], 2)
+        self.assertEqual(snapshot["sent_count"], 1)
+        self.assertEqual(snapshot["unique_count"], 1)
+        self.assertEqual(
+            snapshot["member_ids_sha256"],
+            hashlib.sha256(b"200").hexdigest(),
+        )
+
     def test_invoice_monitor_discovery_fails_closed(self):
         with patch(
             "sync_agent.urlrequest.urlopen",
@@ -285,6 +377,7 @@ class SyncAgentTests(unittest.TestCase):
         self.assertTrue(scan.member_source.endswith("GABackup-test.gbu"))
         self.assertIsNone(scan.warning)
         self.assertIsNone(payload["warning"])
+        self.assertFalse(payload["member_snapshot"]["authoritative_for_absence"])
         self.assertIn("Data/Members.dat", [item.path for item in scan.files])
 
     def test_scan_source_warns_when_live_members_dat_is_more_than_24h_newer_than_backup(self):
@@ -306,6 +399,7 @@ class SyncAgentTests(unittest.TestCase):
         self.assertTrue(scan.member_source.endswith("GABackup-test.gbu"))
         self.assertIn("more than 24 hours newer", scan.warning)
         self.assertIn("more than 24 hours newer", payload["warning"])
+        self.assertFalse(payload["member_snapshot"]["authoritative_for_absence"])
 
     def test_build_sync_payload_applies_live_member_logs_newer_than_backup(self):
         with tempfile.TemporaryDirectory() as tmp:

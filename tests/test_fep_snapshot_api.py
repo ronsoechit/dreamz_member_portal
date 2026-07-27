@@ -36,7 +36,42 @@ class FepSnapshotApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
 
+    def test_snapshot_fails_closed_until_complete_member_snapshot_exists(self):
+        db.session.add(Member(member_id="34203", name="Historical, Member"))
+        db.session.add(
+            SyncRun(
+                source="unit-test",
+                status="success",
+                members_received=1,
+                members_snapshot_complete=False,
+            )
+        )
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/fep/member-snapshot",
+            headers={"X-FEP-Token": "fep-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(response.json["presence_authoritative"])
+        self.assertEqual(response.json["members"], [])
+
     def test_snapshot_returns_member_billing_fields(self):
+        sync_run = SyncRun(
+            source="unit-test",
+            status="success",
+            started_at=datetime(2026, 6, 18, 8, 30, 0),
+            completed_at=datetime(2026, 6, 18, 8, 31, 0),
+            members_received=1,
+            members_new=1,
+            members_updated=0,
+            members_snapshot_complete=True,
+            member_unique_count=1,
+            member_snapshot_protocol="explicit_v1",
+        )
+        db.session.add(sync_run)
+        db.session.flush()
         db.session.add(
             Member(
                 member_id="34203",
@@ -50,17 +85,7 @@ class FepSnapshotApiTests(unittest.TestCase):
                 last_payment=date(2026, 5, 28),
                 last_payment_amount=61.0,
                 is_active=True,
-            )
-        )
-        db.session.add(
-            SyncRun(
-                source="unit-test",
-                status="success",
-                started_at=datetime(2026, 6, 18, 8, 30, 0),
-                completed_at=datetime(2026, 6, 18, 8, 31, 0),
-                members_received=1,
-                members_new=1,
-                members_updated=0,
+                gym_snapshot_run_id=sync_run.id,
             )
         )
         db.session.commit()

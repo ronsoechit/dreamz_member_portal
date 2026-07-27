@@ -273,6 +273,16 @@ AUDIT_ISSUE_LABELS = {
 AUDIT_PAGE_SIZE = 500
 SYNC_PAGE_SIZE = 20
 SYNC_STALE_AFTER_MINUTES = int(os.getenv("SYNC_STALE_AFTER_MINUTES", "30"))
+MEMBER_SYNC_ADVISORY_LOCK_ID = 637150112026
+LEGACY_MEMBER_SNAPSHOT_CONFIRMATIONS = 3
+LEGACY_MEMBER_SNAPSHOT_MIN_COUNT = 100
+LEGACY_MEMBER_SNAPSHOT_MIN_RATIO = 0.95
+LEGACY_MEMBER_SNAPSHOT_MAX_COUNT_DRIFT_RATIO = 0.01
+LEGACY_MEMBER_SNAPSHOT_MIN_OVERLAP_RATIO = 0.98
+LEGACY_MEMBER_SNAPSHOT_MIN_INTERVAL_SECONDS = 60
+LEGACY_MEMBER_SNAPSHOT_MAX_INTERVAL_SECONDS = 20 * 60
+LEGACY_MEMBER_SNAPSHOT_HIGH_WATERMARK_DAYS = 30
+LEGACY_MEMBER_SNAPSHOT_RETAIN_MEMBER_SETS = 6
 
 class Member(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -317,6 +327,7 @@ class Member(db.Model):
     password_set_at  = db.Column(db.DateTime)
     responsible_member_id = db.Column(db.String, index=True)
     dependent_member_ids  = db.Column(db.Text)
+    gym_snapshot_run_id = db.Column(db.Integer, index=True)
 
 
 class MemberDocument(db.Model):
@@ -735,6 +746,14 @@ class SyncRun(db.Model):
     members_new = db.Column(db.Integer, default=0, nullable=False)
     members_updated = db.Column(db.Integer, default=0, nullable=False)
     documents_received = db.Column(db.Integer, default=0, nullable=False)
+    members_snapshot_complete = db.Column(db.Boolean, default=False, nullable=False)
+    member_source = db.Column(db.String)
+    member_source_count = db.Column(db.Integer, default=0, nullable=False)
+    member_unique_count = db.Column(db.Integer, default=0, nullable=False)
+    member_ids_sha256 = db.Column(db.String(64))
+    member_ids_json = db.Column(db.Text)
+    member_snapshot_protocol = db.Column(db.String(40))
+    member_snapshot_reason = db.Column(db.String)
     change_summary = db.Column(db.Text)
     error = db.Column(db.Text)
 
@@ -2387,6 +2406,20 @@ def backfill_runtime_schema_defaults():
     ))
     db.session.execute(text(
         "UPDATE sync_run SET documents_received = 0 WHERE documents_received IS NULL"
+    ))
+    db.session.execute(text(
+        f"UPDATE sync_run SET members_snapshot_complete = {sql_bool(False)} "
+        "WHERE members_snapshot_complete IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE sync_run SET member_source_count = 0 WHERE member_source_count IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE sync_run SET member_unique_count = 0 WHERE member_unique_count IS NULL"
+    ))
+    db.session.execute(text(
+        "CREATE INDEX IF NOT EXISTS ix_member_gym_snapshot_run_id "
+        "ON member (gym_snapshot_run_id)"
     ))
     db.session.execute(text(
         "UPDATE portal_invitation SET request_type = 'new_member' "
@@ -6197,9 +6230,10 @@ def parse_sync_date(value):
 
 def normalize_sync_member_data(raw_member):
     columns = {column.name for column in Member.__table__.columns}
+    internal_fields = {"id", "gym_snapshot_run_id"}
     normalized = {}
     for key, value in (raw_member or {}).items():
-        if key not in columns or key == "id":
+        if key not in columns or key in internal_fields:
             continue
         if is_sync_invalid_sentinel(value):
             continue
@@ -7761,22 +7795,316 @@ def staff_invoice_pilot_context():
     }
 
 
+def canonical_sync_member_ids(members):
+    member_ids = []
+    invalid_member_ids = []
+    for raw_member in members:
+        if not isinstance(raw_member, dict):
+            invalid_member_ids.append("")
+            continue
+        member_id = str(raw_member.get("member_id") or "").strip()
+        member_ids.append(member_id)
+        if not member_id.isdigit() or int(member_id) <= 0:
+            invalid_member_ids.append(member_id)
+    unique_member_ids = sorted(set(member_ids))
+    canonical = "\n".join(unique_member_ids)
+    return {
+        "member_ids": member_ids,
+        "unique_member_ids": unique_member_ids,
+        "unique_count": len(unique_member_ids),
+        "has_duplicates": len(unique_member_ids) != len(member_ids),
+        "invalid_member_ids": invalid_member_ids,
+        "sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    }
+
+
+def strict_snapshot_count(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def is_complete_members_source(member_source):
+    filename = re.split(r"[\\/]", str(member_source or "").strip())[-1].casefold()
+    return filename == "members.btx" or filename.endswith(".gbu")
+
+
+def assess_member_snapshot(payload, members, warning):
+    identity = canonical_sync_member_ids(members)
+    member_source = str(payload.get("member_source") or "").strip()
+    source = str(payload.get("source") or "").strip()
+    assessment = {
+        **identity,
+        "member_source": member_source,
+        "source_count": len(members),
+        "protocol": "legacy_rejected",
+        "reason": "Legacy sync is not safe for absence detection.",
+        "explicit_authoritative": False,
+        "legacy_candidate": False,
+    }
+
+    if "member_snapshot" in payload:
+        metadata = payload.get("member_snapshot")
+        assessment["protocol"] = "explicit_rejected"
+        if not isinstance(metadata, dict):
+            assessment["reason"] = "member_snapshot metadata is missing or invalid."
+            return assessment
+
+        source_count = strict_snapshot_count(metadata.get("source_count"))
+        sent_count = strict_snapshot_count(metadata.get("sent_count"))
+        unique_count = strict_snapshot_count(metadata.get("unique_count"))
+        if source_count is not None:
+            assessment["source_count"] = source_count
+
+        if metadata.get("authoritative_for_absence") is not True:
+            assessment["protocol"] = "explicit_partial"
+            assessment["reason"] = "The sync agent marked this member set as partial."
+            return assessment
+
+        validation_errors = []
+        if metadata.get("schema_version") != 1:
+            validation_errors.append("schema_version is not supported")
+        if metadata.get("scope_complete") is not True:
+            validation_errors.append("scope_complete is not true")
+        if metadata.get("source_stable_during_read") is not True:
+            validation_errors.append("the member source was not stable while being read")
+        if warning:
+            validation_errors.append("the source reported a warning")
+        if not source or not (
+            re.split(r"[\\/]", member_source)[-1].casefold() == "members.btx"
+        ):
+            validation_errors.append("the live Gym Assistant Members.btx source is not identified")
+        if not members:
+            validation_errors.append("the member set is empty")
+        if identity["invalid_member_ids"]:
+            validation_errors.append("one or more member ids are invalid")
+        if identity["has_duplicates"]:
+            validation_errors.append("member ids are not unique")
+        if source_count != len(members):
+            validation_errors.append("source_count does not match members")
+        if sent_count != len(members):
+            validation_errors.append("sent_count does not match members")
+        if unique_count != identity["unique_count"]:
+            validation_errors.append("unique_count does not match members")
+        if str(metadata.get("member_ids_sha256") or "").casefold() != identity["sha256"]:
+            validation_errors.append("member_ids_sha256 does not match members")
+        skipped_record_count = strict_snapshot_count(metadata.get("skipped_record_count"))
+        if skipped_record_count not in (None, 0):
+            validation_errors.append("one or more source records were skipped")
+
+        if validation_errors:
+            assessment["reason"] = "Explicit member snapshot rejected: " + "; ".join(validation_errors) + "."
+            return assessment
+
+        assessment["protocol"] = "explicit_v1"
+        assessment["reason"] = "The sync agent explicitly confirmed a complete live member snapshot."
+        assessment["explicit_authoritative"] = True
+        return assessment
+
+    legacy_errors = []
+    if warning:
+        legacy_errors.append("the source reported a warning")
+    if not source:
+        legacy_errors.append("the sync source is missing")
+    if not is_complete_members_source(member_source):
+        legacy_errors.append("a complete Gym Assistant member source is not identified")
+    if len(members) < LEGACY_MEMBER_SNAPSHOT_MIN_COUNT:
+        legacy_errors.append(
+            f"fewer than {LEGACY_MEMBER_SNAPSHOT_MIN_COUNT} members were received"
+        )
+    if identity["invalid_member_ids"]:
+        legacy_errors.append("one or more member ids are invalid")
+    if identity["has_duplicates"]:
+        legacy_errors.append("member ids are not unique")
+
+    if legacy_errors:
+        assessment["reason"] = "Legacy member snapshot rejected: " + "; ".join(legacy_errors) + "."
+        return assessment
+
+    assessment["protocol"] = "legacy_candidate"
+    assessment["reason"] = "Waiting for three stable legacy member snapshots."
+    assessment["legacy_candidate"] = True
+    return assessment
+
+
+def acquire_member_sync_advisory_lock():
+    if db.engine.dialect.name != "postgresql":
+        return
+    from sqlalchemy import text
+
+    db.session.execute(
+        text("SELECT pg_advisory_xact_lock(:lock_id)"),
+        {"lock_id": MEMBER_SYNC_ADVISORY_LOCK_ID},
+    )
+
+
+def sync_run_is_latest(sync_run):
+    latest_run_id = db.session.query(db.func.max(SyncRun.id)).scalar()
+    return latest_run_id == sync_run.id
+
+
+def legacy_member_snapshot_promotion(sync_run):
+    recent_runs = (
+        SyncRun.query
+        .order_by(SyncRun.id.desc())
+        .limit(LEGACY_MEMBER_SNAPSHOT_CONFIRMATIONS)
+        .all()
+    )
+    if len(recent_runs) < LEGACY_MEMBER_SNAPSHOT_CONFIRMATIONS:
+        return False, (
+            f"Waiting for {LEGACY_MEMBER_SNAPSHOT_CONFIRMATIONS - len(recent_runs)} "
+            "more stable legacy member snapshot(s)."
+        )
+    if recent_runs[0].id != sync_run.id:
+        return False, "A newer sync started before this candidate could be promoted."
+
+    expected_source = (sync_run.source, sync_run.member_source)
+    candidate_member_sets = []
+    for candidate in recent_runs:
+        if candidate.status != "success" or candidate.member_snapshot_protocol != "legacy_candidate":
+            return False, "The last three syncs were not all eligible legacy candidates."
+        if (candidate.source, candidate.member_source) != expected_source:
+            return False, "The last three legacy member snapshots used different sources."
+        try:
+            candidate_member_ids = json.loads(candidate.member_ids_json or "")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return False, "A legacy member snapshot has no verifiable member set."
+        if not isinstance(candidate_member_ids, list):
+            return False, "A legacy member snapshot has invalid member-set data."
+        candidate_member_ids = [str(member_id) for member_id in candidate_member_ids]
+        candidate_member_set = set(candidate_member_ids)
+        candidate_hash = hashlib.sha256(
+            "\n".join(sorted(candidate_member_set)).encode("utf-8")
+        ).hexdigest()
+        if (
+            len(candidate_member_ids) != len(candidate_member_set)
+            or len(candidate_member_set) != candidate.member_unique_count
+            or candidate_hash != candidate.member_ids_sha256
+        ):
+            return False, "A legacy member snapshot failed its member-set integrity check."
+        candidate_member_sets.append(candidate_member_set)
+
+    candidate_counts = [len(member_set) for member_set in candidate_member_sets]
+    largest_candidate_count = max(candidate_counts)
+    if (
+        largest_candidate_count - min(candidate_counts)
+        > largest_candidate_count * LEGACY_MEMBER_SNAPSHOT_MAX_COUNT_DRIFT_RATIO
+    ):
+        return False, "The last three legacy member snapshots changed too much in size."
+    current_member_set = candidate_member_sets[0]
+    confirmed_overlap = set.intersection(*candidate_member_sets)
+    if (
+        len(confirmed_overlap) / len(current_member_set)
+        < LEGACY_MEMBER_SNAPSHOT_MIN_OVERLAP_RATIO
+    ):
+        return False, "The last three legacy member snapshots did not overlap enough."
+
+    chronological_runs = list(reversed(recent_runs))
+    for older, newer in zip(chronological_runs, chronological_runs[1:]):
+        if not older.started_at or not newer.started_at:
+            return False, "A legacy snapshot timestamp is missing."
+        interval_seconds = (newer.started_at - older.started_at).total_seconds()
+        if interval_seconds < LEGACY_MEMBER_SNAPSHOT_MIN_INTERVAL_SECONDS:
+            return False, "Legacy member snapshots arrived too close together."
+        if interval_seconds > LEGACY_MEMBER_SNAPSHOT_MAX_INTERVAL_SECONDS:
+            return False, "Legacy member snapshots arrived too far apart."
+
+    oldest_candidate = chronological_runs[0]
+    high_watermark_cutoff = datetime.now() - timedelta(
+        days=LEGACY_MEMBER_SNAPSHOT_HIGH_WATERMARK_DAYS
+    )
+    recent_high_watermark = (
+        db.session.query(db.func.max(SyncRun.members_received))
+        .filter(
+            SyncRun.id < oldest_candidate.id,
+            SyncRun.status == "success",
+            SyncRun.source == sync_run.source,
+            SyncRun.started_at >= high_watermark_cutoff,
+            SyncRun.members_received > 0,
+        )
+        .scalar()
+    )
+    if (
+        recent_high_watermark
+        and sync_run.member_unique_count
+        < float(recent_high_watermark) * LEGACY_MEMBER_SNAPSHOT_MIN_RATIO
+    ):
+        return False, (
+            "The stable legacy member set is too small compared with the recent "
+            f"high-water mark ({sync_run.member_unique_count} versus {recent_high_watermark})."
+        )
+
+    return True, (
+        "Three highly overlapping legacy snapshots confirmed the current member set "
+        f"({len(confirmed_overlap)} of {len(current_member_set)} members repeated)."
+    )
+
+
+def promote_member_snapshot(sync_run, synced_members_by_id, protocol, reason):
+    if len(synced_members_by_id) != sync_run.member_unique_count:
+        raise RuntimeError(
+            "Member snapshot promotion refused because the imported member count changed."
+        )
+    for member_record in synced_members_by_id.values():
+        member_record.gym_snapshot_run_id = sync_run.id
+    sync_run.members_snapshot_complete = True
+    sync_run.member_snapshot_protocol = protocol
+    sync_run.member_snapshot_reason = reason
+
+
+def prune_legacy_member_snapshot_sets():
+    retained_runs = (
+        SyncRun.query
+        .filter(SyncRun.member_ids_json.isnot(None))
+        .order_by(SyncRun.id.desc())
+        .limit(LEGACY_MEMBER_SNAPSHOT_RETAIN_MEMBER_SETS)
+        .all()
+    )
+    retained_ids = [sync_run.id for sync_run in retained_runs]
+    if not retained_ids:
+        return
+    (
+        SyncRun.query
+        .filter(
+            SyncRun.member_ids_json.isnot(None),
+            ~SyncRun.id.in_(retained_ids),
+        )
+        .update({SyncRun.member_ids_json: None}, synchronize_session=False)
+    )
+
+
 def apply_sync_payload(payload):
     members = payload.get("members") or []
     documents_by_member = payload.get("documents") or {}
+    if not isinstance(members, list):
+        raise ValueError("Sync members must be a list.")
+    if not isinstance(documents_by_member, dict):
+        raise ValueError("Sync documents must be grouped by member id.")
     source = payload.get("source") or "sync-agent"
     warning = (payload.get("warning") or "").strip() or None
+    snapshot_assessment = assess_member_snapshot(payload, members, warning)
     sync_run = SyncRun(
         source=source,
         status="running",
         members_received=len(members),
         documents_received=sum(len(records or []) for records in documents_by_member.values()),
+        members_snapshot_complete=False,
+        member_source=snapshot_assessment["member_source"],
+        member_source_count=snapshot_assessment["source_count"],
+        member_unique_count=snapshot_assessment["unique_count"],
+        member_ids_sha256=snapshot_assessment["sha256"],
+        member_ids_json=(
+            json.dumps(snapshot_assessment["unique_member_ids"], separators=(",", ":"))
+            if snapshot_assessment["legacy_candidate"]
+            else None
+        ),
+        member_snapshot_protocol=snapshot_assessment["protocol"],
+        member_snapshot_reason=snapshot_assessment["reason"],
         error=warning,
     )
     db.session.add(sync_run)
     db.session.commit()
 
     new = updated = 0
+    synced_members_by_id = {}
     change_summary = {
         "new_members": [],
         "changed_members": [],
@@ -7787,6 +8115,7 @@ def apply_sync_payload(payload):
     ignored_blank_fields = {}
     suspicious_name_changes = {}
     try:
+        acquire_member_sync_advisory_lock()
         for raw_member in members:
             invalid_fields = sync_invalid_field_names(raw_member)
             member_data = normalize_sync_member_data(raw_member)
@@ -7834,6 +8163,7 @@ def apply_sync_payload(payload):
                     email=member_data.get("email"),
                     plan_type=member_data.get("plan_type"),
                 ))
+            synced_members_by_id[member_data["member_id"]] = member_record
 
             document_records = documents_by_member.get(member_data["member_id"])
             if document_records is not None:
@@ -7902,6 +8232,45 @@ def apply_sync_payload(payload):
                 "Review Staff > Changes before updating canonical names."
             )
             sync_run.error = f"{sync_run.error}\n{warning_text}" if sync_run.error else warning_text
+
+        if snapshot_assessment["explicit_authoritative"]:
+            db.session.flush()
+            if sync_run_is_latest(sync_run):
+                promote_member_snapshot(
+                    sync_run,
+                    synced_members_by_id,
+                    snapshot_assessment["protocol"],
+                    snapshot_assessment["reason"],
+                )
+            else:
+                sync_run.member_snapshot_protocol = "explicit_stale"
+                sync_run.member_snapshot_reason = (
+                    "A newer member sync started before this complete snapshot could be promoted."
+                )
+        elif snapshot_assessment["legacy_candidate"]:
+            db.session.flush()
+            promote_legacy_snapshot, promotion_reason = legacy_member_snapshot_promotion(sync_run)
+            if promote_legacy_snapshot:
+                promote_member_snapshot(
+                    sync_run,
+                    synced_members_by_id,
+                    "legacy_stable_3",
+                    promotion_reason,
+                )
+            else:
+                sync_run.member_snapshot_reason = promotion_reason
+
+        change_summary["member_snapshot"] = {
+            "complete": bool(sync_run.members_snapshot_complete),
+            "protocol": sync_run.member_snapshot_protocol,
+            "reason": sync_run.member_snapshot_reason,
+            "member_source": sync_run.member_source,
+            "source_count": sync_run.member_source_count,
+            "received_count": sync_run.members_received,
+            "unique_count": sync_run.member_unique_count,
+            "member_ids_sha256": sync_run.member_ids_sha256,
+        }
+        prune_legacy_member_snapshot_sets()
         sync_run.change_summary = json.dumps(change_summary)
         db.session.commit()
     except Exception as exc:
@@ -12976,6 +13345,9 @@ def api_sync_members():
         "members_new": sync_run.members_new,
         "members_updated": sync_run.members_updated,
         "documents_received": sync_run.documents_received,
+        "members_snapshot_complete": bool(sync_run.members_snapshot_complete),
+        "member_snapshot_protocol": sync_run.member_snapshot_protocol,
+        "member_snapshot_reason": sync_run.member_snapshot_reason,
         "portal_invitations": invitation_summary,
     }
 
@@ -13085,32 +13457,67 @@ def fep_member_snapshot_row(member):
     }
 
 
-def fep_latest_sync_meta():
-    latest = SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc()).first()
-    if not latest:
+def fep_sync_meta(sync_run):
+    if not sync_run:
         return None
     return {
-        "id": latest.id,
-        "status": latest.status,
-        "source": latest.source,
-        "started_at": change_value(latest.started_at),
-        "completed_at": change_value(latest.completed_at),
-        "members_received": latest.members_received,
-        "members_new": latest.members_new,
-        "members_updated": latest.members_updated,
-        "error": latest.error or "",
+        "id": sync_run.id,
+        "status": sync_run.status,
+        "source": sync_run.source,
+        "started_at": change_value(sync_run.started_at),
+        "completed_at": change_value(sync_run.completed_at),
+        "members_received": sync_run.members_received,
+        "members_new": sync_run.members_new,
+        "members_updated": sync_run.members_updated,
+        "error": sync_run.error or "",
+        "members_snapshot_complete": bool(sync_run.members_snapshot_complete),
+        "member_snapshot_protocol": sync_run.member_snapshot_protocol or "",
+        "member_snapshot_reason": sync_run.member_snapshot_reason or "",
     }
+
+
+def fep_latest_sync_meta():
+    latest = SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc()).first()
+    return fep_sync_meta(latest)
 
 
 @app.get("/api/fep/member-snapshot")
 def api_fep_member_snapshot():
     require_fep_access()
     ensure_runtime_schema()
-    members = Member.query.order_by(Member.member_id.asc()).all()
+    latest_complete_run_id = (
+        db.session.query(SyncRun.id)
+        .filter(
+            SyncRun.status == "success",
+            SyncRun.members_snapshot_complete.is_(True),
+        )
+        .order_by(SyncRun.completed_at.desc(), SyncRun.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+    members = (
+        Member.query
+        .filter(Member.gym_snapshot_run_id == latest_complete_run_id)
+        .order_by(Member.member_id.asc())
+        .all()
+    )
+    if not members:
+        return jsonify({
+            "error": "No reliable complete Gym Assistant member snapshot is available yet.",
+            "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "member_count": 0,
+            "presence_authoritative": False,
+            "latest_sync": fep_latest_sync_meta(),
+            "members": [],
+        }), 503
+
+    snapshot_run = db.session.get(SyncRun, members[0].gym_snapshot_run_id)
     return jsonify({
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "member_count": len(members),
-        "latest_sync": fep_latest_sync_meta(),
+        "presence_authoritative": True,
+        "snapshot_run_id": snapshot_run.id,
+        "latest_sync": fep_sync_meta(snapshot_run),
         "members": [fep_member_snapshot_row(member) for member in members],
     })
 
