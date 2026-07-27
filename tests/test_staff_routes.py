@@ -1275,6 +1275,7 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("data-loading-form", body)
         self.assertIn("Signing in...", body)
         self.assertIn("button.disabled = true", body)
+        self.assertIn('class="auth-logo-frame"', body)
         self.assertIn("staff-login-language", body)
         self.assertNotIn("language-switcher", body)
 
