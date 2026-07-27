@@ -14147,10 +14147,6 @@ def staff_group_class_occurrence_save():
             source_occurrence_id=occurrence_id,
         ).first()
     is_new = draft is None
-    if is_new:
-        draft = GroupClassDraftOccurrence(schedule_id=schedule.id)
-        db.session.add(draft)
-
     old_data = group_class_record_snapshot(draft) if not is_new else None
     class_type_id = parse_optional_int(request.form.get("class_type_id"))
     class_type = db.session.get(GroupClassType, class_type_id) if class_type_id else None
@@ -14175,11 +14171,19 @@ def staff_group_class_occurrence_save():
     if class_type.name == "RESERVED":
         status = "reserved"
 
+    room = request.form.get("room", "").strip().upper()
+    if not room:
+        abort(400, translated_text("group_class_required_fields", current_language()))
+
+    if is_new:
+        draft = GroupClassDraftOccurrence(schedule_id=schedule.id)
+        db.session.add(draft)
+
     draft.class_type = class_type
     draft.day_of_week = day_of_week
     draft.start_time = start_time
     draft.end_time = end_time
-    draft.room = request.form.get("room", "").strip().upper()
+    draft.room = room
     draft.instructor = request.form.get("instructor", "").strip() or None
     draft.capacity = parse_optional_int(request.form.get("capacity"))
     draft.note = request.form.get("note", "").strip() or None
@@ -14197,8 +14201,6 @@ def staff_group_class_occurrence_save():
     )
     draft.updated_by = current_staff_username() or "staff"
     draft.updated_at = datetime.now()
-    if not draft.room:
-        abort(400, translated_text("group_class_required_fields", current_language()))
 
     db.session.flush()
     new_data = group_class_record_snapshot(draft)

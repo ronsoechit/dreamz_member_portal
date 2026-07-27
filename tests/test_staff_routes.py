@@ -908,6 +908,54 @@ class StaffRouteTests(unittest.TestCase):
         self.assertNotIn(b"52 660 508 82 re f*", content)
         self.assertIn("GROUP CLASS SCHEDULE", pdf.pages[0].extract_text())
 
+    def test_manager_can_add_new_group_class_without_premature_autoflush(self):
+        seed_group_class_schedule()
+        class_type_id = GroupClassType.query.filter_by(name="ZUMBA").one().id
+
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "christel"
+            sess["_csrf_token"] = "token"
+
+        self.client.get("/staff/group-classes")
+        initial_draft_count = GroupClassDraftOccurrence.query.count()
+        db.session.expunge_all()
+
+        response = self.client.post(
+            "/staff/group-classes/occurrences",
+            data={
+                "csrf_token": "token",
+                "day_of_week": "6",
+                "start_time": "10:00",
+                "end_time": "11:00",
+                "class_type_id": str(class_type_id),
+                "room": "aerobics room",
+                "instructor": "Christel",
+                "capacity": "24",
+                "status": "scheduled",
+                "is_bookable": "1",
+                "is_published": "1",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(GroupClassDraftOccurrence.query.count(), initial_draft_count + 1)
+        added = GroupClassDraftOccurrence.query.filter_by(
+            source_occurrence_id=None,
+            class_type_id=class_type_id,
+            day_of_week=6,
+        ).one()
+        self.assertEqual(added.room, "AEROBICS ROOM")
+        self.assertEqual(added.instructor, "Christel")
+        self.assertEqual(added.updated_by, "christel")
+        self.assertEqual(
+            GroupClassScheduleAudit.query.filter_by(action="draft_added", actor="christel").count(),
+            1,
+        )
+        schedule = GroupClassSchedule.query.one()
+        self.assertTrue(schedule.has_unpublished_changes)
+
     def test_staff_publish_sends_complete_schedule_to_wordpress_webhook(self):
         seed_group_class_schedule()
         app.config["WORDPRESS_SCHEDULE_WEBHOOK_URL"] = (
