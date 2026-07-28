@@ -1,10 +1,12 @@
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from gymassistant_payment_writer import (
     BlockingDialog,
     Rect,
     WindowInfo,
+    find_main_window,
     find_member_activation_prompt,
     wait_for_payment_dialog,
 )
@@ -23,7 +25,79 @@ def visible_window(hwnd=100):
     )
 
 
+def titled_window(title, hwnd=100):
+    window = visible_window(hwnd)
+    return WindowInfo(
+        hwnd=window.hwnd,
+        parent=window.parent,
+        control_id=window.control_id,
+        class_name=window.class_name,
+        text=title,
+        enabled=window.enabled,
+        visible=window.visible,
+        rect=window.rect,
+    )
+
+
 class GymAssistantPaymentWriterTests(unittest.TestCase):
+    def test_find_main_window_uses_exact_path_not_prefix_match(self):
+        source_root = Path.cwd()
+        expected_data = str((source_root / "Data").resolve())
+        windows = [
+            titled_window(
+                f"Gym Assistant 2.6 [Path={expected_data}Backup]",
+                hwnd=20,
+            ),
+            titled_window(
+                f"Gym Assistant 2.6 [Path={expected_data}]",
+                hwnd=21,
+            ),
+        ]
+
+        with patch(
+            "gymassistant_payment_writer.enum_top_windows",
+            return_value=windows,
+        ):
+            hwnd = find_main_window(source_root)
+
+        self.assertEqual(hwnd, 21)
+
+    def test_find_main_window_refuses_single_nonmatching_candidate(self):
+        source_root = Path.cwd()
+        expected_data = str((source_root / "Data").resolve())
+
+        with patch(
+            "gymassistant_payment_writer.enum_top_windows",
+            return_value=[
+                titled_window(
+                    f"Gym Assistant 2.6 [Path={expected_data}Backup]",
+                    hwnd=22,
+                )
+            ],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "0 exact match"):
+                find_main_window(source_root)
+
+    def test_find_main_window_refuses_multiple_exact_matches(self):
+        source_root = Path.cwd()
+        expected_data = str((source_root / "Data").resolve())
+
+        with patch(
+            "gymassistant_payment_writer.enum_top_windows",
+            return_value=[
+                titled_window(
+                    f"Gym Assistant 2.6 [Path={expected_data}]",
+                    hwnd=23,
+                ),
+                titled_window(
+                    f"Gym Assistant 2.6 [Path={expected_data}]",
+                    hwnd=24,
+                ),
+            ],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "2 exact match"):
+                find_main_window(source_root)
+
     def test_find_member_activation_prompt_matches_current_member(self):
         with (
             patch("gymassistant_payment_writer.enum_top_windows", return_value=[visible_window(10)]),

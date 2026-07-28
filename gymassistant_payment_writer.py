@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import json
+import ntpath
 import os
 import re
 import sys
@@ -213,24 +214,39 @@ def window_info(hwnd: int) -> WindowInfo:
 
 
 def normalize_path_text(value: str) -> str:
-    return value.replace("/", "\\").casefold()
+    return ntpath.normcase(ntpath.normpath(str(value).strip().strip('"')))
+
+
+def gymassistant_title_data_path(title: str) -> str | None:
+    text = str(title or "").strip()
+    if not text.startswith("Gym Assistant") or "Path=" not in text:
+        return None
+    value = text.rsplit("Path=", 1)[1].strip()
+    value = value.rstrip("])}").strip()
+    if not value:
+        return None
+    return normalize_path_text(value)
 
 
 def find_main_window(source_root: Path) -> int:
     expected_data = normalize_path_text(str((source_root / "Data").resolve()))
     candidates = []
+    exact_matches = []
     for info in enum_top_windows():
         if not info.visible:
             continue
         title = info.text or ""
         if title.startswith("Gym Assistant") and "Path=" in title:
             candidates.append(info)
-            if expected_data in normalize_path_text(title):
-                return info.hwnd
-    if len(candidates) == 1:
-        return candidates[0].hwnd
-    titles = [candidate.text for candidate in candidates]
-    raise RuntimeError(f"Could not find a unique Gym Assistant window for {source_root}. Candidates: {titles}")
+            if gymassistant_title_data_path(title) == expected_data:
+                exact_matches.append(info)
+    if len(exact_matches) == 1:
+        return exact_matches[0].hwnd
+    raise RuntimeError(
+        "Could not find exactly one Gym Assistant window for the configured "
+        f"data path; found {len(exact_matches)} exact match(es) among "
+        f"{len(candidates)} candidate(s)."
+    )
 
 
 def find_open_payment_dialog(member_id: str | None = None) -> int | None:
