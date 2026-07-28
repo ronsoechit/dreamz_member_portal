@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+import csv
 import hashlib
 import tempfile
 import unittest
@@ -22,6 +23,7 @@ def write_backup(path: Path, member_id: str = "100") -> None:
         "FN=Sync",
         "MTN=contract Dreamz 12 m",
         "EM=sync@example.com",
+        "ST=0",
         "-",
         "",
     ])
@@ -40,6 +42,7 @@ def write_members_btx(path: Path, member_id: str = "100") -> None:
         "FN=Live",
         "MTN=week pass",
         "EM=live@example.com",
+        "ST=0",
         "-",
         "",
     ]), encoding="latin-1")
@@ -59,6 +62,7 @@ def write_members_btx_members(path: Path, member_ids: list[str]) -> None:
             "FN=Snapshot",
             "MTN=contract Dreamz 6 months",
             "EM=snapshot@example.com",
+            "ST=0",
             "-",
         ])
     lines.append("")
@@ -78,18 +82,97 @@ def write_member_log(path: Path, member_id: str = "101") -> None:
     )
 
 
+OFFICIAL_CSV_FIELDS = [
+    "MemberNum",
+    "LastName",
+    "FirstName",
+    "MemberType",
+    "BillingOption",
+    "DueDate",
+    "BillingAmount",
+    "LastPaidDate",
+    "LastPaidAmount",
+    "SignupDate",
+    "ContractEnd",
+    "ContractBegin",
+    "BirthDate",
+    "Email",
+    "BillingStatus",
+    "CurrentBalance",
+    "IsDeleted",
+    "HomePhone",
+    "MobilePhone",
+    "NUM_VISITS_TOTAL",
+    "ResponsibleMemberNum",
+]
+
+
+def official_csv_member(member_id: str, **overrides) -> dict:
+    row = {
+        "MemberNum": member_id,
+        "LastName": f"Tester {member_id}",
+        "FirstName": "Snapshot",
+        "MemberType": "contract Dreamz 6 months",
+        "BillingOption": "ACH",
+        "DueDate": "01/08/2026",
+        "BillingAmount": "65.00",
+        "LastPaidDate": "01/07/2026",
+        "LastPaidAmount": "65.00",
+        "SignupDate": "01/01/2026",
+        "ContractEnd": "01/07/2026",
+        "ContractBegin": "01/01/2026",
+        "BirthDate": "00/00/0000",
+        "Email": "snapshot@example.com",
+        "BillingStatus": "ACTIVE",
+        "CurrentBalance": "0.00",
+        "IsDeleted": "0",
+    }
+    row.update(overrides)
+    return row
+
+
+def write_official_csv(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="cp1252", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=OFFICIAL_CSV_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def write_member_event(path: Path, occurred_at: datetime, fields: dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = "\t".join(f"{key}={value}" for key, value in fields.items())
+    path.write_text(
+        (
+            f"{occurred_at.strftime('%Y/%m/%d %H:%M:%S')}"
+            f"|FRONTDESK|Gym Assistant|{payload}\t-\t\n"
+        ),
+        encoding="latin-1",
+    )
+    timestamp = occurred_at.timestamp()
+    os.utime(path, (timestamp, timestamp))
+
+
 class SyncAgentTests(unittest.TestCase):
     def test_build_sync_payload_marks_full_member_snapshot_authoritative(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "Gym Assistant 2.6"
             data_dir = root / "Data"
             data_dir.mkdir(parents=True)
-            write_members_btx_members(
-                data_dir / "Members.btx",
-                ["200", "100"],
+            csv_path = Path(tmp) / "exports" / "MemberData.csv"
+            write_official_csv(
+                csv_path,
+                [
+                    official_csv_member("200"),
+                    official_csv_member("100"),
+                ],
             )
 
-            payload = build_sync_payload(root)
+            with patch.dict(
+                os.environ,
+                {"GYM_ASSISTANT_MEMBERS_PATH": str(csv_path)},
+            ):
+                payload = build_sync_payload(root)
 
         snapshot = payload["member_snapshot"]
         self.assertTrue(snapshot["scope_complete"])
@@ -102,6 +185,272 @@ class SyncAgentTests(unittest.TestCase):
             snapshot["member_ids_sha256"],
             hashlib.sha256(b"100\n200").hexdigest(),
         )
+        self.assertEqual(
+            snapshot["source_kind"],
+            "gymassistant_official_member_export_csv",
+        )
+        self.assertEqual(snapshot["baseline_count"], 2)
+        self.assertRegex(snapshot["source_sha256"], r"^[0-9a-f]{64}$")
+        self.assertRegex(snapshot["snapshot_id"], r"^[0-9a-f]{64}$")
+
+    def test_members_btx_can_never_be_authoritative_for_absence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            data_dir.mkdir(parents=True)
+            write_members_btx_members(data_dir / "Members.btx", ["100", "200"])
+
+            payload = build_sync_payload(root)
+
+        self.assertFalse(payload["member_snapshot"]["authoritative_for_absence"])
+        self.assertEqual(
+            payload["member_snapshot"]["source_kind"],
+            "gymassistant_members_btx",
+        )
+
+    def test_official_csv_overlay_applies_add_edit_and_delete_in_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            (root / "Data").mkdir(parents=True)
+            csv_path = Path(tmp) / "exports" / "MemberData.csv"
+            write_official_csv(
+                csv_path,
+                [
+                    official_csv_member("100"),
+                    official_csv_member("200"),
+                ],
+            )
+            now = datetime.now().replace(microsecond=0)
+            baseline_at = now - timedelta(minutes=10)
+            os.utime(
+                csv_path,
+                (baseline_at.timestamp(), baseline_at.timestamp()),
+            )
+            write_member_event(
+                root / "Data" / "Temp Files" / "Added Members.txt",
+                now - timedelta(minutes=8),
+                {
+                    "MN": "300",
+                    "LN": "New",
+                    "FN": "Member",
+                    "MTN": "Delfins Fitness",
+                    "BT": "1 MONTHS INV",
+                    "ST": "0",
+                },
+            )
+            write_member_event(
+                root
+                / "Data"
+                / "Temp Files"
+                / "Member Updates"
+                / "EditMembers 2026-07-27.txt",
+                now - timedelta(minutes=7),
+                {"MN": "200", "ST": "2"},
+            )
+            write_member_event(
+                root / "Data" / "Temp Files" / "Deleted Members.txt",
+                now - timedelta(minutes=6),
+                {"MN": "100", "ST": "2"},
+            )
+
+            with patch.dict(
+                os.environ,
+                {"GYM_ASSISTANT_MEMBERS_PATH": str(csv_path)},
+            ):
+                payload = build_sync_payload(root)
+
+        members = {
+            member["member_id"]: member
+            for member in payload["members"]
+        }
+        self.assertEqual(set(members), {"200", "300"})
+        self.assertEqual(members["200"]["billing_status"], "TERMINATED")
+        self.assertFalse(members["200"]["is_active"])
+        self.assertEqual(members["300"]["name"], "New, Member")
+        overlay = payload["member_snapshot"]["overlay"]
+        self.assertEqual(overlay["added_count"], 1)
+        self.assertEqual(overlay["updated_count"], 1)
+        self.assertEqual(overlay["deleted_count"], 1)
+        self.assertTrue(payload["member_snapshot"]["authoritative_for_absence"])
+
+    def test_later_add_event_can_restore_member_after_delete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            (root / "Data").mkdir(parents=True)
+            csv_path = Path(tmp) / "exports" / "MemberData.csv"
+            write_official_csv(csv_path, [official_csv_member("100")])
+            now = datetime.now().replace(microsecond=0)
+            baseline_at = now - timedelta(minutes=10)
+            os.utime(
+                csv_path,
+                (baseline_at.timestamp(), baseline_at.timestamp()),
+            )
+            write_member_event(
+                root / "Data" / "Temp Files" / "Deleted Members.txt",
+                now - timedelta(minutes=8),
+                {"MN": "100", "ST": "2"},
+            )
+            write_member_event(
+                root / "Data" / "Temp Files" / "Added Members.txt",
+                now - timedelta(minutes=7),
+                {
+                    "MN": "100",
+                    "LN": "Restored",
+                    "FN": "Member",
+                    "MTN": "Delfins Fitness",
+                    "BT": "1 MONTHS INV",
+                    "ST": "0",
+                },
+            )
+
+            with patch.dict(
+                os.environ,
+                {"GYM_ASSISTANT_MEMBERS_PATH": str(csv_path)},
+            ):
+                payload = build_sync_payload(root)
+
+        self.assertEqual(
+            [member["member_id"] for member in payload["members"]],
+            ["100"],
+        )
+        self.assertEqual(payload["members"][0]["name"], "Restored, Member")
+        self.assertTrue(payload["member_snapshot"]["authoritative_for_absence"])
+
+    def test_new_add_event_without_status_aborts_official_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            (root / "Data").mkdir(parents=True)
+            csv_path = Path(tmp) / "exports" / "MemberData.csv"
+            write_official_csv(csv_path, [official_csv_member("100")])
+            now = datetime.now().replace(microsecond=0)
+            baseline_at = now - timedelta(minutes=10)
+            os.utime(
+                csv_path,
+                (baseline_at.timestamp(), baseline_at.timestamp()),
+            )
+            write_member_event(
+                root / "Data" / "Temp Files" / "Added Members.txt",
+                now - timedelta(minutes=5),
+                {
+                    "MN": "200",
+                    "LN": "Missing",
+                    "FN": "Status",
+                    "MTN": "Delfins Fitness",
+                    "BT": "1 MONTHS INV",
+                },
+            )
+
+            with patch.dict(
+                os.environ,
+                {"GYM_ASSISTANT_MEMBERS_PATH": str(csv_path)},
+            ):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "critical parsing issue",
+                ):
+                    build_sync_payload(root)
+
+    def test_orphan_edit_event_aborts_official_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            (root / "Data").mkdir(parents=True)
+            csv_path = Path(tmp) / "exports" / "MemberData.csv"
+            write_official_csv(csv_path, [official_csv_member("100")])
+            now = datetime.now().replace(microsecond=0)
+            baseline_at = now - timedelta(minutes=10)
+            os.utime(
+                csv_path,
+                (baseline_at.timestamp(), baseline_at.timestamp()),
+            )
+            write_member_event(
+                root
+                / "Data"
+                / "Temp Files"
+                / "Member Updates"
+                / "EditMembers 2026-07-27.txt",
+                now - timedelta(minutes=5),
+                {
+                    "MN": "200",
+                    "ST": "0",
+                    "MTN": "Delfins Fitness",
+                },
+            )
+
+            with patch.dict(
+                os.environ,
+                {"GYM_ASSISTANT_MEMBERS_PATH": str(csv_path)},
+            ):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "critical parsing issue",
+                ):
+                    build_sync_payload(root)
+
+    def test_stale_official_csv_is_imported_but_not_authoritative(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            (root / "Data").mkdir(parents=True)
+            csv_path = Path(tmp) / "exports" / "MemberData.csv"
+            write_official_csv(csv_path, [official_csv_member("100")])
+            old_time = (
+                datetime.now() - timedelta(hours=40)
+            ).timestamp()
+            os.utime(csv_path, (old_time, old_time))
+
+            with patch.dict(
+                os.environ,
+                {
+                    "GYM_ASSISTANT_MEMBERS_PATH": str(csv_path),
+                    "GYM_ASSISTANT_CSV_MAX_AGE_HOURS": "36",
+                },
+            ):
+                payload = build_sync_payload(root)
+
+        self.assertFalse(payload["member_snapshot"]["authoritative_for_absence"])
+        self.assertIn("CSV is stale", payload["warning"])
+
+    def test_missing_configured_csv_never_falls_back_to_backup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            backup_dir = root / "Data" / "Backup"
+            backup_dir.mkdir(parents=True)
+            write_backup(backup_dir / "GABackup-test.gbu")
+            missing_csv = Path(tmp) / "exports" / "missing.csv"
+
+            with patch.dict(
+                os.environ,
+                {"GYM_ASSISTANT_MEMBERS_PATH": str(missing_csv)},
+            ):
+                with self.assertRaisesRegex(
+                    FileNotFoundError,
+                    "Configured GymAssistant member source does not exist",
+                ):
+                    build_sync_payload(root)
+
+    def test_critical_official_csv_issue_aborts_member_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            (root / "Data").mkdir(parents=True)
+            csv_path = Path(tmp) / "exports" / "MemberData.csv"
+            write_official_csv(
+                csv_path,
+                [
+                    official_csv_member(
+                        "100",
+                        BillingStatus="",
+                    )
+                ],
+            )
+
+            with patch.dict(
+                os.environ,
+                {"GYM_ASSISTANT_MEMBERS_PATH": str(csv_path)},
+            ):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "critical parsing issue",
+                ):
+                    build_sync_payload(root)
 
     def test_build_sync_payload_rejects_source_changed_during_member_parse(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -426,7 +775,7 @@ class SyncAgentTests(unittest.TestCase):
         self.assertIn("101", member_ids)
         self.assertIn("Data/Temp Files/Member Updates/EditMembers 2026-05-25.txt", [item.path for item in scan.files])
 
-    def test_added_members_file_does_not_overwrite_existing_backup_members(self):
+    def test_untimestamped_added_members_btx_is_never_replayed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "Gym Assistant 2.6"
             data_dir = root / "Data"
@@ -470,7 +819,56 @@ class SyncAgentTests(unittest.TestCase):
         by_id = {member["member_id"]: member for member in payload["members"]}
         self.assertEqual(by_id["34933"]["name"], "Wissenmansen, Dennis")
         self.assertEqual(by_id["34933"]["email"], "dennis@example.com")
-        self.assertEqual(by_id["34934"]["name"], "New, Member")
+        self.assertNotIn("34934", by_id)
+
+    def test_official_csv_does_not_resurrect_members_from_added_members_btx(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            data_dir.mkdir(parents=True)
+            csv_path = Path(tmp) / "exports" / "MemberData.csv"
+            write_official_csv(csv_path, [official_csv_member("100")])
+            now = datetime.now().replace(microsecond=0)
+            baseline_at = now - timedelta(minutes=10)
+            os.utime(
+                csv_path,
+                (baseline_at.timestamp(), baseline_at.timestamp()),
+            )
+            added_file = data_dir / "Temp Files" / "AddedMembers.btx"
+            added_file.parent.mkdir(parents=True, exist_ok=True)
+            added_file.write_text(
+                "\n".join([
+                    "MN=100",
+                    "LN=Existing",
+                    "FN=Member",
+                    "ST=0",
+                    "-",
+                    "MN=999",
+                    "LN=Historical",
+                    "FN=Removed",
+                    "ST=0",
+                    "-",
+                    "",
+                ]),
+                encoding="latin-1",
+            )
+            os.utime(added_file, (now.timestamp(), now.timestamp()))
+
+            with patch.dict(
+                os.environ,
+                {"GYM_ASSISTANT_MEMBERS_PATH": str(csv_path)},
+            ):
+                payload = build_sync_payload(root)
+
+        self.assertEqual(
+            [member["member_id"] for member in payload["members"]],
+            ["100"],
+        )
+        self.assertEqual(
+            payload["member_snapshot"]["overlay"]["event_file_count"],
+            0,
+        )
+        self.assertTrue(payload["member_snapshot"]["authoritative_for_absence"])
 
     def test_partial_live_member_log_preserves_existing_contact_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
