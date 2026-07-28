@@ -65,8 +65,32 @@ class RunnerScriptSafetyTests(unittest.TestCase):
         self.assertLess(copy_position, health_position)
         self.assertLess(health_position, start_position)
         self.assertIn("upgrade refused", installer)
+        self.assertIn(
+            "existing receipt ledger is missing",
+            installer,
+        )
+        self.assertIn(
+            "prior runner state exists",
+            installer,
+        )
+        self.assertIn(
+            "demonstrable first install",
+            installer,
+        )
         self.assertIn("idle_seconds = 5", installer)
         self.assertIn('{"schema":2,"receipts":{}}', installer)
+
+        missing_guard = installer.index(
+            "if ($existinginstall -and -not "
+            "(test-path -literalpath $existingreceiptledger -pathtype leaf))"
+        )
+        history_guard = installer.index(
+            "if (-not $existinginstall -and "
+            "($existingstartuplink -or $priorrunnerhistory.count -gt 0))"
+        )
+        empty_ledger = installer.index('{"schema":2,"receipts":{}}')
+        self.assertLess(missing_guard, empty_ledger)
+        self.assertLess(history_guard, empty_ledger)
 
     def test_stop_script_never_forcibly_kills_a_process(self):
         stop_script = (
@@ -80,10 +104,28 @@ class RunnerScriptSafetyTests(unittest.TestCase):
         restore = (
             SCRIPT_ROOT / "Restore-RonLaptopPaymentRunner.ps1"
         ).read_text(encoding="utf-8").casefold()
-        self.assertIn('startswith("uninstalled-"', restore)
+        self.assertIn(
+            '$rollbackname -notmatch "^uninstalled-',
+            restore,
+        )
         self.assertIn("pre-upgrade snapshots", restore)
         self.assertIn("--health-check", restore)
         self.assertIn("receipt ledger", restore)
+        self.assertIn("newer or same-generation runner snapshot exists", restore)
+        self.assertIn("unrecognized runner rollback history exists", restore)
+        self.assertIn("startup shortcut already exists", restore)
+        self.assertIn(
+            "if ($historytimestamp -ge $selectedtimestamp)",
+            restore,
+        )
+
+        newest_check = restore.index(
+            "newer or same-generation runner snapshot exists"
+        )
+        move_position = restore.index(
+            "move-item -literalpath $savedinstall"
+        )
+        self.assertLess(newest_check, move_position)
 
 
 if __name__ == "__main__":

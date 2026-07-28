@@ -20,6 +20,22 @@ $installRoot = Join-Path $env:LOCALAPPDATA "Dreamz\RonLaptopPaymentRunner"
 $rollbackRoot = Join-Path $env:LOCALAPPDATA "Dreamz\RonLaptopPaymentRunnerRollback"
 $startupRoot = [Environment]::GetFolderPath("Startup")
 $startupLink = Join-Path $startupRoot "Dreamz Ron Laptop Payment Runner.lnk"
+$existingInstall = Test-Path -LiteralPath $installRoot
+$existingStartupLink = Test-Path -LiteralPath $startupLink
+$existingReceiptLedger = Join-Path $installRoot "state\payment-receipts.json"
+$priorRunnerHistory = @()
+if (Test-Path -LiteralPath $rollbackRoot) {
+  $priorRunnerHistory = @(
+    Get-ChildItem -LiteralPath $rollbackRoot -Force -ErrorAction Stop
+  )
+}
+
+if ($existingInstall -and -not (Test-Path -LiteralPath $existingReceiptLedger -PathType Leaf)) {
+  throw "Upgrade refused because the existing receipt ledger is missing. Restore or reconcile the previous safety state; never initialize an empty ledger over an existing installation."
+}
+if (-not $existingInstall -and ($existingStartupLink -or $priorRunnerHistory.Count -gt 0)) {
+  throw "Fresh install refused because prior runner state exists. Restore the newest complete uninstall snapshot or perform an explicitly reviewed recovery; a new empty receipt ledger is only allowed on a demonstrable first install."
+}
 
 foreach ($required in @($runnerSource, $writerSource, $startSource, $stopSource)) {
   if (-not (Test-Path -LiteralPath $required)) {
@@ -108,6 +124,9 @@ try {
     Copy-Item -LiteralPath $oldReceiptLedger -Destination $newReceiptLedger
   }
   else {
+    # The preflight above proves there is no install, Startup link, or prior
+    # rollback history. Only that demonstrable first-install state may create
+    # a new empty duplicate-prevention ledger.
     [IO.File]::WriteAllText($newReceiptLedger, '{"schema":2,"receipts":{}}')
   }
 

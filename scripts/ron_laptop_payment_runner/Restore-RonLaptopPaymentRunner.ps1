@@ -12,8 +12,42 @@ if (-not $resolvedRollback.StartsWith($prefix, [StringComparison]::OrdinalIgnore
   throw "RollbackPath must be inside the fixed RonLaptopPaymentRunnerRollback directory."
 }
 $rollbackName = [IO.Path]::GetFileName($resolvedRollback.TrimEnd("\"))
-if (-not $rollbackName.StartsWith("uninstalled-", [StringComparison]::OrdinalIgnoreCase)) {
+if ((Split-Path -Parent $resolvedRollback).TrimEnd("\") -ne $rollbackRoot.TrimEnd("\")) {
+  throw "RollbackPath must be a direct child of the fixed rollback directory."
+}
+if ($rollbackName -notmatch "^uninstalled-(?<Stamp>[0-9]{8}-[0-9]{6})$") {
   throw "Only a complete uninstalled-* snapshot can be restored. Pre-upgrade snapshots may contain stale safety receipts and are intentionally refused."
+}
+$selectedTimestamp = [DateTime]::ParseExact(
+  $Matches.Stamp,
+  "yyyyMMdd-HHmmss",
+  [Globalization.CultureInfo]::InvariantCulture,
+  [Globalization.DateTimeStyles]::None
+)
+
+# A receipt ledger is monotonic safety evidence. Restoring an older snapshot
+# could erase a writer_started/applied receipt and permit a duplicate UI write.
+# Refuse rather than guessing whenever the selected uninstall is not provably
+# the newest known runner operation.
+foreach ($historyItem in @(Get-ChildItem -LiteralPath $rollbackRoot -Force -ErrorAction Stop)) {
+  if ($historyItem.FullName.Equals($resolvedRollback, [StringComparison]::OrdinalIgnoreCase)) {
+    continue
+  }
+  if (-not $historyItem.PSIsContainer) {
+    throw "Restore refused because unexpected runner rollback history exists. Review it before restoring safety state."
+  }
+  if ($historyItem.Name -notmatch "^(?:upgrade|uninstalled)-(?<Stamp>[0-9]{8}-[0-9]{6})$") {
+    throw "Restore refused because unrecognized runner rollback history exists. Review it before restoring safety state."
+  }
+  $historyTimestamp = [DateTime]::ParseExact(
+    $Matches.Stamp,
+    "yyyyMMdd-HHmmss",
+    [Globalization.CultureInfo]::InvariantCulture,
+    [Globalization.DateTimeStyles]::None
+  )
+  if ($historyTimestamp -ge $selectedTimestamp) {
+    throw "Restore refused because a newer or same-generation runner snapshot exists. Use the newest complete uninstall snapshot or reconcile the ledgers manually."
+  }
 }
 
 $savedInstall = Join-Path $resolvedRollback "install"
@@ -26,6 +60,9 @@ if (-not (Test-Path -LiteralPath $savedInstall -PathType Container)) {
 }
 if (Test-Path -LiteralPath $installRoot) {
   throw "A runner is already installed. Uninstall it before restoring."
+}
+if (Test-Path -LiteralPath $startupLink) {
+  throw "Restore refused because a runner Startup shortcut already exists. Review the newer or partial installation state first."
 }
 
 $pythonFile = Join-Path $savedInstall "python-path.txt"

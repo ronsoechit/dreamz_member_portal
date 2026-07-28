@@ -750,6 +750,51 @@ class ReceiptLedgerFailClosedTests(unittest.TestCase):
             ):
                 runner.ReceiptStore(path)
 
+    def test_noncanonical_update_id_blocks_instead_of_hiding_receipt(self):
+        timestamp = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "schema": 2,
+            "receipts": {
+                "07": {
+                    "idempotency_sha256": "a" * 64,
+                    "state": "writer_started",
+                    "writer_started_at": timestamp,
+                    "updated_at": timestamp,
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "receipts.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(
+                runner.ReceiptLedgerError,
+                "receipt_ledger_invalid",
+            ):
+                runner.ReceiptStore(path)
+
+    def test_state_specific_extra_fields_block_corrupt_ledger(self):
+        timestamp = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "schema": 2,
+            "receipts": {
+                "7": {
+                    "idempotency_sha256": "a" * 64,
+                    "state": "writer_started",
+                    "writer_started_at": timestamp,
+                    "updated_at": timestamp,
+                    "applied_at": timestamp,
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "receipts.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(
+                runner.ReceiptLedgerError,
+                "receipt_ledger_invalid",
+            ):
+                runner.ReceiptStore(path)
+
     def test_v1_applied_receipt_is_preserved_as_safe_applied_state(self):
         timestamp = datetime.now(timezone.utc).isoformat()
         key = "legacy-idempotency"

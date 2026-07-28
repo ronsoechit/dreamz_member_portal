@@ -24,7 +24,7 @@ import uuid
 import gymassistant_payment_writer as payment_writer
 
 
-PACKAGE_VERSION = "1.1.0"
+PACKAGE_VERSION = "1.1.1"
 AGENT_ID = "ron_laptop"
 AGENT_LABEL = "Ron laptop"
 SOURCE_ROOT = Path("Z:\\")
@@ -277,20 +277,16 @@ class ReceiptStore:
 
     @classmethod
     def _validate_v2_record(cls, update_id: str, record: object) -> dict[str, str]:
-        if not str(update_id).isdigit() or int(update_id) <= 0:
+        if not re.fullmatch(r"[1-9][0-9]*", str(update_id)):
             raise ReceiptLedgerError("receipt_ledger_invalid")
         if not isinstance(record, dict):
             raise ReceiptLedgerError("receipt_ledger_invalid")
-        allowed = {
+        common = {
             "idempotency_sha256",
             "state",
             "writer_started_at",
             "updated_at",
-            "ambiguous_at",
-            "applied_at",
         }
-        if set(record) - allowed:
-            raise ReceiptLedgerError("receipt_ledger_invalid")
         digest = record.get("idempotency_sha256")
         state = record.get("state")
         writer_started_at = record.get("writer_started_at")
@@ -298,6 +294,13 @@ class ReceiptStore:
         if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise ReceiptLedgerError("receipt_ledger_invalid")
         if state not in cls.STATES:
+            raise ReceiptLedgerError("receipt_ledger_invalid")
+        expected = set(common)
+        if state == "ambiguous":
+            expected.add("ambiguous_at")
+        elif state == "applied":
+            expected.add("applied_at")
+        if set(record) != expected:
             raise ReceiptLedgerError("receipt_ledger_invalid")
         if not cls._valid_timestamp(writer_started_at) or not cls._valid_timestamp(updated_at):
             raise ReceiptLedgerError("receipt_ledger_invalid")
@@ -320,7 +323,7 @@ class ReceiptStore:
     @classmethod
     def _validate_v1_record(cls, update_id: str, record: object) -> dict[str, str]:
         """Safely interpret the v1 ledger as already-applied/ACK-pending."""
-        if not str(update_id).isdigit() or int(update_id) <= 0:
+        if not re.fullmatch(r"[1-9][0-9]*", str(update_id)):
             raise ReceiptLedgerError("receipt_ledger_invalid")
         if not isinstance(record, dict) or set(record) != {
             "idempotency_sha256",

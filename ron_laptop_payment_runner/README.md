@@ -67,6 +67,9 @@ The installer:
 - retains any previous installation in a timestamped rollback directory;
 - preserves and strictly validates the previous receipt ledger before an
   upgrade can start;
+- refuses an upgrade if the existing ledger is missing, and creates an empty
+  ledger only when there is no installation, Startup shortcut, or rollback
+  history (a demonstrable first install);
 - starts a hidden current-user launcher unless `-DoNotStart` is supplied.
 
 It does not create a service, Scheduled Task, machine environment variable,
@@ -108,6 +111,10 @@ Only complete `uninstalled-*` snapshots can be restored, and their local
 health check must pass before files are moved. Pre-upgrade snapshots are kept
 for automatic installer rollback/audit but are refused for later manual
 restore because their receipt ledger can be stale after newer payments run.
+Restore also refuses an uninstall snapshot when any newer or same-generation
+runner snapshot, unrecognized rollback state, current installation, or Startup
+shortcut exists. This prevents an older ledger from replacing newer
+duplicate-prevention receipts.
 
 ## Important limitations
 
