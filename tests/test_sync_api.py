@@ -1,7 +1,9 @@
 from datetime import date, datetime, timedelta
 import importlib.util
+import inspect
 import json
 import os
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -12,7 +14,20 @@ if importlib.util.find_spec("flask") is None or importlib.util.find_spec("flask_
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
-from dreamz_portal import FepPaymentProcessCommand, FepPaymentUpdate, Member, MemberDocument, SyncRun, app, db  # noqa: E402
+from dreamz_portal import (  # noqa: E402
+    FepPaymentProcessCommand,
+    FepPaymentUpdate,
+    Member,
+    MemberDocument,
+    SyncRun,
+    acquire_fep_payment_command_agent_lock,
+    api_sync_fep_payment_process_commands,
+    app,
+    create_fep_payment_process_command,
+    db,
+    fep_payment_command_agent_lock_key,
+    release_expired_fep_payment_process_commands,
+)
 
 
 class SyncApiTests(unittest.TestCase):
@@ -1666,6 +1681,86 @@ class SyncApiTests(unittest.TestCase):
         db.session.refresh(second)
         self.assertEqual(first.status, "running")
         self.assertEqual(second.status, "pending")
+
+    def test_payment_command_advisory_lock_is_stable_and_postgresql_only(self):
+        frontdesk_key = fep_payment_command_agent_lock_key("frontdesk_dreamz")
+        self.assertEqual(
+            frontdesk_key,
+            fep_payment_command_agent_lock_key("frontdesk_dreamz"),
+        )
+        self.assertNotEqual(
+            frontdesk_key,
+            fep_payment_command_agent_lock_key("ron_laptop"),
+        )
+        self.assertGreaterEqual(frontdesk_key, -(2**63))
+        self.assertLess(frontdesk_key, 2**63)
+
+        with patch.object(db.session, "execute") as execute:
+            acquire_fep_payment_command_agent_lock("frontdesk_dreamz")
+        execute.assert_not_called()
+
+        postgresql_bind = SimpleNamespace(
+            dialect=SimpleNamespace(name="postgresql")
+        )
+        with (
+            patch.object(db.session, "get_bind", return_value=postgresql_bind),
+            patch.object(db.session, "execute") as execute,
+        ):
+            acquire_fep_payment_command_agent_lock("frontdesk_dreamz")
+        execute.assert_called_once()
+        statement, parameters = execute.call_args.args
+        self.assertIn("pg_advisory_xact_lock", str(statement))
+        self.assertEqual(parameters, {"lock_key": frontdesk_key})
+
+    def test_create_and_claim_take_agent_lock_before_expiry_release(self):
+        create_source = inspect.getsource(create_fep_payment_process_command)
+        claim_source = inspect.getsource(api_sync_fep_payment_process_commands)
+        for source in (create_source, claim_source):
+            self.assertLess(
+                source.index("acquire_fep_payment_command_agent_lock"),
+                source.index("release_expired_fep_payment_process_commands"),
+            )
+        release_source = inspect.getsource(
+            release_expired_fep_payment_process_commands
+        )
+        self.assertIn(".update(", release_source)
+        self.assertIn("synchronize_session=False", release_source)
+
+    def test_expired_command_release_is_atomic_and_agent_scoped(self):
+        now = datetime.now()
+        expired = self.add_fep_payment_process_command(
+            522,
+            status="running",
+            claimed_by="frontdesk_dreamz",
+            claim_expires_at=now - timedelta(seconds=1),
+        )
+        fresh = self.add_fep_payment_process_command(
+            523,
+            status="running",
+            claimed_by="frontdesk_dreamz",
+            claim_expires_at=now + timedelta(minutes=5),
+        )
+        other_agent = self.add_fep_payment_process_command(
+            524,
+            status="running",
+            target_agent="ron_laptop",
+            claimed_by="ron_laptop",
+            claim_expires_at=now - timedelta(seconds=1),
+        )
+
+        released = release_expired_fep_payment_process_commands(
+            now,
+            "frontdesk_dreamz",
+        )
+        db.session.commit()
+
+        self.assertEqual(released, 1)
+        db.session.refresh(expired)
+        db.session.refresh(fresh)
+        db.session.refresh(other_agent)
+        self.assertEqual(expired.status, "pending")
+        self.assertEqual(fresh.status, "running")
+        self.assertEqual(other_agent.status, "running")
 
     def test_expired_command_release_survives_later_conflict_rollback(self):
         self.add_pending_fep_payment_update(900, suffix="1")
