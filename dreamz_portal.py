@@ -12788,7 +12788,7 @@ PORTAL_INVITATION_REQUEST_TYPES = {
     PORTAL_INVITATION_REQUEST_TYPE_NEW_MEMBER,
     PORTAL_INVITATION_REQUEST_TYPE_EXISTING_MEMBER_REVERIFICATION,
 }
-PORTAL_INVITATION_SIGNUP_PLANS = {"month", "under18", "six", "twelve"}
+PORTAL_INVITATION_SIGNUP_PLANS = {"month", "under18", "six", "twelve", "kmar_2026"}
 PORTAL_INVITATION_TERMINAL_STATUSES = {"sent", "manual_review"}
 PORTAL_INVITATION_RECONCILABLE_STATUSES = {
     "waiting_for_member",
@@ -12817,6 +12817,8 @@ def portal_member_signup_plan(plan_type):
     normalized = re.sub(r"[^a-z0-9]+", " ", str(plan_type or "").lower()).strip()
     if not normalized:
         return None
+    if normalized == "kmar medewerker 2018":
+        return "kmar_2026"
     if any(blocked in normalized for blocked in ("day pass", "week pass", "delfins", "hotel", "guest")):
         return None
     if "under 18" in normalized:
@@ -12872,6 +12874,14 @@ def existing_member_reverification_pilot_allowed(record):
         str(record.member_id or "").strip() in member_ids
         and record.expected_email_hash in allowed_email_hashes
     )
+
+
+def portal_invitation_member_plan_matches(signup_plan, plan_type):
+    normalized_signup_plan = str(signup_plan or "").strip().lower()
+    live_signup_plan = portal_member_signup_plan(plan_type)
+    if "kmar_2026" in {normalized_signup_plan, live_signup_plan}:
+        return normalized_signup_plan == live_signup_plan
+    return portal_eligible_member_plan(plan_type)
 
 
 def portal_invitation_public(record, duplicate=False):
@@ -13064,6 +13074,8 @@ def reconcile_portal_invitation(record):
                 "waiting_for_gym_assistant_email",
             )
         return mark_portal_invitation_for_review(record, "signup_email_does_not_match_gym_assistant")
+    if not portal_invitation_member_plan_matches(record.signup_plan, member.plan_type):
+        return mark_portal_invitation_for_review(record, "gym_assistant_plan_not_eligible")
 
     subject, body, html_body = build_portal_activation_email(member, language=record.language)
     send_started_at = datetime.now()

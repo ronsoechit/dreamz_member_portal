@@ -500,6 +500,54 @@ class PortalInvitationTests(unittest.TestCase):
         self.assertEqual(response.json["status"], "manual_review")
         self.assertEqual(EmailLog.query.count(), 0)
 
+    def test_kmar_invitation_requires_exact_internal_gym_assistant_plan(self):
+        db.session.add(Member(
+            member_id="42001",
+            name="KMAR, Member",
+            email="new.member@example.com",
+            plan_type="KMAR medewerker 2018",
+        ))
+        db.session.commit()
+
+        response = self.post_invitation(signup_plan="kmar_2026")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["status"], "sent")
+        self.assertEqual(PortalInvitation.query.one().signup_plan, "kmar_2026")
+        self.assertEqual(EmailLog.query.count(), 1)
+
+    def test_kmar_invitation_fails_closed_for_other_gym_assistant_plan(self):
+        db.session.add(Member(
+            member_id="42001",
+            name="KMAR, Member",
+            email="new.member@example.com",
+            plan_type="Contract 12 months 2024",
+        ))
+        db.session.commit()
+
+        response = self.post_invitation(signup_plan="kmar_2026")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["status"], "manual_review")
+        self.assertEqual(PortalInvitation.query.one().last_error, "gym_assistant_plan_not_eligible")
+        self.assertEqual(EmailLog.query.count(), 0)
+
+    def test_kmar_internal_plan_cannot_satisfy_a_regular_signup_invitation(self):
+        db.session.add(Member(
+            member_id="42001",
+            name="KMAR, Member",
+            email="new.member@example.com",
+            plan_type="KMAR medewerker 2018",
+        ))
+        db.session.commit()
+
+        response = self.post_invitation(signup_plan="month")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["status"], "manual_review")
+        self.assertEqual(PortalInvitation.query.one().last_error, "gym_assistant_plan_not_eligible")
+        self.assertEqual(EmailLog.query.count(), 0)
+
     def test_email_failure_is_not_automatically_retried(self):
         db.session.add(Member(member_id="42001", email="new.member@example.com", plan_type="Contract 12 months 2024"))
         db.session.commit()
