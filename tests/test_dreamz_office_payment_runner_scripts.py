@@ -409,6 +409,96 @@ if ($qualifiedDriveResolvedPath -match "^[^:]+::") {
         )
         self.assertTrue(payload["mapped_transfer_drive_is_x"])
 
+    def test_installer_rejects_raw_relative_sources_before_resolve_path(self):
+        installer_path = (
+            SCRIPT_ROOT / "Install-DreamzOfficePaymentRunner.ps1"
+        )
+        installer = installer_path.read_text(encoding="utf-8")
+        raw_syntax_call = (
+            "Test-DreamzAbsoluteSourceRootSyntax -Path $SourceRoot"
+        )
+        raw_segments = "$rawSourceSegments = @("
+        source_resolve = (
+            "$sourceRootItem = "
+            "Resolve-Path -LiteralPath $SourceRoot -ErrorAction Stop"
+        )
+        self.assertIn(raw_syntax_call, installer)
+        self.assertIn(raw_segments, installer)
+        self.assertIn(
+            '$rawSourceSegments -contains ".."',
+            installer,
+        )
+        self.assertIn(
+            '$rawSourceSegments -contains "."',
+            installer,
+        )
+        self.assertIn(
+            "SourceRoot may not contain relative path segments.",
+            installer,
+        )
+        self.assertLess(
+            installer.index(raw_syntax_call),
+            installer.index(source_resolve),
+        )
+        self.assertLess(
+            installer.index(raw_segments),
+            installer.index(source_resolve),
+        )
+
+        script_path = str(installer_path).replace("'", "''")
+        command = f"""
+$tokens = $null
+$parseErrors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile(
+  '{script_path}',
+  [ref]$tokens,
+  [ref]$parseErrors
+)
+if ($parseErrors.Count) {{
+  throw "Installer parse failed."
+}}
+$functionAst = $ast.Find(
+  {{
+    param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq "Test-DreamzAbsoluteSourceRootSyntax"
+  }},
+  $true
+)
+if (-not $functionAst) {{
+  throw "Raw SourceRoot validation function was not found."
+}}
+Invoke-Expression $functionAst.Extent.Text
+[ordered]@{{
+  dot = Test-DreamzAbsoluteSourceRootSyntax -Path "."
+  drive_relative = Test-DreamzAbsoluteSourceRootSyntax -Path "C:relative"
+  relative = Test-DreamzAbsoluteSourceRootSyntax -Path "relative\\path"
+  drive_absolute = Test-DreamzAbsoluteSourceRootSyntax -Path "C:\\Gym Assistant 2.6"
+  production_unc = Test-DreamzAbsoluteSourceRootSyntax -Path "\\\\DREAMZ-FRNTDSK\\Gym Assistant 2.6"
+}} | ConvertTo-Json -Compress
+"""
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                command,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["dot"])
+        self.assertFalse(payload["drive_relative"])
+        self.assertFalse(payload["relative"])
+        self.assertTrue(payload["drive_absolute"])
+        self.assertTrue(payload["production_unc"])
+
     def test_upgrade_preserves_and_validates_receipt_ledger_before_start(self):
         installer = (
             SCRIPT_ROOT / "Install-DreamzOfficePaymentRunner.ps1"

@@ -21,6 +21,13 @@ if (-not [string]::Equals(
   throw "Installation is restricted to the reviewed Dreamz Office host $expectedComputerName."
 }
 
+function Test-DreamzAbsoluteSourceRootSyntax {
+  param([string]$Path)
+  return [bool](
+    $Path -match "^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$))"
+  )
+}
+
 $packageRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $runnerSource = Join-Path $packageRoot "dreamz_office_payment_runner"
 $writerSource = Join-Path $packageRoot "gymassistant_payment_writer.py"
@@ -42,6 +49,16 @@ if (Test-Path -LiteralPath $rollbackRoot) {
 
 if ([Management.Automation.WildcardPattern]::ContainsWildcardCharacters($SourceRoot)) {
   throw "SourceRoot must be one exact absolute Windows path without wildcards."
+}
+if (-not (Test-DreamzAbsoluteSourceRootSyntax -Path $SourceRoot)) {
+  throw "SourceRoot must be an exact absolute Windows path."
+}
+$rawSourceSegments = @(
+  $SourceRoot -split "[\\/]" |
+    Where-Object { $_ }
+)
+if ($rawSourceSegments -contains ".." -or $rawSourceSegments -contains ".") {
+  throw "SourceRoot may not contain relative path segments."
 }
 $sourceRootItem = Resolve-Path -LiteralPath $SourceRoot -ErrorAction Stop
 if (-not [string]::Equals(
