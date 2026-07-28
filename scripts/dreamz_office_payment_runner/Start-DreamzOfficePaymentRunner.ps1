@@ -10,7 +10,6 @@ $tokenFile = Join-Path $installRoot "secrets\payment-token.dpapi"
 $pythonFile = Join-Path $installRoot "python-path.txt"
 $runnerFile = Join-Path $installRoot "dreamz_office_payment_runner\runner.py"
 $runtimeFile = Join-Path $installRoot "runtime.json"
-$statusFile = Join-Path $stateRoot "status.json"
 $launcherMutexName = "Local\DreamzOfficePaymentLauncher"
 $launcherMutexCreated = $false
 $launcherMutex = [Threading.Mutex]::new(
@@ -24,22 +23,9 @@ if (-not $launcherMutexCreated) {
 }
 
 try {
-$recordedPid = 0
-if (Test-Path -LiteralPath $statusFile) {
-  try {
-    $status = Get-Content -Raw -LiteralPath $statusFile | ConvertFrom-Json
-    if ($status.state -notin @("stopped", "configuration_error")) {
-      $recordedPid = [int]$status.pid
-    }
-  }
-  catch {
-    $recordedPid = 0
-  }
-}
-if ($recordedPid -gt 0 -and (Get-Process -Id $recordedPid -ErrorAction SilentlyContinue)) {
-  exit 0
-}
-
+# Never use the last status PID as process identity: Windows can reuse it after
+# a reboot or crash. The launcher mutex above and the runner's own named mutex
+# are the authoritative duplicate-process guards.
 if ($ClearStopRequest -and (Test-Path -LiteralPath $stopRequest)) {
   Remove-Item -LiteralPath $stopRequest -Force
 }

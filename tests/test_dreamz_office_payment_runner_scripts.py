@@ -295,6 +295,10 @@ class RunnerScriptSafetyTests(unittest.TestCase):
         self.assertIn("dreamzofficepaymentlauncher", start_script)
         self.assertIn("[threading.mutex]::new(", start_script)
         self.assertIn("$launchermutex.releasemutex()", start_script)
+        self.assertNotIn("$recordedpid", start_script)
+        self.assertNotIn("get-process -id", start_script)
+        self.assertIn("windows can reuse it", start_script)
+        self.assertIn("runner's own named mutex", start_script)
 
     def test_restore_refuses_stale_upgrade_snapshot_and_health_checks_uninstall(self):
         restore = (
