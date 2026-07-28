@@ -24,7 +24,7 @@ import uuid
 import gymassistant_payment_writer as payment_writer
 
 
-PACKAGE_VERSION = "1.1.1"
+PACKAGE_VERSION = "1.1.2"
 AGENT_ID = "ron_laptop"
 AGENT_LABEL = "Ron laptop"
 SOURCE_ROOT = Path("Z:\\")
@@ -1378,6 +1378,13 @@ def run_loop(
             logger.info("state=duplicate_launcher_exit reason=runner_already_active")
             return 0
 
+        # Publish the PID before configuration, API, or UI work. Lifecycle
+        # scripts can then wait cooperatively even during the first poll.
+        status.update(
+            "starting",
+            reason="startup_validation",
+            receipt_count=0,
+        )
         config = load_runtime_config(config_path)
         receipts = ReceiptStore(
             state_dir / "payment-receipts.json",
@@ -1477,11 +1484,13 @@ def run_loop(
         logger.error("state=stopped reason=%s", reason)
         return 3
     finally:
-        mutex.close()
         os.environ.pop("SYNC_API_TOKEN", None)
         for handler in list(logger.handlers):
             logger.removeHandler(handler)
             handler.close()
+        # Keep the lifecycle mutex until every runner-owned file handle is
+        # closed. Stop/upgrade may move the package only after this disappears.
+        mutex.close()
 
 
 def run_health_check(config_path: Path) -> int:

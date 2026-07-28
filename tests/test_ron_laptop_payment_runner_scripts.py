@@ -99,6 +99,21 @@ class RunnerScriptSafetyTests(unittest.TestCase):
         self.assertNotIn("stop-process", stop_script)
         self.assertNotIn("taskkill", stop_script)
         self.assertIn("stop.request", stop_script)
+        self.assertIn(
+            '[threading.mutex]::openexisting($name)',
+            stop_script,
+        )
+        self.assertIn("dreamzronlaptoppaymentrunner", stop_script)
+        self.assertIn("dreamzronlaptoppaymentlauncher", stop_script)
+        self.assertIn("$quietmutexchecks -ge 5", stop_script)
+        self.assertIn("nothing was killed", stop_script)
+
+        start_script = (
+            SCRIPT_ROOT / "Start-RonLaptopPaymentRunner.ps1"
+        ).read_text(encoding="utf-8").casefold()
+        self.assertIn("dreamzronlaptoppaymentlauncher", start_script)
+        self.assertIn("[threading.mutex]::new(", start_script)
+        self.assertIn("$launchermutex.releasemutex()", start_script)
 
     def test_restore_refuses_stale_upgrade_snapshot_and_health_checks_uninstall(self):
         restore = (

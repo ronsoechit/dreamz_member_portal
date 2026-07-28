@@ -11,7 +11,19 @@ $pythonFile = Join-Path $installRoot "python-path.txt"
 $runnerFile = Join-Path $installRoot "ron_laptop_payment_runner\runner.py"
 $runtimeFile = Join-Path $installRoot "runtime.json"
 $statusFile = Join-Path $stateRoot "status.json"
+$launcherMutexName = "Local\DreamzRonLaptopPaymentLauncher"
+$launcherMutexCreated = $false
+$launcherMutex = [Threading.Mutex]::new(
+  $true,
+  $launcherMutexName,
+  [ref]$launcherMutexCreated
+)
+if (-not $launcherMutexCreated) {
+  $launcherMutex.Dispose()
+  exit 0
+}
 
+try {
 $recordedPid = 0
 if (Test-Path -LiteralPath $statusFile) {
   try {
@@ -69,4 +81,13 @@ finally {
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenPointer)
   }
   $secureToken.Dispose()
+}
+}
+finally {
+  try {
+    $launcherMutex.ReleaseMutex()
+  }
+  finally {
+    $launcherMutex.Dispose()
+  }
 }

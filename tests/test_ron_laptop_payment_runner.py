@@ -672,6 +672,55 @@ class SanitizedStateTests(unittest.TestCase):
             )
             mutex.close.assert_called_once()
 
+    def test_runner_publishes_starting_pid_before_loading_ledger_or_client(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config_path = root / "runtime.json"
+            mutex = Mock()
+            mutex.acquire.return_value = True
+            status = Mock()
+            client_factory = Mock(
+                side_effect=AssertionError("client must not be created")
+            )
+
+            def fail_ledger_load(*_args, **_kwargs):
+                self.assertEqual(
+                    status.update.call_args_list[0].args[0],
+                    "starting",
+                )
+                raise runner.ReceiptLedgerError("receipt_ledger_missing")
+
+            with (
+                patch.object(runner, "NamedMutex", return_value=mutex),
+                patch.object(runner, "StatusStore", return_value=status),
+                patch.object(
+                    runner,
+                    "ReceiptStore",
+                    side_effect=fail_ledger_load,
+                ),
+                patch.dict(
+                    runner.os.environ,
+                    {"SYNC_API_TOKEN": "unit-test-token"},
+                    clear=False,
+                ),
+            ):
+                exit_code = runner.run_loop(
+                    config_path,
+                    client_factory=client_factory,
+                )
+
+        self.assertEqual(exit_code, 3)
+        self.assertEqual(
+            [call.args[0] for call in status.update.call_args_list],
+            ["starting", "stopped"],
+        )
+        self.assertEqual(
+            status.update.call_args_list[-1].kwargs["reason"],
+            "receipt_ledger_missing",
+        )
+        client_factory.assert_not_called()
+        mutex.close.assert_called_once()
+
     def test_health_check_is_local_and_nonmutating(self):
         with tempfile.TemporaryDirectory() as temporary:
             config_path = Path(temporary) / "runtime.json"

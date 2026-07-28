@@ -86,7 +86,10 @@ token, contact Portal, inspect Gym Assistant, claim work, or operate the UI.
 
 ## Stop, uninstall, restore
 
-The cooperative stop never kills an unrelated process:
+The cooperative stop never kills an unrelated process. It writes a stop
+request and waits until both the launcher and runner lifecycle mutexes have
+remained absent. The launcher mutex closes the startup race; the runner holds
+its mutex until its log handles are closed:
 
 ```powershell
 .\scripts\ron_laptop_payment_runner\Stop-RonLaptopPaymentRunner.ps1
