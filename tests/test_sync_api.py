@@ -26,6 +26,7 @@ from dreamz_portal import (  # noqa: E402
     create_fep_payment_process_command,
     db,
     fep_payment_command_agent_lock_key,
+    release_expired_fep_payment_claims,
     release_expired_fep_payment_process_commands,
 )
 
@@ -1860,6 +1861,79 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(record.status, "failed")
         self.assertIn("manual reconciliation", record.error)
         self.assertIsNone(record.claimed_by)
+
+    def test_expired_payment_release_is_atomic_and_agent_upload_scoped(self):
+        now = datetime.now()
+        matching = self.add_pending_fep_payment_update(522, suffix="1")
+        other_upload = self.add_pending_fep_payment_update(900, suffix="2")
+        other_agent = self.add_pending_fep_payment_update(
+            522,
+            suffix="3",
+            target_agent="ron_laptop",
+        )
+        for record, claimed_by in (
+            (matching, "frontdesk_dreamz"),
+            (other_upload, "frontdesk_dreamz"),
+            (other_agent, "ron_laptop"),
+        ):
+            record.status = "processing_gym_assistant_apply"
+            record.claimed_by = claimed_by
+            record.claimed_at = now - timedelta(minutes=10)
+            record.claim_expires_at = now - timedelta(seconds=1)
+        db.session.commit()
+
+        released = release_expired_fep_payment_claims(
+            now,
+            agent_id="frontdesk_dreamz",
+            upload_id=522,
+        )
+        db.session.commit()
+
+        self.assertEqual(released, 1)
+        db.session.refresh(matching)
+        db.session.refresh(other_upload)
+        db.session.refresh(other_agent)
+        self.assertEqual(matching.status, "failed")
+        self.assertEqual(other_upload.status, "processing_gym_assistant_apply")
+        self.assertEqual(other_agent.status, "processing_gym_assistant_apply")
+
+    def test_stale_expiry_release_cannot_overwrite_applied_payment(self):
+        now = datetime.now()
+        record = self.add_pending_fep_payment_update(522, suffix="1")
+        record.status = "processing_gym_assistant_apply"
+        record.claimed_by = "frontdesk_dreamz"
+        record.claimed_at = now - timedelta(minutes=10)
+        record.claim_expires_at = now - timedelta(seconds=1)
+        db.session.commit()
+        stale_record = db.session.get(FepPaymentUpdate, record.id)
+
+        db.session.execute(
+            FepPaymentUpdate.__table__.update()
+            .where(FepPaymentUpdate.id == record.id)
+            .values(
+                status="applied_to_gym_assistant",
+                claimed_by=None,
+                claimed_at=None,
+                claim_expires_at=None,
+                applied_at=now,
+            )
+        )
+        self.assertEqual(
+            stale_record.status,
+            "processing_gym_assistant_apply",
+        )
+
+        released = release_expired_fep_payment_claims(
+            now,
+            agent_id="frontdesk_dreamz",
+            update_id=record.id,
+        )
+        db.session.commit()
+
+        self.assertEqual(released, 0)
+        db.session.refresh(stale_record)
+        self.assertEqual(stale_record.status, "applied_to_gym_assistant")
+        self.assertIsNotNone(stale_record.applied_at)
 
     def test_late_result_after_claim_expiry_is_rejected_and_not_applied(self):
         record = self.add_pending_fep_payment_update(522, suffix="1")
