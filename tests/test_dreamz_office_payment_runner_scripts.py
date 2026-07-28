@@ -225,6 +225,190 @@ class RunnerScriptSafetyTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, installer)
 
+    def test_installer_normalizes_unc_without_weakening_source_guards(self):
+        installer = (
+            SCRIPT_ROOT / "Install-DreamzOfficePaymentRunner.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "[string]$sourceRootItem.Provider.Name",
+            installer,
+        )
+        self.assertIn(
+            '"SourceRoot must resolve through the Windows FileSystem provider."',
+            installer,
+        )
+        self.assertIn(
+            "$sourceRootProviderPath = [string]$sourceRootItem.ProviderPath",
+            installer,
+        )
+        self.assertIn(
+            "Test-Path -LiteralPath $sourceRootProviderPath -PathType Container",
+            installer,
+        )
+        self.assertIn(
+            "$sourceRootLogicalDrive = [string]$sourceRootItem.Drive.Name",
+            installer,
+        )
+        self.assertIn(
+            '$resolvedSourcePath -match "^[^:]+::"',
+            installer,
+        )
+        self.assertIn(
+            '$providerQualifiedPath -match "^[A-Za-z]:[\\\\/]"',
+            installer,
+        )
+        self.assertNotIn(
+            "[IO.Path]::GetFullPath($sourceRootItem.Path)",
+            installer,
+        )
+        self.assertLess(
+            installer.index("$sourceRootItem = Resolve-Path"),
+            installer.index("$sourceRootProviderPath ="),
+        )
+        self.assertLess(
+            installer.index("[string]$sourceRootItem.Provider.Name"),
+            installer.index("$sourceRootProviderPath ="),
+        )
+        self.assertLess(
+            installer.index(
+                "Test-Path -LiteralPath $sourceRootProviderPath -PathType Container"
+            ),
+            installer.index("$fullSourceRoot ="),
+        )
+        self.assertLess(
+            installer.index(
+                "$sourceRootLogicalDrive = [string]$sourceRootItem.Drive.Name"
+            ),
+            installer.index("$fullSourceRoot ="),
+        )
+        self.assertLess(
+            installer.index("$fullSourceRoot ="),
+            installer.index(
+                "Test-Path -LiteralPath $expectedDataRoot -PathType Container"
+            ),
+        )
+        self.assertIn(
+            "$fullProviderSourceRoot.StartsWith(",
+            installer,
+        )
+        for fail_closed_guard in (
+            "SourceRoot must be an existing directory.",
+            "SourceRoot must be an exact absolute Windows path.",
+            "SourceRoot must contain an existing Data directory.",
+            "SourceRoot X:\\ is reserved",
+            "The Shared Operations transfer location may not be used",
+        ):
+            self.assertIn(fail_closed_guard, installer)
+
+        command = r"""
+$ErrorActionPreference = "Stop"
+$unc = [pscustomobject]@{
+  Path = "Microsoft.PowerShell.Core\FileSystem::\\DREAMZ-FRNTDSK\Gym Assistant 2.6"
+  ProviderPath = "\\DREAMZ-FRNTDSK\Gym Assistant 2.6"
+}
+$drive = [pscustomobject]@{
+  Path = "C:\Gym Assistant 2.6"
+  ProviderPath = "C:\Gym Assistant 2.6"
+}
+$mappedDrive = [pscustomobject]@{
+  Path = "Z:\Gym Assistant 2.6"
+  ProviderPath = "\\DREAMZ-FRNTDSK\Gym Assistant 2.6"
+}
+$providerQualifiedDrive = [pscustomobject]@{
+  Path = "Microsoft.PowerShell.Core\FileSystem::Z:\Gym Assistant 2.6"
+  ProviderPath = "\\DREAMZ-FRNTDSK\Gym Assistant 2.6"
+}
+$mappedTransferDrive = [pscustomobject]@{
+  Path = "X:\Gym Assistant 2.6"
+  ProviderPath = "\\DREAMZ-FRNTDSK\Gym Assistant 2.6"
+  DriveName = "X"
+}
+$legacyPathRejected = $false
+try {
+  [void][IO.Path]::GetFullPath([string]$unc.Path)
+}
+catch {
+  $legacyPathRejected = $true
+}
+$uncResolvedPath = [string]$unc.Path
+if ($uncResolvedPath -match "^[^:]+::") {
+  $uncQualifiedPath = $uncResolvedPath.Substring(
+    $uncResolvedPath.IndexOf("::", [StringComparison]::Ordinal) + 2
+  )
+  $uncResolvedPath = if ($uncQualifiedPath -match "^[A-Za-z]:[\\/]") {
+    $uncQualifiedPath
+  } else {
+    [string]$unc.ProviderPath
+  }
+}
+$driveResolvedPath = [string]$drive.Path
+if ($driveResolvedPath -match "^[^:]+::") {
+  $driveResolvedPath = [string]$drive.ProviderPath
+}
+$mappedResolvedPath = [string]$mappedDrive.Path
+if ($mappedResolvedPath -match "^[^:]+::") {
+  $mappedResolvedPath = [string]$mappedDrive.ProviderPath
+}
+$qualifiedDriveResolvedPath = [string]$providerQualifiedDrive.Path
+if ($qualifiedDriveResolvedPath -match "^[^:]+::") {
+  $qualifiedDrivePath = $qualifiedDriveResolvedPath.Substring(
+    $qualifiedDriveResolvedPath.IndexOf("::", [StringComparison]::Ordinal) + 2
+  )
+  $qualifiedDriveResolvedPath = if (
+    $qualifiedDrivePath -match "^[A-Za-z]:[\\/]"
+  ) {
+    $qualifiedDrivePath
+  } else {
+    [string]$providerQualifiedDrive.ProviderPath
+  }
+}
+[ordered]@{
+  legacy_path_rejected = $legacyPathRejected
+  unc = [IO.Path]::GetFullPath($uncResolvedPath)
+  drive = [IO.Path]::GetFullPath($driveResolvedPath)
+  mapped_drive = [IO.Path]::GetFullPath($mappedResolvedPath)
+  provider_qualified_drive = [IO.Path]::GetFullPath(
+    $qualifiedDriveResolvedPath
+  )
+  mapped_transfer_drive_is_x = [string]::Equals(
+    [string]$mappedTransferDrive.DriveName,
+    "X",
+    [StringComparison]::OrdinalIgnoreCase
+  )
+} | ConvertTo-Json -Compress
+"""
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                command,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["legacy_path_rejected"])
+        self.assertEqual(
+            payload["unc"],
+            r"\\DREAMZ-FRNTDSK\Gym Assistant 2.6",
+        )
+        self.assertEqual(payload["drive"], r"C:\Gym Assistant 2.6")
+        self.assertEqual(
+            payload["mapped_drive"],
+            r"Z:\Gym Assistant 2.6",
+        )
+        self.assertEqual(
+            payload["provider_qualified_drive"],
+            r"Z:\Gym Assistant 2.6",
+        )
+        self.assertTrue(payload["mapped_transfer_drive_is_x"])
+
     def test_upgrade_preserves_and_validates_receipt_ledger_before_start(self):
         installer = (
             SCRIPT_ROOT / "Install-DreamzOfficePaymentRunner.ps1"

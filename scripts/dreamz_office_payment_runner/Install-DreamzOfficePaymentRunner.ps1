@@ -44,10 +44,42 @@ if ([Management.Automation.WildcardPattern]::ContainsWildcardCharacters($SourceR
   throw "SourceRoot must be one exact absolute Windows path without wildcards."
 }
 $sourceRootItem = Resolve-Path -LiteralPath $SourceRoot -ErrorAction Stop
-if (-not (Test-Path -LiteralPath $sourceRootItem.Path -PathType Container)) {
+if (-not [string]::Equals(
+  [string]$sourceRootItem.Provider.Name,
+  "FileSystem",
+  [StringComparison]::OrdinalIgnoreCase
+)) {
+  throw "SourceRoot must resolve through the Windows FileSystem provider."
+}
+$sourceRootProviderPath = [string]$sourceRootItem.ProviderPath
+if (
+  -not $sourceRootProviderPath -or
+  -not (Test-Path -LiteralPath $sourceRootProviderPath -PathType Container)
+) {
   throw "SourceRoot must be an existing directory."
 }
-$fullSourceRoot = [IO.Path]::GetFullPath($sourceRootItem.Path)
+$sourceRootLogicalDrive = [string]$sourceRootItem.Drive.Name
+if ([string]::Equals(
+  $sourceRootLogicalDrive,
+  "X",
+  [StringComparison]::OrdinalIgnoreCase
+)) {
+  throw "SourceRoot X:\ is reserved for reviewed package transfer and may not be used as the Gym Assistant runtime root."
+}
+$resolvedSourcePath = [string]$sourceRootItem.Path
+if ($resolvedSourcePath -match "^[^:]+::") {
+  $providerQualifiedPath = $resolvedSourcePath.Substring(
+    $resolvedSourcePath.IndexOf("::", [StringComparison]::Ordinal) + 2
+  )
+  $resolvedSourcePath = if ($providerQualifiedPath -match "^[A-Za-z]:[\\/]") {
+    $providerQualifiedPath
+  }
+  else {
+    $sourceRootProviderPath
+  }
+}
+$fullSourceRoot = [IO.Path]::GetFullPath($resolvedSourcePath)
+$fullProviderSourceRoot = [IO.Path]::GetFullPath($sourceRootProviderPath)
 $sourcePathRoot = [IO.Path]::GetPathRoot($fullSourceRoot)
 $resolvedSourceRoot = if (
   $fullSourceRoot.Equals($sourcePathRoot, [StringComparison]::OrdinalIgnoreCase)
@@ -77,6 +109,9 @@ if ([string]::Equals($sourceDrive, "X:\", [StringComparison]::OrdinalIgnoreCase)
 }
 $reservedTransferRoot = "\\DREAMZ-OFFICE-P\Shared Operations"
 if ($resolvedSourceRoot.StartsWith(
+  $reservedTransferRoot,
+  [StringComparison]::OrdinalIgnoreCase
+) -or $fullProviderSourceRoot.StartsWith(
   $reservedTransferRoot,
   [StringComparison]::OrdinalIgnoreCase
 )) {
