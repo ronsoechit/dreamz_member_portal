@@ -123,6 +123,34 @@ class SyncApiTests(unittest.TestCase):
         payload.update(overrides)
         return payload
 
+    def add_pending_fep_payment_update(
+        self,
+        upload_id,
+        *,
+        target_agent="frontdesk_dreamz",
+        suffix="1",
+    ):
+        record = FepPaymentUpdate(
+            idempotency_key=f"scope-test:{upload_id}:{suffix}",
+            source="scope-test",
+            status="pending_gym_assistant_apply",
+            member_id=f"9{str(upload_id)[-4:]}{suffix}",
+            member_name=f"Scope {upload_id}",
+            membership_period="2026-07",
+            upload_id=int(upload_id),
+            upload_filename=f"upload-{upload_id}.txt",
+            record_id=int(f"{str(upload_id)[-4:]}{suffix}"),
+            request_payload_hash=(str(suffix)[-1:] or "a") * 64,
+            request_payload_json="{}",
+            old_values_json="{}",
+            new_values_json="{}",
+            target_agent=target_agent,
+            apply_attempts=0,
+        )
+        db.session.add(record)
+        db.session.commit()
+        return record
+
     def test_sync_api_requires_token(self):
         response = self.client.post("/api/sync/members", json={"members": []})
 
@@ -1332,6 +1360,142 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(second.status_code, 200)
         self.assertTrue(second.json["duplicate"])
         self.assertEqual(FepPaymentProcessCommand.query.count(), 1)
+
+    def test_fep_payment_process_command_is_scoped_to_its_upload(self):
+        first = self.add_pending_fep_payment_update(522, suffix="1")
+        second = self.add_pending_fep_payment_update(900, suffix="2")
+
+        create_response = self.client.post(
+            "/api/fep/payment-process-request",
+            json={
+                "target_agent": "frontdesk_dreamz",
+                "upload_id": 522,
+                "limit": 25,
+            },
+            headers=self.fep_headers(),
+        )
+
+        self.assertEqual(create_response.status_code, 200)
+        self.assertEqual(create_response.json["pending_payments"], 1)
+        self.assertEqual(create_response.json["upload_id"], 522)
+
+        command_response = self.client.get(
+            "/api/sync/fep-payment-process-commands?agent_id=frontdesk_dreamz",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+        command = command_response.json["commands"][0]
+        scoped_updates = self.client.get(
+            "/api/sync/fep-payment-updates?agent_id=frontdesk_dreamz&limit=100",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(scoped_updates.status_code, 200)
+        self.assertTrue(scoped_updates.json["upload_scoped"])
+        self.assertEqual(scoped_updates.json["upload_id"], 522)
+        self.assertEqual(scoped_updates.json["command_id"], command["id"])
+        self.assertEqual(scoped_updates.json["limit_applied"], 1)
+        self.assertEqual(
+            [row["id"] for row in scoped_updates.json["updates"]],
+            [first.id],
+        )
+        db.session.refresh(first)
+        db.session.refresh(second)
+        self.assertEqual(first.status, "processing_gym_assistant_apply")
+        self.assertEqual(second.status, "pending_gym_assistant_apply")
+
+        update_result = self.client.post(
+            f"/api/sync/fep-payment-updates/{first.id}/result",
+            json={"status": "applied", "writer": "scope-test"},
+            headers={
+                "X-Sync-Token": "sync-test-token",
+                "X-Sync-Agent": "frontdesk_dreamz",
+            },
+        )
+        self.assertEqual(update_result.status_code, 200)
+        command_result = self.client.post(
+            f"/api/sync/fep-payment-process-commands/{command['id']}/result",
+            json={
+                "status": "completed",
+                "summary": {
+                    "received": 1,
+                    "applied": 1,
+                    "failed": 0,
+                    "deferred": 0,
+                },
+            },
+            headers={
+                "X-Sync-Token": "sync-test-token",
+                "X-Sync-Agent": "frontdesk_dreamz",
+            },
+        )
+        self.assertEqual(command_result.status_code, 200)
+
+        second_create = self.client.post(
+            "/api/fep/payment-process-request",
+            json={
+                "target_agent": "frontdesk_dreamz",
+                "upload_id": 900,
+                "limit": 25,
+            },
+            headers=self.fep_headers(),
+        )
+        self.assertEqual(second_create.status_code, 200)
+        self.assertEqual(second_create.json["pending_payments"], 1)
+        second_claim = self.client.get(
+            "/api/sync/fep-payment-process-commands?agent_id=frontdesk_dreamz",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+        self.assertEqual(second_claim.json["commands"][0]["upload_id"], 900)
+        second_updates = self.client.get(
+            "/api/sync/fep-payment-updates?agent_id=frontdesk_dreamz",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+        self.assertEqual(
+            [row["id"] for row in second_updates.json["updates"]],
+            [second.id],
+        )
+
+    def test_process_request_rejects_other_upload_while_agent_is_busy(self):
+        self.add_pending_fep_payment_update(522, suffix="1")
+        self.add_pending_fep_payment_update(900, suffix="2")
+        first = self.client.post(
+            "/api/fep/payment-process-request",
+            json={"target_agent": "frontdesk_dreamz", "upload_id": 522},
+            headers=self.fep_headers(),
+        )
+        second = self.client.post(
+            "/api/fep/payment-process-request",
+            json={"target_agent": "frontdesk_dreamz", "upload_id": 900},
+            headers=self.fep_headers(),
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 409)
+        self.assertIn("another upload", second.json["error"])
+        self.assertEqual(FepPaymentProcessCommand.query.count(), 1)
+
+    def test_unclaimed_process_command_blocks_unscoped_update_claim(self):
+        first = self.add_pending_fep_payment_update(522, suffix="1")
+        second = self.add_pending_fep_payment_update(900, suffix="2")
+        create_response = self.client.post(
+            "/api/fep/payment-process-request",
+            json={"target_agent": "frontdesk_dreamz", "upload_id": 522},
+            headers=self.fep_headers(),
+        )
+        self.assertEqual(create_response.status_code, 200)
+
+        updates = self.client.get(
+            "/api/sync/fep-payment-updates?agent_id=frontdesk_dreamz",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(updates.status_code, 200)
+        self.assertTrue(updates.json["command_waiting_for_claim"])
+        self.assertEqual(updates.json["updates"], [])
+        db.session.refresh(first)
+        db.session.refresh(second)
+        self.assertEqual(first.status, "pending_gym_assistant_apply")
+        self.assertEqual(second.status, "pending_gym_assistant_apply")
 
     def test_fep_payment_process_request_rejects_when_no_pending_updates(self):
         response = self.client.post(
