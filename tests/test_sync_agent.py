@@ -10,7 +10,21 @@ import zipfile
 from unittest.mock import patch
 from urllib.error import URLError
 
-from sync_agent import build_sync_payload, diff_manifest, get_invoice_monitor_member_ids, load_manifest, main, parse_gymassistant_export, process_fep_payment_command, process_fep_payment_updates, read_stable_file_snapshot, run_fep_payment_writer, save_manifest, scan_source
+from sync_agent import (
+    build_sync_payload,
+    diff_manifest,
+    get_invoice_monitor_member_ids,
+    load_manifest,
+    main,
+    member_sync_api_timeout_seconds,
+    parse_gymassistant_export,
+    process_fep_payment_command,
+    process_fep_payment_updates,
+    read_stable_file_snapshot,
+    run_fep_payment_writer,
+    save_manifest,
+    scan_source,
+)
 
 
 PHOTO_VERSIONED_KEY = "portal/Data/Pictures/0000100-55c64d0fcd6f9d5f.jpg"
@@ -154,6 +168,72 @@ def write_member_event(path: Path, occurred_at: datetime, fields: dict[str, str]
 
 
 class SyncAgentTests(unittest.TestCase):
+    def test_member_sync_api_timeout_uses_safe_default(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(member_sync_api_timeout_seconds(), 180)
+
+    def test_member_sync_api_timeout_supports_bounded_configuration(self):
+        for configured, expected in (
+            ("240", 240),
+            ("10", 30),
+            ("1200", 900),
+            ("invalid", 180),
+        ):
+            with self.subTest(configured=configured):
+                with patch.dict(
+                    os.environ,
+                    {"MEMBER_SYNC_API_TIMEOUT_SECONDS": configured},
+                    clear=True,
+                ):
+                    self.assertEqual(
+                        member_sync_api_timeout_seconds(),
+                        expected,
+                    )
+
+    def test_main_uses_configured_timeout_for_member_sync_post(self):
+        diff = type(
+            "Diff",
+            (),
+            {"added": [], "changed": [], "removed": []},
+        )()
+        with (
+            patch.dict(
+                os.environ,
+                {"MEMBER_SYNC_API_TIMEOUT_SECONDS": "240"},
+                clear=True,
+            ),
+            patch(
+                "sys.argv",
+                [
+                    "sync_agent.py",
+                    "--source-root",
+                    r"C:\Gym Assistant 2.6",
+                    "--portal-url",
+                    "https://portal.example",
+                    "--sync-token",
+                    "sync-token",
+                    "--push-members",
+                ],
+            ),
+            patch("sync_agent.scan_source", return_value=object()),
+            patch("sync_agent.load_manifest", return_value=None),
+            patch("sync_agent.diff_manifest", return_value=diff),
+            patch("sync_agent.print_scan_report"),
+            patch(
+                "sync_agent.get_invoice_monitor_member_ids",
+                return_value=set(),
+            ),
+            patch("sync_agent.build_sync_payload", return_value={"members": []}),
+            patch(
+                "sync_agent.post_json",
+                return_value={"status": "success"},
+            ) as post_member_sync,
+            patch("builtins.print"),
+        ):
+            main()
+
+        self.assertEqual(post_member_sync.call_args.kwargs["timeout"], 240)
+
     def test_build_sync_payload_marks_full_member_snapshot_authoritative(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "Gym Assistant 2.6"
