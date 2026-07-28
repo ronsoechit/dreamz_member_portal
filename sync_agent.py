@@ -38,6 +38,9 @@ DEFAULT_STORAGE_PREFIX = "gymassistant"
 PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
 LIVE_MEMBER_DATA_WARNING_GRACE_SECONDS = 24 * 60 * 60
 DEFAULT_OFFICIAL_CSV_MAX_AGE_HOURS = 36
+DEFAULT_MEMBER_SYNC_API_TIMEOUT_SECONDS = 180
+MIN_MEMBER_SYNC_API_TIMEOUT_SECONDS = 30
+MAX_MEMBER_SYNC_API_TIMEOUT_SECONDS = 900
 OFFICIAL_MEMBER_SOURCE_KIND = "gymassistant_official_member_export_csv"
 
 
@@ -302,6 +305,21 @@ def official_csv_max_age_hours() -> int:
     except ValueError:
         return DEFAULT_OFFICIAL_CSV_MAX_AGE_HOURS
     return max(value, 1)
+
+
+def member_sync_api_timeout_seconds() -> int:
+    raw = os.getenv(
+        "MEMBER_SYNC_API_TIMEOUT_SECONDS",
+        str(DEFAULT_MEMBER_SYNC_API_TIMEOUT_SECONDS),
+    ).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_MEMBER_SYNC_API_TIMEOUT_SECONDS
+    return min(
+        max(value, MIN_MEMBER_SYNC_API_TIMEOUT_SECONDS),
+        MAX_MEMBER_SYNC_API_TIMEOUT_SECONDS,
+    )
 
 
 def official_csv_source_warning(path: Path) -> str | None:
@@ -1690,7 +1708,12 @@ def main() -> None:
             invoice_member_ids=invoice_member_ids,
         )
         endpoint = args.portal_url.rstrip("/") + "/api/sync/members"
-        result = post_json(endpoint, args.sync_token, payload)
+        result = post_json(
+            endpoint,
+            args.sync_token,
+            payload,
+            timeout=member_sync_api_timeout_seconds(),
+        )
         print("Sync API response:")
         print(json.dumps(result, indent=2))
         if args.write_manifest:
