@@ -23,17 +23,26 @@ Before it claims a command it verifies:
 3. `Z:\Data` is reachable;
 4. exactly one visible Gym Assistant window reports `Path=Z:\Data`;
 5. no payment/transaction/dependent dialog is already open;
-6. the desktop has been idle for the configured short guard interval.
+6. the desktop has been idle for at least five seconds by default.
 
 The checks repeat after claiming the command, before every update batch, and
-before every payment. A command older than the configured TTL (15 minutes by
-default) is failed without claiming or writing its payment updates.
+before every payment. The runner peeks and claims exactly one update at a time
+and requires its `upload_id` to equal the command `upload_id` before any UI
+writer call. A command older than the configured TTL (15 minutes by default) is
+failed without claiming or writing its payment updates.
+
+A cooperative stop is checked between every payment. When processing must stop
+after a partial batch, the command is reported as failed with its partial
+received/applied/failed/deferred summary; unclaimed updates remain available
+for a deliberate FEP retry.
 
 A named Windows mutex prevents two runner processes in the same interactive
-session. A local receipt containing only an update id, an idempotency-key hash,
-and a timestamp is written after Gym Assistant succeeds but before the API
-acknowledgement. If that acknowledgement is lost, a later retry reports the
-stored success without clicking Gym Assistant twice.
+session. Before the official UI writer is invoked, a durable local receipt
+containing only an update id, an idempotency-key hash, state and timestamps is
+written. Success advances it to `applied` before API acknowledgement. A writer
+exception or interrupted `writer_started` state becomes manual reconciliation;
+a later claim never clicks Gym Assistant again. Invalid, partially invalid, or
+unwritable, or unexpectedly missing receipt state blocks the installed runner.
 
 Logs and `state/status.json` contain only operational states and counts. They
 do not contain member ids, names, amounts, API tokens, window titles, or raw
@@ -56,10 +65,21 @@ The installer:
 - restricts the install directory ACL to the current user and SYSTEM;
 - creates a current-user Startup shortcut only;
 - retains any previous installation in a timestamped rollback directory;
+- preserves and strictly validates the previous receipt ledger before an
+  upgrade can start;
 - starts a hidden current-user launcher unless `-DoNotStart` is supplied.
 
 It does not create a service, Scheduled Task, machine environment variable,
 firewall rule, listener, or Gym Assistant data-file write path.
+
+The installer and support staff may run the non-mutating local health check:
+
+```powershell
+python -m ron_laptop_payment_runner.runner --health-check
+```
+
+It validates only runtime JSON and receipt-ledger structure. It does not read a
+token, contact Portal, inspect Gym Assistant, claim work, or operate the UI.
 
 ## Stop, uninstall, restore
 
@@ -84,6 +104,11 @@ Restore takes the exact rollback directory printed by uninstall:
   -RollbackPath "<printed rollback directory>"
 ```
 
+Only complete `uninstalled-*` snapshots can be restored, and their local
+health check must pass before files are moved. Pre-upgrade snapshots are kept
+for automatic installer rollback/audit but are refused for later manual
+restore because their receipt ledger can be stale after newer payments run.
+
 ## Important limitations
 
 - The writer visibly operates the official Gym Assistant UI. It is not a
@@ -91,10 +116,10 @@ Restore takes the exact rollback directory printed by uninstall:
   interactive session.
 - Windows drive mappings are per logon session. The runner waits without
   claiming when `Z:` is absent.
-- The local receipt closes the normal "payment succeeded, API reply was lost"
-  retry gap. A hard process or power failure in the very small interval between
-  the final Gym Assistant click and receipt creation still requires manual
-  reconciliation before retrying.
+- A crash or exception after the durable `writer_started` receipt intentionally
+  blocks automatic retry, even if the writer may not yet have clicked. Staff
+  must reconcile that one payment manually; this conservative false-positive
+  is preferred over a possible duplicate Gym Assistant payment.
 - FEP/Portal authorization and queue idempotency remain the server-side
   authority. This package does not add a second payment mutation route.
 - The existing sync token currently authorizes more Portal sync APIs than this

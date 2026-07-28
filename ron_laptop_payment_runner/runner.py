@@ -24,7 +24,7 @@ import uuid
 import gymassistant_payment_writer as payment_writer
 
 
-PACKAGE_VERSION = "1.0.0"
+PACKAGE_VERSION = "1.1.0"
 AGENT_ID = "ron_laptop"
 AGENT_LABEL = "Ron laptop"
 SOURCE_ROOT = Path("Z:\\")
@@ -33,7 +33,7 @@ PORTAL_URL = "https://dreamzmemberportal-production.up.railway.app"
 MUTEX_NAME = r"Local\DreamzRonLaptopPaymentRunner"
 
 DEFAULT_POLL_SECONDS = 5
-DEFAULT_IDLE_SECONDS = 2
+DEFAULT_IDLE_SECONDS = 5
 DEFAULT_COMMAND_TTL_SECONDS = 15 * 60
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 20
 DEFAULT_WRITER_TIMEOUT_SECONDS = 30
@@ -88,6 +88,10 @@ class PortalApiError(RunnerError):
 
 
 class AcknowledgementPending(RunnerError):
+    pass
+
+
+class ReceiptLedgerError(RunnerError):
     pass
 
 
@@ -184,15 +188,23 @@ def load_runtime_config(path: Path) -> RuntimeConfig:
     )
 
 
-def atomic_write_json(path: Path, payload: dict) -> None:
+def atomic_write_json(path: Path, payload: dict, *, durable: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        temporary.write_text(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")),
-            encoding="utf-8",
-        )
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write(serialized)
+            handle.flush()
+            if durable:
+                os.fsync(handle.fileno())
         os.replace(temporary, path)
+        if durable:
+            # Flush the replaced file as well. Windows does not provide a
+            # portable directory-fsync through Python, but both the temporary
+            # contents and final file handle are flushed before UI mutation.
+            with path.open("r+b") as handle:
+                os.fsync(handle.fileno())
     finally:
         try:
             temporary.unlink(missing_ok=True)
@@ -230,11 +242,16 @@ class StatusStore:
 
 
 class ReceiptStore:
-    """Small local crash-safety ledger with no member or payment details."""
+    """Strict local crash-safety ledger with no member or payment details."""
 
-    def __init__(self, path: Path):
+    SCHEMA = 2
+    STATES = {"writer_started", "ambiguous", "applied"}
+
+    def __init__(self, path: Path, *, require_existing: bool = False):
         self.path = path
         self._records: dict[str, dict[str, str]] = {}
+        if require_existing and not self.path.is_file():
+            raise ReceiptLedgerError("receipt_ledger_missing")
         self._load()
 
     @staticmethod
@@ -245,64 +262,193 @@ class ReceiptStore:
     def _digest(idempotency_key: str) -> str:
         return hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _valid_timestamp(value: object) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return False
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            datetime.fromisoformat(text)
+        except ValueError:
+            return False
+        return True
+
+    @classmethod
+    def _validate_v2_record(cls, update_id: str, record: object) -> dict[str, str]:
+        if not str(update_id).isdigit() or int(update_id) <= 0:
+            raise ReceiptLedgerError("receipt_ledger_invalid")
+        if not isinstance(record, dict):
+            raise ReceiptLedgerError("receipt_ledger_invalid")
+        allowed = {
+            "idempotency_sha256",
+            "state",
+            "writer_started_at",
+            "updated_at",
+            "ambiguous_at",
+            "applied_at",
+        }
+        if set(record) - allowed:
+            raise ReceiptLedgerError("receipt_ledger_invalid")
+        digest = record.get("idempotency_sha256")
+        state = record.get("state")
+        writer_started_at = record.get("writer_started_at")
+        updated_at = record.get("updated_at")
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ReceiptLedgerError("receipt_ledger_invalid")
+        if state not in cls.STATES:
+            raise ReceiptLedgerError("receipt_ledger_invalid")
+        if not cls._valid_timestamp(writer_started_at) or not cls._valid_timestamp(updated_at):
+            raise ReceiptLedgerError("receipt_ledger_invalid")
+        if state == "ambiguous" and not cls._valid_timestamp(record.get("ambiguous_at")):
+            raise ReceiptLedgerError("receipt_ledger_invalid")
+        if state == "applied" and not cls._valid_timestamp(record.get("applied_at")):
+            raise ReceiptLedgerError("receipt_ledger_invalid")
+        normalized = {
+            "idempotency_sha256": digest,
+            "state": state,
+            "writer_started_at": str(writer_started_at),
+            "updated_at": str(updated_at),
+        }
+        if state == "ambiguous":
+            normalized["ambiguous_at"] = str(record["ambiguous_at"])
+        if state == "applied":
+            normalized["applied_at"] = str(record["applied_at"])
+        return normalized
+
+    @classmethod
+    def _validate_v1_record(cls, update_id: str, record: object) -> dict[str, str]:
+        """Safely interpret the v1 ledger as already-applied/ACK-pending."""
+        if not str(update_id).isdigit() or int(update_id) <= 0:
+            raise ReceiptLedgerError("receipt_ledger_invalid")
+        if not isinstance(record, dict) or set(record) != {
+            "idempotency_sha256",
+            "applied_at",
+        }:
+            raise ReceiptLedgerError("receipt_ledger_invalid")
+        digest = record.get("idempotency_sha256")
+        applied_at = record.get("applied_at")
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ReceiptLedgerError("receipt_ledger_invalid")
+        if not cls._valid_timestamp(applied_at):
+            raise ReceiptLedgerError("receipt_ledger_invalid")
+        return {
+            "idempotency_sha256": digest,
+            "state": "applied",
+            "writer_started_at": str(applied_at),
+            "updated_at": str(applied_at),
+            "applied_at": str(applied_at),
+        }
+
     def _load(self) -> None:
         if not self.path.is_file():
             return
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            self._records = {}
-            return
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            raise ReceiptLedgerError("receipt_ledger_invalid") from exc
+        if not isinstance(raw, dict) or set(raw) != {"schema", "receipts"}:
+            raise ReceiptLedgerError("receipt_ledger_invalid")
+        schema = raw.get("schema")
         records = raw.get("receipts") if isinstance(raw, dict) else None
         if not isinstance(records, dict):
-            return
+            raise ReceiptLedgerError("receipt_ledger_invalid")
+        validated: dict[str, dict[str, str]] = {}
         for update_id, record in records.items():
-            if not str(update_id).isdigit() or not isinstance(record, dict):
-                continue
-            digest = str(record.get("idempotency_sha256") or "")
-            applied_at = str(record.get("applied_at") or "")
-            if re.fullmatch(r"[0-9a-f]{64}", digest) and applied_at:
-                self._records[str(update_id)] = {
-                    "idempotency_sha256": digest,
-                    "applied_at": applied_at,
-                }
+            if schema == 1:
+                validated[str(update_id)] = self._validate_v1_record(
+                    str(update_id),
+                    record,
+                )
+            elif schema == self.SCHEMA:
+                validated[str(update_id)] = self._validate_v2_record(
+                    str(update_id),
+                    record,
+                )
+            else:
+                raise ReceiptLedgerError("receipt_ledger_schema_unsupported")
+        self._records = validated
 
     def _save(self) -> None:
-        atomic_write_json(
-            self.path,
-            {
-                "schema": 1,
-                "receipts": self._records,
-            },
-        )
+        try:
+            atomic_write_json(
+                self.path,
+                {
+                    "schema": self.SCHEMA,
+                    "receipts": self._records,
+                },
+                durable=True,
+            )
+        except (OSError, ValueError) as exc:
+            raise ReceiptLedgerError("receipt_ledger_write_failed") from exc
 
     def count(self) -> int:
         return len(self._records)
 
-    def matches(self, update_id: int, idempotency_key: str) -> bool:
+    def state(self, update_id: int, idempotency_key: str) -> str | None:
         record = self._records.get(self._key(update_id))
-        return bool(
-            record
-            and record.get("idempotency_sha256") == self._digest(idempotency_key)
-        )
+        if not record:
+            return None
+        if record.get("idempotency_sha256") != self._digest(idempotency_key):
+            return "conflict"
+        return record.get("state")
 
     def has_conflict(self, update_id: int, idempotency_key: str) -> bool:
-        record = self._records.get(self._key(update_id))
-        return bool(
-            record
-            and record.get("idempotency_sha256") != self._digest(idempotency_key)
-        )
+        return self.state(update_id, idempotency_key) == "conflict"
 
-    def record_applied(self, update_id: int, idempotency_key: str) -> None:
+    def record_writer_started(self, update_id: int, idempotency_key: str) -> None:
+        existing = self.state(update_id, idempotency_key)
+        if existing:
+            raise ReceiptLedgerError("receipt_state_conflict")
+        timestamp = utc_iso()
         self._records[self._key(update_id)] = {
             "idempotency_sha256": self._digest(idempotency_key),
-            "applied_at": utc_iso(),
+            "state": "writer_started",
+            "writer_started_at": timestamp,
+            "updated_at": timestamp,
         }
         self._save()
 
+    def mark_ambiguous(self, update_id: int, idempotency_key: str) -> None:
+        if self.state(update_id, idempotency_key) not in {
+            "writer_started",
+            "ambiguous",
+        }:
+            raise ReceiptLedgerError("receipt_state_conflict")
+        timestamp = utc_iso()
+        record = self._records[self._key(update_id)]
+        record["state"] = "ambiguous"
+        record["ambiguous_at"] = timestamp
+        record["updated_at"] = timestamp
+        record.pop("applied_at", None)
+        self._save()
+
+    def mark_applied(self, update_id: int, idempotency_key: str) -> None:
+        if self.state(update_id, idempotency_key) != "writer_started":
+            raise ReceiptLedgerError("receipt_state_conflict")
+        timestamp = utc_iso()
+        record = self._records[self._key(update_id)]
+        record["state"] = "applied"
+        record["applied_at"] = timestamp
+        record["updated_at"] = timestamp
+        record.pop("ambiguous_at", None)
+        self._save()
+
+    def clear_unapplied(self, update_id: int, idempotency_key: str) -> None:
+        if self.state(update_id, idempotency_key) != "writer_started":
+            raise ReceiptLedgerError("receipt_state_conflict")
+        self._records.pop(self._key(update_id))
+        self._save()
+
     def acknowledge(self, update_id: int) -> None:
-        if self._records.pop(self._key(update_id), None) is not None:
-            self._save()
+        record = self._records.get(self._key(update_id))
+        if not record:
+            return
+        if record.get("state") != "applied":
+            raise ReceiptLedgerError("receipt_state_conflict")
+        self._records.pop(self._key(update_id))
+        self._save()
 
 
 class NamedMutex:
@@ -529,6 +675,22 @@ class PortalClient:
             raise PortalApiError("portal_invalid_update_batch")
         return updates
 
+    def peek_updates(self, limit: int = 1) -> list[dict]:
+        query = urlencode(
+            {
+                "limit": max(1, min(int(limit), 100)),
+                "agent_id": AGENT_ID,
+                "peek": 1,
+            }
+        )
+        payload = self._request(f"{UPDATE_ENDPOINT}?{query}")
+        updates = payload.get("updates")
+        if not isinstance(updates, list):
+            raise PortalApiError("portal_invalid_update_batch")
+        if any(not isinstance(update, dict) for update in updates):
+            raise PortalApiError("portal_invalid_update_batch")
+        return updates
+
     def post_update_result(self, update_id: int, payload: dict) -> dict:
         query = urlencode({"agent_id": AGENT_ID})
         return self._request(
@@ -566,21 +728,6 @@ def command_recency(command: dict, ttl_seconds: int, *, now: datetime | None = N
     return Readiness(True, "ready")
 
 
-def safe_writer_error(exc: Exception) -> str:
-    text = str(exc or "").casefold()
-    if "dependent" in text or "linked membership" in text:
-        return "linked_membership_requires_manual_review"
-    if "balance" in text:
-        return "nonzero_balance_requires_manual_review"
-    if "amount" in text or "due date" in text or "billing period" in text:
-        return "payment_details_mismatch_requires_manual_review"
-    if "timed out" in text or "timeout" in text:
-        return "gymassistant_ui_timeout_requires_manual_review"
-    if "inactive" in text or "activate" in text:
-        return "gymassistant_activation_requires_manual_review"
-    return "gymassistant_write_failed_requires_manual_review"
-
-
 def sanitized_deferred_reason(value: object) -> str:
     allowed = {
         "desktop_not_idle",
@@ -591,7 +738,17 @@ def sanitized_deferred_reason(value: object) -> str:
     return reason if reason in allowed else "workstation_not_ready"
 
 
-def validate_command(command: dict) -> tuple[int, int]:
+def _positive_int(value: object, error: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise RunnerError(error) from exc
+    if parsed <= 0:
+        raise RunnerError(error)
+    return parsed
+
+
+def validate_command(command: dict) -> tuple[int, int, int]:
     try:
         command_id = int(command.get("id"))
     except (TypeError, ValueError) as exc:
@@ -606,10 +763,14 @@ def validate_command(command: dict) -> tuple[int, int]:
         raise RunnerError("invalid_command_limit") from exc
     if requested_limit <= 0:
         raise RunnerError("invalid_command_limit")
-    return command_id, min(requested_limit, MAX_COMMAND_LIMIT)
+    upload_id = _positive_int(
+        command.get("upload_id"),
+        "command_upload_scope_missing",
+    )
+    return command_id, min(requested_limit, MAX_COMMAND_LIMIT), upload_id
 
 
-def validate_update(update: dict) -> tuple[int, str]:
+def validate_update(update: dict, expected_upload_id: int) -> tuple[int, str]:
     try:
         update_id = int(update.get("id"))
     except (TypeError, ValueError) as exc:
@@ -621,10 +782,20 @@ def validate_update(update: dict) -> tuple[int, str]:
     idempotency_key = str(update.get("idempotency_key") or "").strip()
     if not idempotency_key:
         raise RunnerError("update_idempotency_key_missing")
+    upload_id = _positive_int(
+        update.get("upload_id"),
+        "update_upload_scope_missing",
+    )
+    if upload_id != int(expected_upload_id):
+        raise RunnerError("command_upload_scope_mismatch")
     return update_id, idempotency_key
 
 
-def apply_official_writer(update: dict, writer_timeout_seconds: int) -> dict:
+def apply_official_writer(
+    update: dict,
+    writer_timeout_seconds: int,
+    idle_seconds: int,
+) -> dict:
     return payment_writer.run_writer(
         {
             "source_root": str(SOURCE_ROOT),
@@ -633,7 +804,7 @@ def apply_official_writer(update: dict, writer_timeout_seconds: int) -> dict:
         apply=True,
         timeout=float(writer_timeout_seconds),
         foreground_ui=True,
-        require_idle_seconds=0,
+        require_idle_seconds=float(max(1, int(idle_seconds))),
         payment_method="Credit Card",
     )
 
@@ -662,11 +833,13 @@ def process_one_update(
     update: dict,
     receipts: ReceiptStore,
     config: RuntimeConfig,
+    expected_upload_id: int,
     *,
     readiness_check: Callable[[int], Readiness] = workstation_readiness,
-    writer_call: Callable[[dict, int], dict] = apply_official_writer,
+    writer_call: Callable[[dict, int, int], dict] = apply_official_writer,
+    stop_check: Callable[[], bool] = lambda: False,
 ) -> str:
-    update_id, idempotency_key = validate_update(update)
+    update_id, idempotency_key = validate_update(update, expected_upload_id)
 
     if receipts.has_conflict(update_id, idempotency_key):
         _post_update_result_with_retry(
@@ -680,7 +853,20 @@ def process_one_update(
         )
         return "failed"
 
-    if receipts.matches(update_id, idempotency_key):
+    receipt_state = receipts.state(update_id, idempotency_key)
+    if receipt_state in {"writer_started", "ambiguous"}:
+        _post_update_result_with_retry(
+            client,
+            update_id,
+            {
+                "status": "failed",
+                "error": "manual_reconciliation_required",
+                "writer": "gymassistant_payment_writer",
+            },
+        )
+        return "ambiguous"
+
+    if receipt_state == "applied":
         _post_update_result_with_retry(
             client,
             update_id,
@@ -692,6 +878,18 @@ def process_one_update(
         )
         receipts.acknowledge(update_id)
         return "applied"
+
+    if stop_check():
+        _post_update_result_with_retry(
+            client,
+            update_id,
+            {
+                "status": "deferred",
+                "reason": "stop_requested",
+                "writer": "gymassistant_payment_writer",
+            },
+        )
+        return "deferred"
 
     ready = readiness_check(config.idle_seconds)
     if not ready.ready:
@@ -707,20 +905,59 @@ def process_one_update(
         return "deferred"
 
     try:
-        result = writer_call(update, config.writer_timeout_seconds)
-    except Exception as exc:
+        # Durable intent is mandatory before calling any UI writer code. A
+        # crash after this point can only become manual reconciliation, never
+        # an automatic second click.
+        receipts.record_writer_started(update_id, idempotency_key)
+    except ReceiptLedgerError:
+        try:
+            _post_update_result_with_retry(
+                client,
+                update_id,
+                {
+                    "status": "deferred",
+                    "reason": "local_safety_ledger_unavailable",
+                    "writer": "gymassistant_payment_writer",
+                },
+            )
+        finally:
+            raise
+
+    try:
+        result = writer_call(
+            update,
+            config.writer_timeout_seconds,
+            config.idle_seconds,
+        )
+    except Exception:
+        try:
+            receipts.mark_ambiguous(update_id, idempotency_key)
+        except ReceiptLedgerError:
+            try:
+                _post_update_result_with_retry(
+                    client,
+                    update_id,
+                    {
+                        "status": "failed",
+                        "error": "manual_reconciliation_required",
+                        "writer": "gymassistant_payment_writer",
+                    },
+                )
+            finally:
+                raise
         _post_update_result_with_retry(
             client,
             update_id,
             {
                 "status": "failed",
-                "error": safe_writer_error(exc),
+                "error": "manual_reconciliation_required",
                 "writer": "gymassistant_payment_writer",
             },
         )
-        return "failed"
+        return "ambiguous"
 
     if str(result.get("status") or "").strip().lower() == "deferred":
+        receipts.clear_unapplied(update_id, idempotency_key)
         _post_update_result_with_retry(
             client,
             update_id,
@@ -732,20 +969,49 @@ def process_one_update(
         )
         return "deferred"
     if str(result.get("status") or "").strip().lower() != "applied" or not result.get("applied"):
+        try:
+            receipts.mark_ambiguous(update_id, idempotency_key)
+        except ReceiptLedgerError:
+            try:
+                _post_update_result_with_retry(
+                    client,
+                    update_id,
+                    {
+                        "status": "failed",
+                        "error": "manual_reconciliation_required",
+                        "writer": "gymassistant_payment_writer",
+                    },
+                )
+            finally:
+                raise
         _post_update_result_with_retry(
             client,
             update_id,
             {
                 "status": "failed",
-                "error": "writer_did_not_confirm_applied",
+                "error": "manual_reconciliation_required",
                 "writer": "gymassistant_payment_writer",
             },
         )
-        return "failed"
+        return "ambiguous"
 
-    # This receipt is written before the network acknowledgement. If the API
-    # response is lost, a later claim reports applied without clicking twice.
-    receipts.record_applied(update_id, idempotency_key)
+    try:
+        receipts.mark_applied(update_id, idempotency_key)
+    except ReceiptLedgerError:
+        # The durable on-disk state is still writer_started, so any retry is
+        # blocked. Report manual reconciliation when possible, then stop.
+        try:
+            _post_update_result_with_retry(
+                client,
+                update_id,
+                {
+                    "status": "failed",
+                    "error": "manual_reconciliation_required",
+                    "writer": "gymassistant_payment_writer",
+                },
+            )
+        finally:
+            raise
     _post_update_result_with_retry(
         client,
         update_id,
@@ -759,16 +1025,30 @@ def process_one_update(
     return "applied"
 
 
-def post_command_failure(client: PortalClient, command_id: int, reason: str) -> None:
+def post_command_failure(
+    client: PortalClient,
+    command_id: int,
+    reason: str,
+    *,
+    summary: CommandSummary | None = None,
+    requested_limit: int | None = None,
+    upload_id: int | None = None,
+) -> None:
+    command_payload: dict[str, object] = {
+        "id": command_id,
+        "target_agent": AGENT_ID,
+    }
+    if requested_limit is not None:
+        command_payload["requested_limit"] = int(requested_limit)
+    if upload_id is not None:
+        command_payload["upload_id"] = int(upload_id)
     client.post_command_result(
         command_id,
         {
             "status": "failed",
             "error": reason,
-            "command": {
-                "id": command_id,
-                "target_agent": AGENT_ID,
-            },
+            "summary": (summary or CommandSummary()).public(),
+            "command": command_payload,
         },
     )
 
@@ -779,9 +1059,12 @@ def process_available_command(
     config: RuntimeConfig,
     *,
     readiness_check: Callable[[int], Readiness] = workstation_readiness,
-    writer_call: Callable[[dict, int], dict] = apply_official_writer,
+    writer_call: Callable[[dict, int, int], dict] = apply_official_writer,
+    stop_check: Callable[[], bool] = lambda: False,
     now: datetime | None = None,
 ) -> tuple[str, CommandSummary]:
+    if stop_check():
+        return "stop_requested", CommandSummary()
     initial_ready = readiness_check(config.idle_seconds)
     if not initial_ready.ready:
         return initial_ready.reason, CommandSummary()
@@ -793,77 +1076,235 @@ def process_available_command(
         return "idle", CommandSummary()
 
     try:
-        command_id, limit = validate_command(command)
-    except RunnerError:
-        # Without a trustworthy id/target, do not attempt any queue or UI work.
-        return "invalid_command", CommandSummary()
+        command_id, limit, upload_id = validate_command(command)
+    except RunnerError as exc:
+        # A trustworthy command id can still be closed fail-safe; never claim
+        # payment records when target/limit/upload scope is incomplete.
+        reason = str(exc)
+        try:
+            fallback_command_id = int(command.get("id"))
+        except (TypeError, ValueError):
+            fallback_command_id = 0
+        if fallback_command_id > 0:
+            post_command_failure(
+                client,
+                fallback_command_id,
+                reason,
+            )
+        return reason, CommandSummary()
 
     recent = command_recency(command, config.command_ttl_seconds, now=now)
     if not recent.ready:
-        post_command_failure(client, command_id, recent.reason)
+        post_command_failure(
+            client,
+            command_id,
+            recent.reason,
+            requested_limit=limit,
+            upload_id=upload_id,
+        )
         return recent.reason, CommandSummary()
 
     after_claim_ready = readiness_check(config.idle_seconds)
     if not after_claim_ready.ready:
-        post_command_failure(client, command_id, after_claim_ready.reason)
+        post_command_failure(
+            client,
+            command_id,
+            after_claim_ready.reason,
+            requested_limit=limit,
+            upload_id=upload_id,
+        )
         return after_claim_ready.reason, CommandSummary()
 
     summary = CommandSummary()
     remaining = limit
-    stop_claiming = False
     try:
-        while remaining > 0 and not stop_claiming:
+        while remaining > 0:
+            if stop_check():
+                post_command_failure(
+                    client,
+                    command_id,
+                    "stop_requested",
+                    summary=summary,
+                    requested_limit=limit,
+                    upload_id=upload_id,
+                )
+                return "stop_requested", summary
+
             ready = readiness_check(config.idle_seconds)
             if not ready.ready:
-                if summary.received == 0:
-                    post_command_failure(client, command_id, ready.reason)
-                    return ready.reason, summary
-                break
+                post_command_failure(
+                    client,
+                    command_id,
+                    ready.reason,
+                    summary=summary,
+                    requested_limit=limit,
+                    upload_id=upload_id,
+                )
+                return ready.reason, summary
 
-            updates = client.claim_updates(min(remaining, 100))
-            if not updates:
+            # Peek verifies local upload scoping before a lease is taken.
+            peeked = client.peek_updates(1)
+            if not peeked:
                 break
-            summary.received += len(updates)
-            remaining -= len(updates)
+            if len(peeked) != 1:
+                post_command_failure(
+                    client,
+                    command_id,
+                    "invalid_peek_batch",
+                    summary=summary,
+                    requested_limit=limit,
+                    upload_id=upload_id,
+                )
+                return "invalid_peek_batch", summary
+            try:
+                peek_id, peek_key = validate_update(peeked[0], upload_id)
+            except RunnerError as exc:
+                reason = str(exc)
+                post_command_failure(
+                    client,
+                    command_id,
+                    reason,
+                    summary=summary,
+                    requested_limit=limit,
+                    upload_id=upload_id,
+                )
+                return reason, summary
 
-            for update in updates:
+            if stop_check():
+                post_command_failure(
+                    client,
+                    command_id,
+                    "stop_requested",
+                    summary=summary,
+                    requested_limit=limit,
+                    upload_id=upload_id,
+                )
+                return "stop_requested", summary
+
+            # Claim exactly one record, keeping every lease bounded to one UI
+            # action and allowing a cooperative stop between all payments.
+            updates = client.claim_updates(1)
+            if len(updates) != 1:
+                post_command_failure(
+                    client,
+                    command_id,
+                    "queue_changed_after_peek",
+                    summary=summary,
+                    requested_limit=limit,
+                    upload_id=upload_id,
+                )
+                return "queue_changed_after_peek", summary
+            update = updates[0]
+            try:
+                claimed_id, claimed_key = validate_update(update, upload_id)
+            except RunnerError as exc:
                 try:
-                    outcome = process_one_update(
+                    update_id = int(update.get("id"))
+                except (TypeError, ValueError):
+                    update_id = 0
+                if update_id > 0:
+                    _post_update_result_with_retry(
                         client,
-                        update,
-                        receipts,
-                        config,
-                        readiness_check=readiness_check,
-                        writer_call=writer_call,
+                        update_id,
+                        {
+                            "status": "deferred",
+                            "reason": str(exc),
+                            "writer": "gymassistant_payment_writer",
+                        },
                     )
-                except AcknowledgementPending:
-                    # Do not complete/fail the command. The server claim will
-                    # expire, while the local receipt prevents a second click.
-                    raise
-                except RunnerError:
-                    outcome = "failed"
-                    try:
-                        update_id = int(update.get("id"))
-                    except (TypeError, ValueError):
-                        update_id = 0
-                    if update_id > 0:
-                        _post_update_result_with_retry(
-                            client,
-                            update_id,
-                            {
-                                "status": "failed",
-                                "error": "invalid_payment_update_payload",
-                                "writer": "gymassistant_payment_writer",
-                            },
-                        )
+                reason = str(exc)
+                post_command_failure(
+                    client,
+                    command_id,
+                    reason,
+                    summary=summary,
+                    requested_limit=limit,
+                    upload_id=upload_id,
+                )
+                return reason, summary
+            if claimed_id != peek_id or claimed_key != peek_key:
+                _post_update_result_with_retry(
+                    client,
+                    claimed_id,
+                    {
+                        "status": "deferred",
+                        "reason": "queue_changed_after_peek",
+                        "writer": "gymassistant_payment_writer",
+                    },
+                )
+                post_command_failure(
+                    client,
+                    command_id,
+                    "queue_changed_after_peek",
+                    summary=summary,
+                    requested_limit=limit,
+                    upload_id=upload_id,
+                )
+                return "queue_changed_after_peek", summary
 
-                if outcome == "applied":
-                    summary.applied += 1
-                elif outcome == "deferred":
-                    summary.deferred += 1
-                    stop_claiming = True
-                else:
-                    summary.failed += 1
+            summary.received += 1
+            remaining -= 1
+            try:
+                outcome = process_one_update(
+                    client,
+                    update,
+                    receipts,
+                    config,
+                    upload_id,
+                    readiness_check=readiness_check,
+                    writer_call=writer_call,
+                    stop_check=stop_check,
+                )
+            except AcknowledgementPending:
+                # Do not complete/fail the command. The server claim will
+                # expire, while the local receipt prevents a second click.
+                raise
+            except ReceiptLedgerError as exc:
+                try:
+                    post_command_failure(
+                        client,
+                        command_id,
+                        str(exc),
+                        summary=summary,
+                        requested_limit=limit,
+                        upload_id=upload_id,
+                    )
+                finally:
+                    raise
+            except RunnerError:
+                outcome = "failed"
+                _post_update_result_with_retry(
+                    client,
+                    claimed_id,
+                    {
+                        "status": "failed",
+                        "error": "invalid_payment_update_payload",
+                        "writer": "gymassistant_payment_writer",
+                    },
+                )
+
+            if outcome == "applied":
+                summary.applied += 1
+                continue
+            if outcome == "deferred":
+                summary.deferred += 1
+                reason = "stop_requested" if stop_check() else "payment_deferred"
+            else:
+                summary.failed += 1
+                reason = (
+                    "manual_reconciliation_required"
+                    if outcome == "ambiguous"
+                    else "payment_failed"
+                )
+            post_command_failure(
+                client,
+                command_id,
+                reason,
+                summary=summary,
+                requested_limit=limit,
+                upload_id=upload_id,
+            )
+            return reason, summary
 
         client.post_command_result(
             command_id,
@@ -874,6 +1315,7 @@ def process_available_command(
                     "id": command_id,
                     "requested_limit": limit,
                     "target_agent": AGENT_ID,
+                    "upload_id": upload_id,
                 },
             },
         )
@@ -916,16 +1358,15 @@ def wait_for_stop(stop_path: Path, seconds: int) -> bool:
 def run_loop(
     config_path: Path,
     *,
-    once: bool = False,
     client_factory: Callable[[str, int], PortalClient] = PortalClient,
 ) -> int:
     home = config_path.parent
     state_dir = home / "state"
     status = StatusStore(state_dir / "status.json")
-    receipts = ReceiptStore(state_dir / "payment-receipts.json")
     stop_path = state_dir / "stop.request"
     logger = configure_logger(home / "logs" / "runner.log")
     mutex = NamedMutex()
+    receipts: ReceiptStore | None = None
 
     try:
         if not mutex.acquire():
@@ -935,6 +1376,10 @@ def run_loop(
             return 0
 
         config = load_runtime_config(config_path)
+        receipts = ReceiptStore(
+            state_dir / "payment-receipts.json",
+            require_existing=True,
+        )
         token = str(os.getenv("SYNC_API_TOKEN") or "").strip()
         if not token:
             status.update(
@@ -963,7 +1408,12 @@ def run_loop(
                 logger.info("state=stopped reason=stop_requested")
                 return 0
             try:
-                state, summary = process_available_command(client, receipts, config)
+                state, summary = process_available_command(
+                    client,
+                    receipts,
+                    config,
+                    stop_check=stop_path.exists,
+                )
                 status.update(
                     "waiting" if state in {"idle", "desktop_in_use"} else state,
                     reason=None if state == "completed" else state,
@@ -987,6 +1437,16 @@ def run_loop(
                     "z_data_unavailable",
                 }:
                     logger.warning("state=waiting reason=%s", state)
+                if state == "stop_requested":
+                    status.update(
+                        "stopped",
+                        reason="stop_requested",
+                        receipt_count=receipts.count(),
+                    )
+                    logger.info("state=stopped reason=stop_requested")
+                    return 0
+            except ReceiptLedgerError:
+                raise
             except PortalApiError as exc:
                 status.update(
                     "waiting",
@@ -1002,8 +1462,6 @@ def run_loop(
                 )
                 logger.error("state=waiting reason=unexpected_runner_error")
 
-            if once:
-                return 0
             if wait_for_stop(stop_path, config.poll_seconds):
                 continue
     except RunnerError as exc:
@@ -1011,7 +1469,7 @@ def run_loop(
         status.update(
             "stopped",
             reason=reason,
-            receipt_count=receipts.count(),
+            receipt_count=receipts.count() if receipts else 0,
         )
         logger.error("state=stopped reason=%s", reason)
         return 3
@@ -1021,6 +1479,41 @@ def run_loop(
         for handler in list(logger.handlers):
             logger.removeHandler(handler)
             handler.close()
+
+
+def run_health_check(config_path: Path) -> int:
+    """Validate local non-secret configuration/state without API or UI access."""
+    try:
+        config = load_runtime_config(config_path)
+        receipts = ReceiptStore(
+            config_path.parent / "state" / "payment-receipts.json",
+            require_existing=True,
+        )
+        payload = {
+            "ok": True,
+            "version": PACKAGE_VERSION,
+            "agent_id": AGENT_ID,
+            "source_root": str(SOURCE_ROOT),
+            "receipt_count": receipts.count(),
+            "idle_seconds": config.idle_seconds,
+            "network_checked": False,
+            "ui_checked": False,
+        }
+        print(json.dumps(payload, sort_keys=True))
+        return 0
+    except RunnerError as exc:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "reason": str(exc),
+                    "network_checked": False,
+                    "ui_checked": False,
+                },
+                sort_keys=True,
+            )
+        )
+        return 3
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1037,16 +1530,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the non-secret runtime tuning file.",
     )
     parser.add_argument(
-        "--once",
+        "--health-check",
         action="store_true",
-        help="Run one safe poll iteration; primarily for local diagnostics.",
+        help=(
+            "Validate only local non-secret config and receipt state. "
+            "Does not contact Portal, inspect Gym Assistant, claim, or write."
+        ),
     )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return run_loop(args.config.resolve(), once=bool(args.once))
+    config_path = args.config.resolve()
+    if args.health_check:
+        return run_health_check(config_path)
+    return run_loop(config_path)
 
 
 if __name__ == "__main__":

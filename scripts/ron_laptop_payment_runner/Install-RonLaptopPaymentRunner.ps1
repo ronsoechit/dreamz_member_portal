@@ -88,7 +88,7 @@ try {
 
   $runtime = [ordered]@{
     poll_seconds = 5
-    idle_seconds = 2
+    idle_seconds = 5
     command_ttl_seconds = 900
     request_timeout_seconds = 20
     writer_timeout_seconds = 30
@@ -97,6 +97,32 @@ try {
     (Join-Path $installRoot "runtime.json"),
     ($runtime | ConvertTo-Json)
   )
+
+  $oldReceiptLedger = if ($existingBackedUp) {
+    Join-Path $backupPath "install\state\payment-receipts.json"
+  } else {
+    ""
+  }
+  $newReceiptLedger = Join-Path $installRoot "state\payment-receipts.json"
+  if ($oldReceiptLedger -and (Test-Path -LiteralPath $oldReceiptLedger)) {
+    Copy-Item -LiteralPath $oldReceiptLedger -Destination $newReceiptLedger
+  }
+  else {
+    [IO.File]::WriteAllText($newReceiptLedger, '{"schema":2,"receipts":{}}')
+  }
+
+  Push-Location $installRoot
+  try {
+    $healthOutput = & $PythonPath -m ron_laptop_payment_runner.runner `
+      --config (Join-Path $installRoot "runtime.json") `
+      --health-check 2>&1
+    if ($LASTEXITCODE -ne 0) {
+      throw "The copied receipt ledger or runner configuration failed the non-mutating health check. Upgrade refused."
+    }
+  }
+  finally {
+    Pop-Location
+  }
 
   $tokenFile = Join-Path $installRoot "secrets\sync-token.dpapi"
   $backupToken = if ($existingBackedUp) { Join-Path $backupPath "install\secrets\sync-token.dpapi" } else { "" }

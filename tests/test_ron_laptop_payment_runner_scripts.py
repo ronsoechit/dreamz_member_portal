@@ -53,6 +53,21 @@ class RunnerScriptSafetyTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, installer)
 
+    def test_upgrade_preserves_and_validates_receipt_ledger_before_start(self):
+        installer = (
+            SCRIPT_ROOT / "Install-RonLaptopPaymentRunner.ps1"
+        ).read_text(encoding="utf-8").casefold()
+        copy_position = installer.index(
+            "copy-item -literalpath $oldreceiptledger"
+        )
+        health_position = installer.index("--health-check")
+        start_position = installer.index("start-process")
+        self.assertLess(copy_position, health_position)
+        self.assertLess(health_position, start_position)
+        self.assertIn("upgrade refused", installer)
+        self.assertIn("idle_seconds = 5", installer)
+        self.assertIn('{"schema":2,"receipts":{}}', installer)
+
     def test_stop_script_never_forcibly_kills_a_process(self):
         stop_script = (
             SCRIPT_ROOT / "Stop-RonLaptopPaymentRunner.ps1"
@@ -60,6 +75,15 @@ class RunnerScriptSafetyTests(unittest.TestCase):
         self.assertNotIn("stop-process", stop_script)
         self.assertNotIn("taskkill", stop_script)
         self.assertIn("stop.request", stop_script)
+
+    def test_restore_refuses_stale_upgrade_snapshot_and_health_checks_uninstall(self):
+        restore = (
+            SCRIPT_ROOT / "Restore-RonLaptopPaymentRunner.ps1"
+        ).read_text(encoding="utf-8").casefold()
+        self.assertIn('startswith("uninstalled-"', restore)
+        self.assertIn("pre-upgrade snapshots", restore)
+        self.assertIn("--health-check", restore)
+        self.assertIn("receipt ledger", restore)
 
 
 if __name__ == "__main__":

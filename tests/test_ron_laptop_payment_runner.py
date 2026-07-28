@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import io
 from pathlib import Path
 import tempfile
 import unittest
@@ -11,12 +12,14 @@ from ron_laptop_payment_runner import runner
 
 
 class FakePortalClient:
-    def __init__(self, command=None, update_batches=None):
+    def __init__(self, command=None, updates=None):
         self.command = command
-        self.update_batches = list(update_batches or [])
+        self.pending_updates = list(updates or [])
         self.command_claims = 0
         self.command_results = []
         self.update_results = []
+        self.peek_limits = []
+        self.claim_limits = []
 
     def claim_command(self):
         self.command_claims += 1
@@ -27,10 +30,15 @@ class FakePortalClient:
         self.command_results.append((command_id, payload))
         return {"ok": True}
 
-    def claim_updates(self, _limit):
-        if not self.update_batches:
-            return []
-        return self.update_batches.pop(0)
+    def peek_updates(self, limit=1):
+        self.peek_limits.append(limit)
+        return self.pending_updates[:limit]
+
+    def claim_updates(self, limit):
+        self.claim_limits.append(limit)
+        updates = self.pending_updates[:limit]
+        del self.pending_updates[:limit]
+        return updates
 
     def post_update_result(self, update_id, payload):
         self.update_results.append((update_id, payload))
@@ -41,21 +49,27 @@ def ready(_idle_seconds):
     return runner.Readiness(True, "ready")
 
 
-def fresh_command(command_id=42, limit=1):
+def fresh_command(command_id=42, limit=1, upload_id=523):
     return {
         "id": command_id,
         "status": "running",
         "target_agent": runner.AGENT_ID,
         "requested_limit": limit,
+        "upload_id": upload_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
-def queued_update(update_id=7, idempotency_key="test-idempotency-key"):
+def queued_update(
+    update_id=7,
+    idempotency_key="test-idempotency-key",
+    upload_id=523,
+):
     return {
         "id": update_id,
         "idempotency_key": idempotency_key,
         "target_agent": runner.AGENT_ID,
+        "upload_id": upload_id,
         "member_id": "34203",
         "member_name": "Sensitive Name",
         "gym_billing_amount": 61.00,
@@ -87,6 +101,7 @@ class FixedScopeTests(unittest.TestCase):
             runner.PORTAL_URL,
             "https://dreamzmemberportal-production.up.railway.app",
         )
+        self.assertEqual(runner.RuntimeConfig().idle_seconds, 5)
 
     def test_cli_has_no_agent_source_or_token_override(self):
         parser = runner.build_parser()
@@ -99,6 +114,8 @@ class FixedScopeTests(unittest.TestCase):
         self.assertNotIn("--source-root", option_names)
         self.assertNotIn("--sync-token", option_names)
         self.assertNotIn("--portal-url", option_names)
+        self.assertNotIn("--once", option_names)
+        self.assertIn("--health-check", option_names)
 
     def test_runtime_config_rejects_scope_and_secret_fields(self):
         for field in ("agent_id", "source_root", "portal_url", "sync_token", "token"):
@@ -169,6 +186,33 @@ class FixedScopeTests(unittest.TestCase):
         self.assertNotIn("unit-test-token", request.full_url)
         self.assertNotIn(b"unit-test-token", request.data)
         self.assertEqual(json.loads(request.data)["agent_id"], "ron_laptop")
+
+    def test_portal_client_peeks_one_update_without_claiming(self):
+        response = FakeHttpResponse({"updates": [queued_update()]})
+        with patch.object(
+            runner.urlrequest,
+            "urlopen",
+            return_value=response,
+        ) as urlopen:
+            client = runner.PortalClient("unit-test-token", 20)
+            updates = client.peek_updates(1)
+
+        self.assertEqual(len(updates), 1)
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.method, "GET")
+        self.assertIn("limit=1", request.full_url)
+        self.assertIn("agent_id=ron_laptop", request.full_url)
+        self.assertIn("peek=1", request.full_url)
+
+    def test_official_writer_keeps_nonzero_idle_guard(self):
+        with patch.object(
+            runner.payment_writer,
+            "run_writer",
+            return_value={"status": "applied", "applied": True},
+        ) as run_writer:
+            runner.apply_official_writer(queued_update(), 30, 5)
+
+        self.assertEqual(run_writer.call_args.kwargs["require_idle_seconds"], 5.0)
 
 
 class PreflightTests(unittest.TestCase):
@@ -253,7 +297,7 @@ class CommandProcessingTests(unittest.TestCase):
         command["created_at"] = (
             datetime.now(timezone.utc) - timedelta(hours=2)
         ).isoformat()
-        client = FakePortalClient(command=command, update_batches=[[queued_update()]])
+        client = FakePortalClient(command=command, updates=[queued_update()])
 
         with tempfile.TemporaryDirectory() as temporary:
             receipts = runner.ReceiptStore(Path(temporary) / "receipts.json")
@@ -266,7 +310,7 @@ class CommandProcessingTests(unittest.TestCase):
 
         self.assertEqual(state, "command_expired")
         self.assertEqual(summary.received, 0)
-        self.assertEqual(len(client.update_batches), 1)
+        self.assertEqual(len(client.pending_updates), 1)
         self.assertEqual(client.command_results[0][1]["status"], "failed")
         self.assertEqual(
             client.command_results[0][1]["error"],
@@ -277,7 +321,7 @@ class CommandProcessingTests(unittest.TestCase):
         update = queued_update()
         client = FakePortalClient(
             command=fresh_command(limit=1),
-            update_batches=[[update]],
+            updates=[update],
         )
         writer = Mock(
             return_value={
@@ -305,12 +349,160 @@ class CommandProcessingTests(unittest.TestCase):
             "failed": 0,
             "deferred": 0,
         })
-        writer.assert_called_once_with(update, 30)
+        writer.assert_called_once_with(update, 30, 5)
+        self.assertEqual(client.peek_limits, [1])
+        self.assertEqual(client.claim_limits, [1])
         self.assertEqual(client.update_results[0][1]["status"], "applied")
         self.assertNotIn("member_id", client.update_results[0][1])
         self.assertNotIn("observed", client.update_results[0][1])
         self.assertEqual(client.command_results[-1][1]["status"], "completed")
         self.assertEqual(receipts.count(), 0)
+
+    def test_two_payments_are_peeked_and_claimed_one_at_a_time(self):
+        updates = [
+            queued_update(7, "key-7"),
+            queued_update(8, "key-8"),
+        ]
+        client = FakePortalClient(
+            command=fresh_command(limit=2),
+            updates=updates,
+        )
+        writer = Mock(return_value={"status": "applied", "applied": True})
+
+        with tempfile.TemporaryDirectory() as temporary:
+            receipts = runner.ReceiptStore(Path(temporary) / "receipts.json")
+            state, summary = runner.process_available_command(
+                client,
+                receipts,
+                runner.RuntimeConfig(),
+                readiness_check=ready,
+                writer_call=writer,
+            )
+
+        self.assertEqual(state, "completed")
+        self.assertEqual(summary.applied, 2)
+        self.assertEqual(client.peek_limits, [1, 1])
+        self.assertEqual(client.claim_limits, [1, 1])
+        self.assertEqual(writer.call_count, 2)
+
+    def test_stop_between_payments_fails_command_with_partial_summary(self):
+        stop = {"requested": False}
+        updates = [
+            queued_update(7, "key-7"),
+            queued_update(8, "key-8"),
+        ]
+        client = FakePortalClient(
+            command=fresh_command(limit=2),
+            updates=updates,
+        )
+
+        def writer(_update, _timeout, _idle):
+            stop["requested"] = True
+            return {"status": "applied", "applied": True}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            receipts = runner.ReceiptStore(Path(temporary) / "receipts.json")
+            state, summary = runner.process_available_command(
+                client,
+                receipts,
+                runner.RuntimeConfig(),
+                readiness_check=ready,
+                writer_call=writer,
+                stop_check=lambda: stop["requested"],
+            )
+
+        self.assertEqual(state, "stop_requested")
+        self.assertEqual(summary.public(), {
+            "received": 1,
+            "applied": 1,
+            "failed": 0,
+            "deferred": 0,
+        })
+        self.assertEqual(client.claim_limits, [1])
+        self.assertEqual(len(client.pending_updates), 1)
+        command_result = client.command_results[-1][1]
+        self.assertEqual(command_result["status"], "failed")
+        self.assertEqual(command_result["error"], "stop_requested")
+        self.assertEqual(command_result["summary"]["applied"], 1)
+
+    def test_peek_upload_mismatch_fails_before_claim_or_writer(self):
+        update = queued_update(upload_id=999)
+        client = FakePortalClient(
+            command=fresh_command(limit=1, upload_id=523),
+            updates=[update],
+        )
+        writer = Mock(side_effect=AssertionError("writer must remain closed"))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            receipts = runner.ReceiptStore(Path(temporary) / "receipts.json")
+            state, summary = runner.process_available_command(
+                client,
+                receipts,
+                runner.RuntimeConfig(),
+                readiness_check=ready,
+                writer_call=writer,
+            )
+
+        self.assertEqual(state, "command_upload_scope_mismatch")
+        self.assertEqual(summary.received, 0)
+        self.assertEqual(client.claim_limits, [])
+        writer.assert_not_called()
+        self.assertEqual(
+            client.command_results[-1][1]["error"],
+            "command_upload_scope_mismatch",
+        )
+
+    def test_claim_changed_after_matching_peek_is_deferred_without_writer(self):
+        class ChangedClaimClient(FakePortalClient):
+            def peek_updates(self, limit=1):
+                self.peek_limits.append(limit)
+                return [queued_update(7, "key-7", upload_id=523)]
+
+            def claim_updates(self, limit):
+                self.claim_limits.append(limit)
+                return [queued_update(8, "key-8", upload_id=999)]
+
+        client = ChangedClaimClient(command=fresh_command(upload_id=523))
+        writer = Mock(side_effect=AssertionError("writer must remain closed"))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            receipts = runner.ReceiptStore(Path(temporary) / "receipts.json")
+            state, _summary = runner.process_available_command(
+                client,
+                receipts,
+                runner.RuntimeConfig(),
+                readiness_check=ready,
+                writer_call=writer,
+            )
+
+        self.assertEqual(state, "command_upload_scope_mismatch")
+        writer.assert_not_called()
+        self.assertEqual(client.update_results[-1][1]["status"], "deferred")
+        self.assertEqual(
+            client.update_results[-1][1]["reason"],
+            "command_upload_scope_mismatch",
+        )
+
+    def test_missing_command_upload_scope_is_failed_without_peek(self):
+        command = fresh_command()
+        command.pop("upload_id")
+        client = FakePortalClient(command=command, updates=[queued_update()])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            receipts = runner.ReceiptStore(Path(temporary) / "receipts.json")
+            state, _summary = runner.process_available_command(
+                client,
+                receipts,
+                runner.RuntimeConfig(),
+                readiness_check=ready,
+            )
+
+        self.assertEqual(state, "command_upload_scope_missing")
+        self.assertEqual(client.peek_limits, [])
+        self.assertEqual(
+            client.command_results[-1][1]["error"],
+            "command_upload_scope_missing",
+        )
 
     def test_local_receipt_prevents_second_ui_write_after_lost_ack(self):
         update = queued_update()
@@ -335,12 +527,18 @@ class CommandProcessingTests(unittest.TestCase):
                         update,
                         receipts,
                         runner.RuntimeConfig(),
+                        523,
                         readiness_check=ready,
                         writer_call=writer,
                     )
 
             self.assertEqual(receipts.count(), 1)
             writer.assert_called_once()
+            receipts = runner.ReceiptStore(receipt_path)
+            self.assertEqual(
+                receipts.state(7, "test-idempotency-key"),
+                "applied",
+            )
 
             second_client = FakePortalClient()
             second_writer = Mock(
@@ -351,6 +549,7 @@ class CommandProcessingTests(unittest.TestCase):
                 update,
                 receipts,
                 runner.RuntimeConfig(),
+                523,
                 readiness_check=ready,
                 writer_call=second_writer,
             )
@@ -363,7 +562,7 @@ class CommandProcessingTests(unittest.TestCase):
             )
             self.assertEqual(receipts.count(), 0)
 
-    def test_writer_exception_is_reduced_to_safe_category(self):
+    def test_writer_exception_is_durable_ambiguous_and_never_retried(self):
         update = queued_update()
         client = FakePortalClient()
         raw_error = (
@@ -371,21 +570,45 @@ class CommandProcessingTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as temporary:
-            receipts = runner.ReceiptStore(Path(temporary) / "receipts.json")
+            receipt_path = Path(temporary) / "receipts.json"
+            receipts = runner.ReceiptStore(receipt_path)
             outcome = runner.process_one_update(
                 client,
                 update,
                 receipts,
                 runner.RuntimeConfig(),
+                523,
                 readiness_check=ready,
                 writer_call=Mock(side_effect=RuntimeError(raw_error)),
             )
 
-        self.assertEqual(outcome, "failed")
+            receipts = runner.ReceiptStore(receipt_path)
+            self.assertEqual(
+                receipts.state(7, "test-idempotency-key"),
+                "ambiguous",
+            )
+
+            retry_writer = Mock(
+                side_effect=AssertionError("ambiguous writer must not run twice")
+            )
+            retry_client = FakePortalClient()
+            retry_outcome = runner.process_one_update(
+                retry_client,
+                update,
+                receipts,
+                runner.RuntimeConfig(),
+                523,
+                readiness_check=ready,
+                writer_call=retry_writer,
+            )
+
+        self.assertEqual(outcome, "ambiguous")
+        self.assertEqual(retry_outcome, "ambiguous")
+        retry_writer.assert_not_called()
         payload = client.update_results[0][1]
         self.assertEqual(
             payload["error"],
-            "payment_details_mismatch_requires_manual_review",
+            "manual_reconciliation_required",
         )
         serialized = json.dumps(payload)
         self.assertNotIn("34203", serialized)
@@ -420,7 +643,8 @@ class SanitizedStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "receipts.json"
             receipts = runner.ReceiptStore(path)
-            receipts.record_applied(7, "secret-idempotency-value")
+            receipts.record_writer_started(7, "secret-idempotency-value")
+            receipts.mark_applied(7, "secret-idempotency-value")
             raw = path.read_text(encoding="utf-8")
 
         self.assertNotIn("secret-idempotency-value", raw)
@@ -440,13 +664,312 @@ class SanitizedStateTests(unittest.TestCase):
                     clear=False,
                 ),
             ):
-                exit_code = runner.run_loop(config_path, once=True)
+                exit_code = runner.run_loop(config_path)
 
             self.assertEqual(exit_code, 0)
             self.assertFalse(
                 (Path(temporary) / "state" / "status.json").exists()
             )
             mutex.close.assert_called_once()
+
+    def test_health_check_is_local_and_nonmutating(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config_path = Path(temporary) / "runtime.json"
+            config_path.write_text(
+                json.dumps({"idle_seconds": 5}),
+                encoding="utf-8",
+            )
+            ledger = Path(temporary) / "state" / "payment-receipts.json"
+            runner.atomic_write_json(
+                ledger,
+                {"schema": 2, "receipts": {}},
+                durable=True,
+            )
+            output = io.StringIO()
+            with (
+                patch("sys.stdout", output),
+                patch.object(
+                    runner.urlrequest,
+                    "urlopen",
+                    side_effect=AssertionError("health check must not use network"),
+                ),
+                patch.object(
+                    runner,
+                    "workstation_readiness",
+                    side_effect=AssertionError("health check must not inspect UI"),
+                ),
+            ):
+                exit_code = runner.run_health_check(config_path)
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(output.getvalue())
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["network_checked"])
+        self.assertFalse(payload["ui_checked"])
+        self.assertEqual(payload["idle_seconds"], 5)
+
+
+class ReceiptLedgerFailClosedTests(unittest.TestCase):
+    def test_corrupt_json_blocks_ledger_load(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "receipts.json"
+            path.write_text('{"schema":2,"receipts":', encoding="utf-8")
+            with self.assertRaisesRegex(
+                runner.ReceiptLedgerError,
+                "receipt_ledger_invalid",
+            ):
+                runner.ReceiptStore(path)
+
+    def test_partially_invalid_ledger_blocks_instead_of_skipping_record(self):
+        valid_digest = "a" * 64
+        timestamp = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "schema": 2,
+            "receipts": {
+                "7": {
+                    "idempotency_sha256": valid_digest,
+                    "state": "writer_started",
+                    "writer_started_at": timestamp,
+                    "updated_at": timestamp,
+                },
+                "8": {
+                    "idempotency_sha256": "not-a-hash",
+                    "state": "applied",
+                    "writer_started_at": timestamp,
+                    "updated_at": timestamp,
+                    "applied_at": timestamp,
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "receipts.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(
+                runner.ReceiptLedgerError,
+                "receipt_ledger_invalid",
+            ):
+                runner.ReceiptStore(path)
+
+    def test_v1_applied_receipt_is_preserved_as_safe_applied_state(self):
+        timestamp = datetime.now(timezone.utc).isoformat()
+        key = "legacy-idempotency"
+        payload = {
+            "schema": 1,
+            "receipts": {
+                "7": {
+                    "idempotency_sha256": runner.hashlib.sha256(
+                        key.encode("utf-8")
+                    ).hexdigest(),
+                    "applied_at": timestamp,
+                }
+            },
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "receipts.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            receipts = runner.ReceiptStore(path)
+
+        self.assertEqual(receipts.state(7, key), "applied")
+
+    def test_disk_failure_before_writer_blocks_ui_call(self):
+        update = queued_update()
+        client = FakePortalClient()
+        writer = Mock(return_value={"status": "applied", "applied": True})
+        with tempfile.TemporaryDirectory() as temporary:
+            receipts = runner.ReceiptStore(
+                Path(temporary) / "receipts.json"
+            )
+            with patch.object(
+                runner,
+                "atomic_write_json",
+                side_effect=OSError("disk full"),
+            ):
+                with self.assertRaisesRegex(
+                    runner.ReceiptLedgerError,
+                    "receipt_ledger_write_failed",
+                ):
+                    runner.process_one_update(
+                        client,
+                        update,
+                        receipts,
+                        runner.RuntimeConfig(),
+                        523,
+                        readiness_check=ready,
+                        writer_call=writer,
+                    )
+
+        writer.assert_not_called()
+        self.assertEqual(client.update_results[-1][1]["status"], "deferred")
+        self.assertEqual(
+            client.update_results[-1][1]["reason"],
+            "local_safety_ledger_unavailable",
+        )
+
+    def test_writer_started_is_durable_before_writer_invocation(self):
+        update = queued_update()
+        client = FakePortalClient()
+        with tempfile.TemporaryDirectory() as temporary:
+            receipts = runner.ReceiptStore(
+                Path(temporary) / "receipts.json"
+            )
+
+            def writer(_update, _timeout, _idle):
+                self.assertEqual(
+                    receipts.state(7, "test-idempotency-key"),
+                    "writer_started",
+                )
+                return {"status": "applied", "applied": True}
+
+            outcome = runner.process_one_update(
+                client,
+                update,
+                receipts,
+                runner.RuntimeConfig(),
+                523,
+                readiness_check=ready,
+                writer_call=writer,
+            )
+
+        self.assertEqual(outcome, "applied")
+
+    def test_disk_failure_after_writer_success_leaves_manual_only_receipt(self):
+        update = queued_update()
+        client = FakePortalClient()
+        writer = Mock(return_value={"status": "applied", "applied": True})
+        real_atomic_write = runner.atomic_write_json
+        writes = {"count": 0}
+
+        def fail_second_write(*args, **kwargs):
+            writes["count"] += 1
+            if writes["count"] == 2:
+                raise OSError("disk full after UI result")
+            return real_atomic_write(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "receipts.json"
+            receipts = runner.ReceiptStore(path)
+            with patch.object(
+                runner,
+                "atomic_write_json",
+                side_effect=fail_second_write,
+            ):
+                with self.assertRaisesRegex(
+                    runner.ReceiptLedgerError,
+                    "receipt_ledger_write_failed",
+                ):
+                    runner.process_one_update(
+                        client,
+                        update,
+                        receipts,
+                        runner.RuntimeConfig(),
+                        523,
+                        readiness_check=ready,
+                        writer_call=writer,
+                    )
+
+            reloaded = runner.ReceiptStore(path)
+
+        writer.assert_called_once()
+        self.assertEqual(
+            reloaded.state(7, "test-idempotency-key"),
+            "writer_started",
+        )
+        self.assertEqual(
+            client.update_results[-1][1]["error"],
+            "manual_reconciliation_required",
+        )
+
+    def test_interrupted_writer_started_receipt_never_clicks_again(self):
+        update = queued_update()
+        client = FakePortalClient()
+        writer = Mock(side_effect=AssertionError("must require reconciliation"))
+        with tempfile.TemporaryDirectory() as temporary:
+            receipts = runner.ReceiptStore(
+                Path(temporary) / "receipts.json"
+            )
+            receipts.record_writer_started(7, "test-idempotency-key")
+            outcome = runner.process_one_update(
+                client,
+                update,
+                receipts,
+                runner.RuntimeConfig(),
+                523,
+                readiness_check=ready,
+                writer_call=writer,
+            )
+
+        self.assertEqual(outcome, "ambiguous")
+        writer.assert_not_called()
+        self.assertEqual(
+            client.update_results[-1][1]["error"],
+            "manual_reconciliation_required",
+        )
+
+    def test_invalid_ledger_blocks_runner_startup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ledger = root / "state" / "payment-receipts.json"
+            ledger.parent.mkdir()
+            ledger.write_text("{invalid", encoding="utf-8")
+            config_path = root / "runtime.json"
+            mutex = Mock()
+            mutex.acquire.return_value = True
+            with (
+                patch.object(runner, "NamedMutex", return_value=mutex),
+                patch.dict(
+                    runner.os.environ,
+                    {"SYNC_API_TOKEN": "unit-test-token"},
+                    clear=False,
+                ),
+            ):
+                exit_code = runner.run_loop(config_path)
+            status = json.loads(
+                (root / "state" / "status.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(exit_code, 3)
+        self.assertEqual(status["reason"], "receipt_ledger_invalid")
+        mutex.close.assert_called_once()
+
+    def test_missing_ledger_blocks_installed_runner_startup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config_path = root / "runtime.json"
+            mutex = Mock()
+            mutex.acquire.return_value = True
+            with (
+                patch.object(runner, "NamedMutex", return_value=mutex),
+                patch.dict(
+                    runner.os.environ,
+                    {"SYNC_API_TOKEN": "unit-test-token"},
+                    clear=False,
+                ),
+            ):
+                exit_code = runner.run_loop(config_path)
+            status = json.loads(
+                (root / "state" / "status.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(exit_code, 3)
+        self.assertEqual(status["reason"], "receipt_ledger_missing")
+
+    def test_health_check_rejects_corrupt_ledger_without_modifying_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ledger = root / "state" / "payment-receipts.json"
+            ledger.parent.mkdir()
+            corrupt = '{"schema":2,"receipts":'
+            ledger.write_text(corrupt, encoding="utf-8")
+            output = io.StringIO()
+            with patch("sys.stdout", output):
+                exit_code = runner.run_health_check(root / "runtime.json")
+
+            self.assertEqual(ledger.read_text(encoding="utf-8"), corrupt)
+
+        self.assertEqual(exit_code, 3)
+        payload = json.loads(output.getvalue())
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["reason"], "receipt_ledger_invalid")
 
 
 if __name__ == "__main__":
