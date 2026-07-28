@@ -24,6 +24,10 @@ STAFF_MANAGER_PASSWORD=<strong temporary password>
 STAFF_ADMIN_EMAIL=ron@dreamzfitness.com
 STAFF_TOKEN=<long random staff token>
 SYNC_API_TOKEN=<long random sync token>
+# Optional, unique payment-only token for the dedicated Ron laptop runner.
+FEP_PAYMENT_SYNC_TOKEN_RON_LAPTOP=<different long random token>
+# Optional, unique payment-only token for the dedicated Dreamz Office PC runner.
+FEP_PAYMENT_SYNC_TOKEN_DREAMZ_OFFICE=<different long random token>
 FEP_API_TOKEN=<long random FEP token>
 SIGNUP_PORTAL_INTEGRATION_TOKEN=<shared random token of at least 32 characters>
 PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED=false
@@ -122,6 +126,32 @@ FEP payment updates are accepted by the portal at `/api/fep/payment-update` with
 Linked GymAssistant memberships are excluded from automatic write-back. If a member is a dependent of another member, or has dependents linked to the account, the portal returns `409` for manual review. The guarded UI writer also cancels GymAssistant's dependent-member prompt instead of choosing a responsible member automatically.
 
 The frontdesk sync agent can listen for an explicit FEP command before pushing normal member sync data. This is the preferred production mode: normal syncs do not book payments unless FEP has first sent a `payment-process-request` for that target agent.
+
+Payment agents are strictly allowlisted as `frontdesk_dreamz`, `ron_laptop`,
+and `dreamz_office` (`Dreamz Office PC`). The optional
+`FEP_PAYMENT_SYNC_TOKEN_RON_LAPTOP` and
+`FEP_PAYMENT_SYNC_TOKEN_DREAMZ_OFFICE` variables provide payment-only,
+agent-bound credentials. Roll them out one computer at a time:
+
+1. Confirm that no payment command or update is running or processing.
+2. Generate a new token that differs from `SYNC_API_TOKEN` and every other
+   payment token.
+3. Install that token only in the matching runner.
+4. Set the matching Railway variable.
+5. Verify its payment-command peek and confirm that `/api/sync/member-ids`
+   returns `403` with that token.
+
+As soon as a dedicated token is configured, the matching payment agent stops
+accepting the shared `SYNC_API_TOKEN`. A dedicated token cannot operate another
+payment agent and cannot call member, file, document, or other non-payment sync
+endpoints. Use it only in a payment-only runner; do not put it in the normal
+member-sync task or combine it with `--push-members`. If the optional variable
+is absent, the existing shared-token behavior remains available for that agent.
+
+All three payment agents share one global Gym Assistant writer lease. Multiple
+commands may wait, but the portal permits only one running command or legacy
+payment batch at a time across all computers. Expired UI-write claims are moved
+to manual reconciliation instead of being automatically clicked again.
 
 ```powershell
 $env:SYNC_API_TOKEN="<same token as Railway>"

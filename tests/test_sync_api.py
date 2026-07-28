@@ -1,8 +1,10 @@
 from datetime import date, datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 import inspect
 import json
 import os
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -21,11 +23,16 @@ from dreamz_portal import (  # noqa: E402
     MemberDocument,
     SyncRun,
     acquire_fep_payment_command_agent_lock,
+    acquire_fep_payment_writer_lock,
     api_sync_fep_payment_process_commands,
+    api_sync_fep_payment_update_result,
     app,
     create_fep_payment_process_command,
     db,
     fep_payment_command_agent_lock_key,
+    fep_payment_writer_lock_key,
+    hold_fep_payment_writer_lock,
+    normalize_fep_payment_agent,
     release_expired_fep_payment_claims,
     release_expired_fep_payment_process_commands,
 )
@@ -35,6 +42,8 @@ class SyncApiTests(unittest.TestCase):
     def setUp(self):
         app.config["TESTING"] = True
         app.config["SYNC_API_TOKEN"] = "sync-test-token"
+        app.config["FEP_PAYMENT_SYNC_TOKEN_RON_LAPTOP"] = None
+        app.config["FEP_PAYMENT_SYNC_TOKEN_DREAMZ_OFFICE"] = None
         app.config["FEP_API_TOKEN"] = "fep-test-token"
         app.config["_RUNTIME_SCHEMA_READY"] = False
         self.ctx = app.app_context()
@@ -48,6 +57,8 @@ class SyncApiTests(unittest.TestCase):
         db.drop_all()
         self.ctx.pop()
         app.config["SYNC_API_TOKEN"] = None
+        app.config["FEP_PAYMENT_SYNC_TOKEN_RON_LAPTOP"] = None
+        app.config["FEP_PAYMENT_SYNC_TOKEN_DREAMZ_OFFICE"] = None
         app.config["FEP_API_TOKEN"] = None
         app.config["_RUNTIME_SCHEMA_READY"] = False
 
@@ -1157,6 +1168,31 @@ class SyncApiTests(unittest.TestCase):
         record = FepPaymentUpdate.query.one()
         self.assertEqual(record.target_agent, "ron_laptop")
 
+    def test_fep_payment_update_accepts_strict_dreamz_office_aliases(self):
+        for alias in (
+            "office",
+            "office-pc",
+            "dreamz_office",
+            "Dreamz Office PC",
+            "office computer dreamz",
+        ):
+            self.assertEqual(
+                normalize_fep_payment_agent(alias, strict=True),
+                "dreamz_office",
+            )
+
+        self.add_direct_debit_member()
+        response = self.client.post(
+            "/api/fep/payment-update",
+            json=self.fep_payment_payload(target_agent="Dreamz Office PC"),
+            headers=self.fep_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["target_agent"], "dreamz_office")
+        record = FepPaymentUpdate.query.one()
+        self.assertEqual(record.target_agent, "dreamz_office")
+
     def test_fep_payment_update_rejects_unknown_target_agent(self):
         self.add_direct_debit_member()
 
@@ -1358,6 +1394,106 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(record.status, "pending_gym_assistant_apply")
         self.assertIsNone(record.claimed_by)
 
+    def test_payment_token_rollout_is_backward_compatible_per_agent(self):
+        response = self.client.get(
+            "/api/sync/fep-payment-updates?agent_id=dreamz_office&peek=1",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["agent_id"], "dreamz_office")
+        self.assertEqual(response.json["agent_label"], "Dreamz Office PC")
+
+    def test_dedicated_payment_tokens_are_agent_bound_and_payment_only(self):
+        app.config["FEP_PAYMENT_SYNC_TOKEN_RON_LAPTOP"] = "ron-payment-token"
+        app.config["FEP_PAYMENT_SYNC_TOKEN_DREAMZ_OFFICE"] = "office-payment-token"
+
+        office = self.client.get(
+            "/api/sync/fep-payment-updates?agent_id=dreamz_office&peek=1",
+            headers={"X-Sync-Token": "office-payment-token"},
+        )
+        office_with_shared = self.client.get(
+            "/api/sync/fep-payment-updates?agent_id=dreamz_office&peek=1",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+        office_with_ron = self.client.get(
+            "/api/sync/fep-payment-updates?agent_id=dreamz_office&peek=1",
+            headers={"X-Sync-Token": "ron-payment-token"},
+        )
+        ron_with_office = self.client.get(
+            "/api/sync/fep-payment-process-commands?agent_id=ron_laptop",
+            headers={"X-Sync-Token": "office-payment-token"},
+        )
+        non_payment = self.client.get(
+            "/api/sync/member-ids",
+            headers={"X-Sync-Token": "office-payment-token"},
+        )
+        frontdesk_legacy = self.client.get(
+            "/api/sync/fep-payment-updates?agent_id=frontdesk_dreamz&peek=1",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(office.status_code, 200)
+        self.assertEqual(office_with_shared.status_code, 403)
+        self.assertEqual(office_with_ron.status_code, 403)
+        self.assertEqual(ron_with_office.status_code, 403)
+        self.assertEqual(non_payment.status_code, 403)
+        self.assertEqual(frontdesk_legacy.status_code, 200)
+
+    def test_dedicated_token_never_becomes_general_sync_token(self):
+        app.config["FEP_PAYMENT_SYNC_TOKEN_RON_LAPTOP"] = "sync-test-token"
+
+        payment = self.client.get(
+            "/api/sync/fep-payment-updates?agent_id=ron_laptop&peek=1",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+        non_payment = self.client.get(
+            "/api/sync/member-ids",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(payment.status_code, 200)
+        self.assertEqual(non_payment.status_code, 403)
+
+    def test_dedicated_payment_token_is_rejected_by_every_sync_data_route(self):
+        app.config["FEP_PAYMENT_SYNC_TOKEN_DREAMZ_OFFICE"] = "office-payment-token"
+        headers = {"X-Sync-Token": "office-payment-token"}
+        responses = [
+            self.client.post("/api/sync/members", json={"members": []}, headers=headers),
+            self.client.get("/api/sync/member-ids", headers=headers),
+            self.client.post(
+                "/api/sync/files",
+                data=b"not-uploaded",
+                headers={
+                    **headers,
+                    "X-Storage-Key": "test/file.bin",
+                },
+            ),
+            self.client.post(
+                "/api/sync/member-documents",
+                json={
+                    "expected_member_ids": [],
+                    "expected_document_count": 0,
+                    "documents": [],
+                },
+                headers=headers,
+            ),
+            self.client.get("/api/sync/missing-file-keys", headers=headers),
+        ]
+
+        self.assertEqual([response.status_code for response in responses], [403] * 5)
+
+    def test_duplicate_dedicated_payment_tokens_fail_closed(self):
+        app.config["FEP_PAYMENT_SYNC_TOKEN_RON_LAPTOP"] = "duplicate-token"
+        app.config["FEP_PAYMENT_SYNC_TOKEN_DREAMZ_OFFICE"] = "duplicate-token"
+
+        response = self.client.get(
+            "/api/sync/fep-payment-updates?agent_id=dreamz_office&peek=1",
+            headers={"X-Sync-Token": "duplicate-token"},
+        )
+
+        self.assertEqual(response.status_code, 503)
+
     def test_fep_payment_process_request_creates_agent_command(self):
         self.add_direct_debit_member()
         self.client.post(
@@ -1500,6 +1636,49 @@ class SyncApiTests(unittest.TestCase):
             [row["id"] for row in second_updates.json["updates"]],
             [second.id],
         )
+
+    def test_dreamz_office_runs_an_upload_scoped_command_end_to_end(self):
+        office_update = self.add_pending_fep_payment_update(
+            522,
+            target_agent="dreamz_office",
+            suffix="1",
+        )
+        frontdesk_update = self.add_pending_fep_payment_update(
+            522,
+            target_agent="frontdesk_dreamz",
+            suffix="2",
+        )
+        created = self.client.post(
+            "/api/fep/payment-process-request",
+            json={
+                "target_agent": "Dreamz Office PC",
+                "upload_id": 522,
+                "limit": 25,
+            },
+            headers=self.fep_headers(),
+        )
+        command = self.client.get(
+            "/api/sync/fep-payment-process-commands?agent_id=dreamz_office",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+        updates = self.client.get(
+            "/api/sync/fep-payment-updates?agent_id=dreamz_office&limit=100",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(created.json["target_agent"], "dreamz_office")
+        self.assertEqual(created.json["target_agent_label"], "Dreamz Office PC")
+        self.assertEqual(command.status_code, 200)
+        self.assertEqual(command.json["commands"][0]["upload_id"], 522)
+        self.assertEqual(updates.status_code, 200)
+        self.assertTrue(updates.json["upload_scoped"])
+        self.assertEqual(
+            [row["id"] for row in updates.json["updates"]],
+            [office_update.id],
+        )
+        db.session.refresh(frontdesk_update)
+        self.assertEqual(frontdesk_update.status, "pending_gym_assistant_apply")
 
     def test_process_request_rejects_other_upload_while_agent_is_busy(self):
         self.add_pending_fep_payment_update(522, suffix="1")
@@ -1683,8 +1862,232 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(first.status, "running")
         self.assertEqual(second.status, "pending")
 
+    def test_process_command_claims_are_serialized_globally_across_agents(self):
+        frontdesk = self.add_fep_payment_process_command(
+            522,
+            target_agent="frontdesk_dreamz",
+        )
+        laptop = self.add_fep_payment_process_command(
+            523,
+            target_agent="ron_laptop",
+        )
+        office = self.add_fep_payment_process_command(
+            524,
+            target_agent="dreamz_office",
+        )
+
+        frontdesk_claim = self.client.get(
+            "/api/sync/fep-payment-process-commands?agent_id=frontdesk_dreamz",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+        laptop_blocked = self.client.get(
+            "/api/sync/fep-payment-process-commands?agent_id=ron_laptop",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+        office_blocked = self.client.get(
+            "/api/sync/fep-payment-process-commands?agent_id=dreamz_office",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(
+            frontdesk_claim.json["commands"][0]["id"],
+            frontdesk.id,
+        )
+        for blocked in (laptop_blocked, office_blocked):
+            self.assertEqual(blocked.status_code, 200)
+            self.assertTrue(blocked.json["writer_busy"])
+            self.assertEqual(blocked.json["writer_agent_id"], "frontdesk_dreamz")
+            self.assertEqual(blocked.json["commands"], [])
+        self.assertEqual(
+            FepPaymentProcessCommand.query.filter_by(status="running").count(),
+            1,
+        )
+
+        completed = self.client.post(
+            f"/api/sync/fep-payment-process-commands/{frontdesk.id}/result",
+            json={"status": "completed"},
+            headers={
+                "X-Sync-Token": "sync-test-token",
+                "X-Sync-Agent": "frontdesk_dreamz",
+            },
+        )
+        laptop_claim = self.client.get(
+            "/api/sync/fep-payment-process-commands?agent_id=ron_laptop",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(completed.status_code, 200)
+        self.assertEqual(laptop_claim.json["commands"][0]["id"], laptop.id)
+        db.session.refresh(office)
+        self.assertEqual(office.status, "pending")
+        self.assertEqual(
+            FepPaymentProcessCommand.query.filter_by(status="running").count(),
+            1,
+        )
+
+    def test_running_office_command_blocks_frontdesk_legacy_payment_claim(self):
+        frontdesk_update = self.add_pending_fep_payment_update(
+            522,
+            target_agent="frontdesk_dreamz",
+        )
+        office_command = self.add_fep_payment_process_command(
+            900,
+            target_agent="dreamz_office",
+        )
+        office_claim = self.client.get(
+            "/api/sync/fep-payment-process-commands?agent_id=dreamz_office",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        frontdesk_claim = self.client.get(
+            "/api/sync/fep-payment-updates?agent_id=frontdesk_dreamz",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(office_claim.json["commands"][0]["id"], office_command.id)
+        self.assertEqual(frontdesk_claim.status_code, 200)
+        self.assertEqual(frontdesk_claim.json["updates"], [])
+        self.assertTrue(frontdesk_claim.json["writer_busy"])
+        self.assertEqual(frontdesk_claim.json["writer_agent_id"], "dreamz_office")
+        db.session.refresh(frontdesk_update)
+        self.assertEqual(frontdesk_update.status, "pending_gym_assistant_apply")
+
+    def test_pending_other_agent_command_preserves_frontdesk_legacy_claim(self):
+        frontdesk_update = self.add_pending_fep_payment_update(
+            522,
+            target_agent="frontdesk_dreamz",
+        )
+        office_command = self.add_fep_payment_process_command(
+            900,
+            target_agent="dreamz_office",
+        )
+
+        frontdesk_claim = self.client.get(
+            "/api/sync/fep-payment-updates?agent_id=frontdesk_dreamz&limit=1",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(frontdesk_claim.status_code, 200)
+        self.assertEqual(
+            [row["id"] for row in frontdesk_claim.json["updates"]],
+            [frontdesk_update.id],
+        )
+        db.session.refresh(office_command)
+        self.assertEqual(office_command.status, "pending")
+
+    def test_legacy_processing_claim_blocks_new_cross_agent_command(self):
+        laptop_update = self.add_pending_fep_payment_update(
+            522,
+            target_agent="ron_laptop",
+        )
+        laptop_update.status = "processing_gym_assistant_apply"
+        laptop_update.claimed_by = "ron_laptop"
+        laptop_update.claimed_at = datetime.now()
+        laptop_update.claim_expires_at = datetime.now() + timedelta(minutes=5)
+        office_command = self.add_fep_payment_process_command(
+            900,
+            target_agent="dreamz_office",
+        )
+        db.session.commit()
+
+        blocked = self.client.get(
+            "/api/sync/fep-payment-process-commands?agent_id=dreamz_office",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        self.assertEqual(blocked.status_code, 200)
+        self.assertTrue(blocked.json["writer_busy"])
+        self.assertEqual(blocked.json["writer_agent_id"], "ron_laptop")
+        self.assertEqual(blocked.json["processing_updates"], 1)
+        self.assertEqual(blocked.json["commands"], [])
+        db.session.refresh(office_command)
+        self.assertEqual(office_command.status, "pending")
+
+    def test_parallel_cross_agent_command_claims_start_only_one_writer(self):
+        self.add_fep_payment_process_command(
+            522,
+            target_agent="frontdesk_dreamz",
+        )
+        self.add_fep_payment_process_command(
+            523,
+            target_agent="ron_laptop",
+        )
+        app.config["_RUNTIME_SCHEMA_READY"] = True
+        barrier = threading.Barrier(2)
+
+        def claim(agent_id):
+            barrier.wait(timeout=5)
+            with app.test_client() as client:
+                response = client.get(
+                    f"/api/sync/fep-payment-process-commands?agent_id={agent_id}",
+                    headers={"X-Sync-Token": "sync-test-token"},
+                )
+                return response.status_code, response.get_json()
+
+        app.config["TESTING"] = False
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(
+                    executor.map(claim, ("frontdesk_dreamz", "ron_laptop"))
+                )
+        finally:
+            app.config["TESTING"] = True
+
+        self.assertEqual([status for status, _ in results], [200, 200])
+        self.assertEqual(
+            sum(bool(payload["commands"]) for _, payload in results),
+            1,
+        )
+        db.session.expire_all()
+        self.assertEqual(
+            FepPaymentProcessCommand.query.filter_by(status="running").count(),
+            1,
+        )
+
+    def test_parallel_legacy_claims_do_not_offer_a_second_ui_batch(self):
+        self.add_pending_fep_payment_update(522, suffix="1")
+        self.add_pending_fep_payment_update(522, suffix="2")
+        app.config["_RUNTIME_SCHEMA_READY"] = True
+        barrier = threading.Barrier(2)
+
+        def claim():
+            barrier.wait(timeout=5)
+            with app.test_client() as client:
+                response = client.get(
+                    "/api/sync/fep-payment-updates?agent_id=frontdesk_dreamz&limit=1",
+                    headers={"X-Sync-Token": "sync-test-token"},
+                )
+                return response.status_code, response.get_json()
+
+        app.config["TESTING"] = False
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(executor.map(lambda _: claim(), range(2)))
+        finally:
+            app.config["TESTING"] = True
+
+        self.assertEqual([status for status, _ in results], [200, 200])
+        self.assertEqual(
+            sum(len(payload["updates"]) for _, payload in results),
+            1,
+        )
+        db.session.expire_all()
+        self.assertEqual(
+            FepPaymentUpdate.query.filter_by(
+                status="processing_gym_assistant_apply"
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            FepPaymentUpdate.query.filter_by(
+                status="pending_gym_assistant_apply"
+            ).count(),
+            1,
+        )
+
     def test_payment_command_advisory_lock_is_stable_and_postgresql_only(self):
         frontdesk_key = fep_payment_command_agent_lock_key("frontdesk_dreamz")
+        writer_key = fep_payment_writer_lock_key()
         self.assertEqual(
             frontdesk_key,
             fep_payment_command_agent_lock_key("frontdesk_dreamz"),
@@ -1695,9 +2098,12 @@ class SyncApiTests(unittest.TestCase):
         )
         self.assertGreaterEqual(frontdesk_key, -(2**63))
         self.assertLess(frontdesk_key, 2**63)
+        self.assertEqual(writer_key, fep_payment_writer_lock_key())
+        self.assertNotEqual(writer_key, frontdesk_key)
 
         with patch.object(db.session, "execute") as execute:
             acquire_fep_payment_command_agent_lock("frontdesk_dreamz")
+            acquire_fep_payment_writer_lock()
         execute.assert_not_called()
 
         postgresql_bind = SimpleNamespace(
@@ -1713,14 +2119,34 @@ class SyncApiTests(unittest.TestCase):
         self.assertIn("pg_advisory_xact_lock", str(statement))
         self.assertEqual(parameters, {"lock_key": frontdesk_key})
 
-    def test_create_and_claim_take_agent_lock_before_expiry_release(self):
+        with (
+            patch.object(db.session, "get_bind", return_value=postgresql_bind),
+            patch.object(db.session, "execute") as execute,
+        ):
+            acquire_fep_payment_writer_lock()
+        execute.assert_called_once()
+        statement, parameters = execute.call_args.args
+        self.assertIn("pg_advisory_xact_lock", str(statement))
+        self.assertEqual(parameters, {"lock_key": writer_key})
+
+    def test_payment_routes_take_global_then_agent_lock_before_expiry_release(self):
+        lock_source = inspect.getsource(hold_fep_payment_writer_lock)
+        self.assertLess(
+            lock_source.index("acquire_fep_payment_writer_lock"),
+            lock_source.index("acquire_fep_payment_command_agent_lock"),
+        )
         create_source = inspect.getsource(create_fep_payment_process_command)
         claim_source = inspect.getsource(api_sync_fep_payment_process_commands)
         for source in (create_source, claim_source):
             self.assertLess(
-                source.index("acquire_fep_payment_command_agent_lock"),
+                source.index("hold_fep_payment_writer_lock"),
                 source.index("release_expired_fep_payment_process_commands"),
             )
+        result_source = inspect.getsource(api_sync_fep_payment_update_result)
+        self.assertLess(
+            result_source.index("hold_fep_payment_writer_lock"),
+            result_source.index("release_expired_fep_payment_claims"),
+        )
         release_source = inspect.getsource(
             release_expired_fep_payment_process_commands
         )
