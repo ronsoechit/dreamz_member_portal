@@ -30,6 +30,7 @@ from datetime import datetime, date, time, timedelta   # ← bestaande regel uit
 from datetime import timezone
 from cancellation_policy import evaluate_cancellation_policy
 from ga_fields import GA_FIELDS
+from ga_import import SUPPORTED_BILLING_STATUSES
 from ga_journal import service_period_matches_catalog_interval
 from invoice_pdf import InvoicePdfData, InvoicePdfLineData, build_paid_invoice_pdf
 from translations import (
@@ -7912,18 +7913,54 @@ def assess_member_snapshot(payload, members, warning):
             return assessment
 
         validation_errors = []
-        if metadata.get("schema_version") != 1:
+        if metadata.get("schema_version") != 2:
             validation_errors.append("schema_version is not supported")
         if metadata.get("scope_complete") is not True:
             validation_errors.append("scope_complete is not true")
         if metadata.get("source_stable_during_read") is not True:
             validation_errors.append("the member source was not stable while being read")
+        if metadata.get("overlay_stable_during_read") is not True:
+            validation_errors.append("the member event overlay was not stable while being read")
         if warning:
             validation_errors.append("the source reported a warning")
-        if not source or not (
-            re.split(r"[\\/]", member_source)[-1].casefold() == "members.btx"
+        if not source:
+            validation_errors.append("the sync source is missing")
+        if metadata.get("source_kind") != "gymassistant_official_member_export_csv":
+            validation_errors.append("the source is not an official GymAssistant member CSV")
+        if not member_source or not (
+            re.split(r"[\\/]", member_source)[-1].casefold().endswith(".csv")
         ):
-            validation_errors.append("the live Gym Assistant Members.btx source is not identified")
+            validation_errors.append("the official GymAssistant member CSV is not identified")
+        if str(metadata.get("source_path") or "").strip() != member_source:
+            validation_errors.append("source_path does not match member_source")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(metadata.get("source_sha256") or "").casefold()):
+            validation_errors.append("source_sha256 is missing or invalid")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(metadata.get("snapshot_id") or "").casefold()):
+            validation_errors.append("snapshot_id is missing or invalid")
+        source_size = strict_snapshot_count(metadata.get("source_size"))
+        if source_size is None or source_size <= 0:
+            validation_errors.append("source_size is missing or invalid")
+        try:
+            source_mtime = datetime.fromisoformat(str(metadata.get("source_mtime") or ""))
+        except ValueError:
+            source_mtime = None
+        if source_mtime is None:
+            validation_errors.append("source_mtime is missing or invalid")
+        elif source_mtime.tzinfo is None:
+            validation_errors.append("source_mtime has no timezone")
+        else:
+            source_mtime_utc = source_mtime.astimezone(timezone.utc)
+            source_age = datetime.now(timezone.utc) - source_mtime_utc
+            max_source_age = timedelta(
+                hours=positive_int_environment_value(
+                    "GYM_ASSISTANT_CSV_MAX_AGE_HOURS",
+                    36,
+                )
+            )
+            if source_age < -timedelta(minutes=5):
+                validation_errors.append("source_mtime is in the future")
+            elif source_age > max_source_age:
+                validation_errors.append("the official GymAssistant member CSV is stale")
         if not members:
             validation_errors.append("the member set is empty")
         if identity["invalid_member_ids"]:
@@ -7941,39 +7978,53 @@ def assess_member_snapshot(payload, members, warning):
         skipped_record_count = strict_snapshot_count(metadata.get("skipped_record_count"))
         if skipped_record_count not in (None, 0):
             validation_errors.append("one or more source records were skipped")
+        critical_issue_count = strict_snapshot_count(metadata.get("critical_issue_count"))
+        if critical_issue_count not in (None, 0):
+            validation_errors.append("the source has critical parsing issues")
+        unknown_billing_status_count = strict_snapshot_count(
+            metadata.get("unknown_billing_status_count")
+        )
+        if unknown_billing_status_count not in (None, 0):
+            validation_errors.append("one or more billing statuses are unknown")
+        invalid_member_statuses = any(
+            (
+                str(member.get("billing_status") or "").strip().upper()
+                not in SUPPORTED_BILLING_STATUSES
+            )
+            or not isinstance(member.get("is_active"), bool)
+            or member.get("is_active") != (
+                str(member.get("billing_status") or "").strip().upper()
+                == "ACTIVE"
+            )
+            for member in members
+            if isinstance(member, dict)
+        )
+        if invalid_member_statuses:
+            validation_errors.append(
+                "one or more member status values are missing or inconsistent"
+            )
+        overlay = metadata.get("overlay")
+        if not isinstance(overlay, dict):
+            validation_errors.append("the member event overlay metadata is missing")
+        elif overlay.get("stable_during_read") is not True:
+            validation_errors.append("the member event overlay metadata is not stable")
 
         if validation_errors:
             assessment["reason"] = "Explicit member snapshot rejected: " + "; ".join(validation_errors) + "."
             return assessment
 
-        assessment["protocol"] = "explicit_v1"
-        assessment["reason"] = "The sync agent explicitly confirmed a complete live member snapshot."
+        assessment["protocol"] = "official_csv_v2"
+        assessment["reason"] = (
+            "A validated official GymAssistant member CSV plus chronological "
+            "member-event overlay confirmed the current member set."
+        )
         assessment["explicit_authoritative"] = True
         return assessment
 
-    legacy_errors = []
-    if warning:
-        legacy_errors.append("the source reported a warning")
-    if not source:
-        legacy_errors.append("the sync source is missing")
-    if not is_complete_members_source(member_source):
-        legacy_errors.append("a complete Gym Assistant member source is not identified")
-    if len(members) < LEGACY_MEMBER_SNAPSHOT_MIN_COUNT:
-        legacy_errors.append(
-            f"fewer than {LEGACY_MEMBER_SNAPSHOT_MIN_COUNT} members were received"
-        )
-    if identity["invalid_member_ids"]:
-        legacy_errors.append("one or more member ids are invalid")
-    if identity["has_duplicates"]:
-        legacy_errors.append("member ids are not unique")
-
-    if legacy_errors:
-        assessment["reason"] = "Legacy member snapshot rejected: " + "; ".join(legacy_errors) + "."
-        return assessment
-
-    assessment["protocol"] = "legacy_candidate"
-    assessment["reason"] = "Waiting for three stable legacy member snapshots."
-    assessment["legacy_candidate"] = True
+    assessment["reason"] = (
+        "Legacy GymAssistant sources are accepted only as partial record updates; "
+        "they cannot establish current member presence."
+    )
     return assessment
 
 
@@ -8312,15 +8363,34 @@ def apply_sync_payload(payload):
             else:
                 sync_run.member_snapshot_reason = promotion_reason
 
+        incoming_snapshot_metadata = (
+            payload.get("member_snapshot")
+            if isinstance(payload.get("member_snapshot"), dict)
+            else {}
+        )
         change_summary["member_snapshot"] = {
             "complete": bool(sync_run.members_snapshot_complete),
             "protocol": sync_run.member_snapshot_protocol,
             "reason": sync_run.member_snapshot_reason,
             "member_source": sync_run.member_source,
+            "source_kind": incoming_snapshot_metadata.get("source_kind"),
+            "source_path": incoming_snapshot_metadata.get("source_path"),
+            "source_mtime": incoming_snapshot_metadata.get("source_mtime"),
+            "source_size": incoming_snapshot_metadata.get("source_size"),
+            "source_sha256": incoming_snapshot_metadata.get("source_sha256"),
+            "source_age_seconds": incoming_snapshot_metadata.get("source_age_seconds"),
+            "snapshot_id": incoming_snapshot_metadata.get("snapshot_id"),
+            "baseline_count": incoming_snapshot_metadata.get("baseline_count"),
             "source_count": sync_run.member_source_count,
             "received_count": sync_run.members_received,
             "unique_count": sync_run.member_unique_count,
             "member_ids_sha256": sync_run.member_ids_sha256,
+            "parse_issue_count": incoming_snapshot_metadata.get("parse_issue_count"),
+            "critical_issue_count": incoming_snapshot_metadata.get("critical_issue_count"),
+            "unknown_billing_status_count": incoming_snapshot_metadata.get(
+                "unknown_billing_status_count"
+            ),
+            "overlay": incoming_snapshot_metadata.get("overlay"),
         }
         prune_legacy_member_snapshot_sets()
         sync_run.change_summary = json.dumps(change_summary)

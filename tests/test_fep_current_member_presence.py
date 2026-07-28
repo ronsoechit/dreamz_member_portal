@@ -1,6 +1,7 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import hashlib
 import importlib.util
+import json
 import os
 import unittest
 from unittest.mock import patch
@@ -16,6 +17,8 @@ from dreamz_portal import Member, SyncRun, app, db  # noqa: E402
 
 
 class FepCurrentMemberPresenceTests(unittest.TestCase):
+    OFFICIAL_CSV_SOURCE = r"C:\DreamzPortalSync\exports\MemberData.csv"
+
     def setUp(self):
         app.config["TESTING"] = True
         app.config["SYNC_API_TOKEN"] = "sync-test-token"
@@ -58,11 +61,29 @@ class FepCurrentMemberPresenceTests(unittest.TestCase):
     def fep_headers(self):
         return {"X-FEP-Token": "fep-test-token"}
 
-    def post_sync(self, member_ids, *, member_snapshot=None, warning=None):
+    def post_sync(
+        self,
+        member_ids,
+        *,
+        member_snapshot=None,
+        warning=None,
+        member_rows=None,
+    ):
+        member_source = (
+            self.OFFICIAL_CSV_SOURCE
+            if isinstance(member_snapshot, dict)
+            and member_snapshot.get("source_kind")
+            == "gymassistant_official_member_export_csv"
+            else r"C:\Gym Assistant 2.6\Members.btx"
+        )
         payload = {
             "source": "gymassistant-sync-agent",
-            "member_source": r"C:\Gym Assistant 2.6\Members.btx",
-            "members": [self.member(member_id) for member_id in member_ids],
+            "member_source": member_source,
+            "members": (
+                member_rows
+                if member_rows is not None
+                else [self.member(member_id) for member_id in member_ids]
+            ),
         }
         if member_snapshot is not None:
             payload["member_snapshot"] = member_snapshot
@@ -79,14 +100,28 @@ class FepCurrentMemberPresenceTests(unittest.TestCase):
     def complete_snapshot_metadata(self, member_ids, **overrides):
         member_ids = [str(member_id) for member_id in member_ids]
         metadata = {
-            "schema_version": 1,
+            "schema_version": 2,
             "scope_complete": True,
             "source_stable_during_read": True,
+            "overlay_stable_during_read": True,
             "authoritative_for_absence": True,
+            "source_kind": "gymassistant_official_member_export_csv",
+            "source_path": self.OFFICIAL_CSV_SOURCE,
+            "source_mtime": (
+                datetime.now(timezone.utc)
+                .replace(microsecond=0)
+                .isoformat()
+            ),
+            "source_size": 12345,
+            "source_sha256": "a" * 64,
+            "snapshot_id": "b" * 64,
             "source_count": len(member_ids),
             "sent_count": len(member_ids),
             "unique_count": len(set(member_ids)),
             "member_ids_sha256": self.member_ids_sha256(member_ids),
+            "critical_issue_count": 0,
+            "unknown_billing_status_count": 0,
+            "overlay": {"stable_during_read": True},
         }
         metadata.update(overrides)
         return metadata
@@ -120,6 +155,16 @@ class FepCurrentMemberPresenceTests(unittest.TestCase):
             member_snapshot=self.complete_snapshot_metadata(first_ids),
         )
         self.assertTrue(first_run.members_snapshot_complete)
+        self.assertEqual(first_run.member_snapshot_protocol, "official_csv_v2")
+        first_summary = json.loads(first_run.change_summary)
+        self.assertEqual(
+            first_summary["member_snapshot"]["source_path"],
+            self.OFFICIAL_CSV_SOURCE,
+        )
+        self.assertEqual(
+            first_summary["member_snapshot"]["snapshot_id"],
+            "b" * 64,
+        )
         self.assertEqual(self.fep_member_ids(), set(first_ids))
 
         second_run = self.post_sync(
@@ -206,6 +251,15 @@ class FepCurrentMemberPresenceTests(unittest.TestCase):
                     source_stable_during_read=False,
                 ),
             ),
+            (
+                ["3008"],
+                self.complete_snapshot_metadata(
+                    ["3008"],
+                    source_mtime=(
+                        datetime.now(timezone.utc) - timedelta(hours=40)
+                    ).replace(microsecond=0).isoformat(),
+                ),
+            ),
         ]
 
         for member_ids, metadata in invalid_cases:
@@ -213,6 +267,30 @@ class FepCurrentMemberPresenceTests(unittest.TestCase):
                 sync_run = self.post_sync(member_ids, member_snapshot=metadata)
                 self.assertFalse(sync_run.members_snapshot_complete)
                 self.assertEqual(self.fep_member_ids(), set(reliable_ids))
+
+    def test_member_status_is_validated_independently_of_agent_metadata(self):
+        reliable_ids = ["3501", "3502"]
+        self.post_sync(
+            reliable_ids,
+            member_snapshot=self.complete_snapshot_metadata(reliable_ids),
+        )
+        invalid_id = "3503"
+        invalid_member = self.member(invalid_id)
+        invalid_member["billing_status"] = ""
+        invalid_member["is_active"] = True
+
+        sync_run = self.post_sync(
+            [invalid_id],
+            member_snapshot=self.complete_snapshot_metadata([invalid_id]),
+            member_rows=[invalid_member],
+        )
+
+        self.assertFalse(sync_run.members_snapshot_complete)
+        self.assertIn(
+            "status values are missing or inconsistent",
+            sync_run.member_snapshot_reason,
+        )
+        self.assertEqual(self.fep_member_ids(), set(reliable_ids))
 
     def test_duplicate_member_ids_cannot_be_an_authoritative_snapshot(self):
         reliable_ids = ["4001", "4002"]
@@ -267,7 +345,7 @@ class FepCurrentMemberPresenceTests(unittest.TestCase):
             set(reliable_ids),
         )
 
-    def test_three_consistent_spaced_legacy_syncs_can_promote_current_set(self):
+    def test_repeated_legacy_syncs_can_never_promote_current_set(self):
         legacy_ids = [str(5000 + index) for index in range(120)]
 
         first_run = self.post_sync(legacy_ids)
@@ -280,56 +358,15 @@ class FepCurrentMemberPresenceTests(unittest.TestCase):
 
         third_run = self.post_sync(legacy_ids)
 
-        self.assertTrue(third_run.members_snapshot_complete)
-        snapshot = self.fep_snapshot()
-        self.assertEqual(snapshot["latest_sync"]["id"], third_run.id)
-        self.assertEqual(snapshot["member_count"], len(legacy_ids))
-        self.assertEqual(
-            {member["member_id"] for member in snapshot["members"]},
-            set(legacy_ids),
-        )
-
-    def test_three_highly_overlapping_legacy_syncs_promote_latest_exact_set(self):
-        first_ids = [str(8000 + index) for index in range(200)]
-        second_ids = first_ids + ["8200"]
-        third_ids = second_ids + ["8201"]
-
-        first_run = self.post_sync(first_ids)
-        self.move_sync_run_back(first_run, 12)
-        second_run = self.post_sync(second_ids)
-        self.move_sync_run_back(second_run, 6)
-        third_run = self.post_sync(third_ids)
-
-        self.assertTrue(third_run.members_snapshot_complete)
-        snapshot = self.fep_snapshot()
-        self.assertEqual(snapshot["latest_sync"]["id"], third_run.id)
-        self.assertEqual(snapshot["member_count"], len(third_ids))
-        self.assertEqual(
-            {member["member_id"] for member in snapshot["members"]},
-            set(third_ids),
-        )
-
-    def test_small_legacy_snapshot_cannot_bypass_recent_high_watermark(self):
-        db.session.add(
-            SyncRun(
-                source="gymassistant-sync-agent",
-                status="success",
-                started_at=datetime.now() - timedelta(minutes=20),
-                completed_at=datetime.now() - timedelta(minutes=19),
-                members_received=1000,
-            )
-        )
-        db.session.commit()
-        legacy_ids = [str(6000 + index) for index in range(120)]
-
-        first_run = self.post_sync(legacy_ids)
-        self.move_sync_run_back(first_run, 12)
-        second_run = self.post_sync(legacy_ids)
-        self.move_sync_run_back(second_run, 6)
-        third_run = self.post_sync(legacy_ids)
-
         self.assertFalse(third_run.members_snapshot_complete)
-        self.assertIn("high-water mark", third_run.member_snapshot_reason)
+        self.assertEqual(third_run.member_snapshot_protocol, "legacy_rejected")
+        self.assertIn("cannot establish current member presence", third_run.member_snapshot_reason)
+        response = self.client.get(
+            "/api/fep/member-snapshot",
+            headers=self.fep_headers(),
+        )
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(response.json["presence_authoritative"])
 
     def test_sync_payload_cannot_overwrite_internal_snapshot_marker(self):
         reliable_ids = ["7001", "7002"]

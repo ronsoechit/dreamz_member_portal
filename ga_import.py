@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+import csv
+from io import StringIO
 from pathlib import Path
 from xml.etree import ElementTree as ET
 import re
@@ -55,6 +57,61 @@ BACKUP_DATE_FIELDS = {
     "PU": "due_date",
 }
 
+OFFICIAL_CSV_REQUIRED_COLUMNS = {
+    "MemberNum",
+    "LastName",
+    "FirstName",
+    "MemberType",
+    "BillingOption",
+    "DueDate",
+    "BillingAmount",
+    "LastPaidDate",
+    "LastPaidAmount",
+    "SignupDate",
+    "ContractEnd",
+    "ContractBegin",
+    "BirthDate",
+    "Email",
+    "BillingStatus",
+    "CurrentBalance",
+    "IsDeleted",
+}
+
+OFFICIAL_BILLING_OPTION_MAP = {
+    "MONTHLY": "1 MONTHS INV",
+    "ACH": "1 MONTHS EFT",
+    "ANNUAL": "12 MONTHS INV",
+    "SEMI-ANNUAL": "6 MONTHS INV",
+    "1-WEEK INVOICE": "1 WEEKS INV",
+    "2-WEEK INVOICE": "2 WEEKS INV",
+    "3-WEEK INVOICE": "3 WEEKS INV",
+    "5-MONTH INVOICE": "5 MONTHS INV",
+    "QUARTERLY": "3 MONTHS INV",
+    "10 VISITS": "10 VISITS INV",
+}
+
+SUPPORTED_BILLING_STATUSES = {
+    "ACTIVE",
+    "INACTIVE",
+    "TERMINATED",
+    "CANCELLED",
+    "FREEZE",
+    "HOLD",
+    "PROSPECT",
+    "ARCHIVE",
+    "COLLECTIONS",
+    "SUSPENDED",
+    "DELETED",
+    "INCOMPLETE",
+}
+
+BACKUP_BILLING_STATUS_CODES = {
+    "0": "ACTIVE",
+    "1": "INACTIVE",
+    "2": "TERMINATED",
+    "3": "FREEZE",
+}
+
 
 @dataclass(frozen=True)
 class ParsedDate:
@@ -69,11 +126,25 @@ class ImportIssue:
     field: str
     value: str
     message: str
+    critical: bool = False
 
 
 @dataclass(frozen=True)
 class ImportResult:
     members: list[dict]
+    issues: list[ImportIssue]
+
+
+@dataclass(frozen=True)
+class MemberLogEvent:
+    row_number: int
+    occurred_at: datetime | None
+    member: dict
+
+
+@dataclass(frozen=True)
+class MemberLogResult:
+    events: list[MemberLogEvent]
     issues: list[ImportIssue]
 
 
@@ -150,6 +221,53 @@ def derive_contract_type(plan_type: str | None) -> str:
     return "No-Contract"
 
 
+def normalize_billing_status(
+    raw: str | None,
+    row_number: int,
+    field: str = "billing_status",
+) -> tuple[str, bool | None, list[ImportIssue]]:
+    original = "" if raw is None else str(raw).strip()
+    status = original.upper()
+    if status in SUPPORTED_BILLING_STATUSES:
+        return status, status == "ACTIVE", []
+    message = (
+        "Billing status is missing"
+        if not status
+        else "Billing status is not recognized"
+    )
+    return "UNKNOWN", None, [
+        ImportIssue(row_number, field, original, message, critical=True)
+    ]
+
+
+def normalize_backup_billing_status(
+    fields: dict[str, str],
+    record_number: int,
+    require_status: bool,
+) -> tuple[str, bool | None, list[ImportIssue]]:
+    if "ST" not in fields and not require_status:
+        return "UNKNOWN", None, []
+    raw_status = (fields.get("ST") or "").strip()
+    status = BACKUP_BILLING_STATUS_CODES.get(raw_status)
+    if status:
+        return status, status == "ACTIVE", []
+    message = (
+        "GymAssistant ST status is missing"
+        if not raw_status
+        else "GymAssistant ST status code is not recognized"
+    )
+    return "UNKNOWN", None, [
+        ImportIssue(record_number, "billing_status", raw_status, message, critical=True)
+    ]
+
+
+def normalize_official_billing_option(raw: str | None) -> str | None:
+    value = re.sub(r"\s+", " ", str(raw or "").strip())
+    if not value:
+        return None
+    return OFFICIAL_BILLING_OPTION_MAP.get(value.upper(), value)
+
+
 def normalize_member_row(row: list[str], row_number: int) -> tuple[dict | None, list[ImportIssue]]:
     issues: list[ImportIssue] = []
     values = list(row[: len(GA_COLUMNS)])
@@ -178,13 +296,24 @@ def normalize_member_row(row: list[str], row_number: int) -> tuple[dict | None, 
             record[key] = raw or None
 
     record["member_id"] = member_id
+    billing_status, is_active, status_issues = normalize_billing_status(
+        record.get("billing_status"),
+        row_number,
+    )
+    record["billing_status"] = billing_status
+    record["is_active"] = is_active
+    issues.extend(status_issues)
     record["billing_type"] = record.get("billing_option")
     record["contract_type"] = derive_contract_type(record.get("plan_type"))
     record["next_payment"] = record.get("due_date")
     return record, issues
 
 
-def normalize_backup_record(fields: dict[str, str], record_number: int) -> tuple[dict | None, list[ImportIssue]]:
+def normalize_backup_record(
+    fields: dict[str, str],
+    record_number: int,
+    require_status: bool = True,
+) -> tuple[dict | None, list[ImportIssue]]:
     issues: list[ImportIssue] = []
     member_id = (fields.get("MN") or "").strip()
     if not member_id.isdigit() or int(member_id) <= 0:
@@ -204,6 +333,12 @@ def normalize_backup_record(fields: dict[str, str], record_number: int) -> tuple
     billing_amount = parse_backup_money(fields.get("N$") or fields.get("R$"))
     last_payment_amount = parse_backup_money(fields.get("R$") or fields.get("N$"))
     balance = parse_backup_money(fields.get("$B"))
+    billing_status, is_active, status_issues = normalize_backup_billing_status(
+        fields,
+        record_number,
+        require_status=require_status,
+    )
+    issues.extend(status_issues)
 
     record: dict = {
         "member_id": member_id,
@@ -212,14 +347,14 @@ def normalize_backup_record(fields: dict[str, str], record_number: int) -> tuple
         "contract_type": derive_contract_type(plan_type),
         "billing_option": billing_type,
         "billing_type": billing_type,
-        "billing_status": "ACTIVE" if (fields.get("ST") or "0").strip() == "0" else "INACTIVE",
+        "billing_status": billing_status,
         "billing_amount": billing_amount,
         "last_payment_amount": last_payment_amount,
         "balance": balance,
         "email": (fields.get("EM") or "").strip() or None,
         "phone": (fields.get("PH") or "").strip() or None,
         "mobile": (fields.get("PM") or "").strip() or None,
-        "is_active": (fields.get("ST") or "0").strip() == "0",
+        "is_active": is_active,
     }
 
     visits = (fields.get("TV") or "").strip()
@@ -247,7 +382,11 @@ def normalize_backup_record(fields: dict[str, str], record_number: int) -> tuple
 
 def normalize_backup_update_record(fields: dict[str, str], record_number: int) -> tuple[dict | None, list[ImportIssue]]:
     """Normalize a partial GymAssistant member update without inventing missing fields."""
-    full_record, issues = normalize_backup_record(fields, record_number)
+    full_record, issues = normalize_backup_record(
+        fields,
+        record_number,
+        require_status=False,
+    )
     if not full_record:
         return None, issues
 
@@ -352,6 +491,193 @@ def parse_report_txt(path: str | Path) -> ImportResult:
     return ImportResult(members, issues)
 
 
+def _decode_official_csv(path: Path) -> str:
+    data = path.read_bytes()
+    for encoding in ("utf-8-sig", "cp1252"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError(
+        f"GymAssistant CSV is not valid UTF-8 or Windows-1252 text: {path}"
+    )
+
+
+def _parse_csv_date(
+    row: dict[str, str],
+    source_field: str,
+    target_field: str,
+    row_number: int,
+    record: dict,
+    issues: list[ImportIssue],
+) -> None:
+    raw = str(row.get(source_field) or "").strip()
+    parsed = parse_ga_date(raw)
+    record[target_field] = parsed.value
+    record[f"{target_field}_raw"] = parsed.raw
+    if parsed.marker:
+        record[f"{target_field}_marker"] = parsed.marker
+    if parsed.value is None and raw and raw not in {"00/00/0000", "0/0/0000"}:
+        issues.append(
+            ImportIssue(
+                row_number,
+                target_field,
+                raw,
+                "Date could not be parsed",
+            )
+        )
+
+
+def parse_official_member_csv(path: str | Path) -> ImportResult:
+    path = Path(path)
+    reader = csv.DictReader(StringIO(_decode_official_csv(path)), delimiter=",")
+    fieldnames = [str(field or "").strip() for field in (reader.fieldnames or [])]
+    missing_columns = sorted(OFFICIAL_CSV_REQUIRED_COLUMNS - set(fieldnames))
+    if missing_columns:
+        raise ValueError(
+            "GymAssistant member CSV is missing required column(s): "
+            + ", ".join(missing_columns)
+        )
+
+    members: list[dict] = []
+    issues: list[ImportIssue] = []
+    seen_member_ids: set[str] = set()
+    for row_number, source_row in enumerate(reader, start=2):
+        row = {
+            str(key or "").strip(): "" if value is None else str(value).strip()
+            for key, value in source_row.items()
+        }
+        if not any(row.values()):
+            continue
+
+        deleted_value = row.get("IsDeleted", "").strip().lower()
+        if deleted_value in {"1", "true", "yes"}:
+            continue
+        if deleted_value not in {"0", "false", "no", ""}:
+            issues.append(
+                ImportIssue(
+                    row_number,
+                    "is_deleted",
+                    row.get("IsDeleted", ""),
+                    "IsDeleted value is not recognized",
+                    critical=True,
+                )
+            )
+
+        member_id = row.get("MemberNum", "").strip()
+        if not member_id.isdigit() or int(member_id) <= 0:
+            issues.append(
+                ImportIssue(
+                    row_number,
+                    "member_id",
+                    member_id,
+                    "Skipped row without numeric member id",
+                    critical=True,
+                )
+            )
+            continue
+        if member_id in seen_member_ids:
+            issues.append(
+                ImportIssue(
+                    row_number,
+                    "member_id",
+                    member_id,
+                    "Skipped duplicate member id",
+                    critical=True,
+                )
+            )
+            continue
+        seen_member_ids.add(member_id)
+
+        last_name = row.get("LastName", "").strip()
+        first_name = row.get("FirstName", "").strip()
+        name = (
+            f"{last_name}, {first_name}"
+            if last_name and first_name
+            else last_name or first_name or None
+        )
+        plan_type = row.get("MemberType", "").strip() or None
+        billing_option = normalize_official_billing_option(row.get("BillingOption"))
+        billing_status, is_active, status_issues = normalize_billing_status(
+            row.get("BillingStatus"),
+            row_number,
+        )
+        issues.extend(status_issues)
+
+        record: dict = {
+            "member_id": member_id,
+            "name": name,
+            "plan_type": plan_type,
+            "contract_type": derive_contract_type(plan_type),
+            "billing_status": billing_status,
+            "billing_option": billing_option,
+            "billing_type": billing_option,
+            "billing_amount": parse_money(row.get("BillingAmount")),
+            "last_payment_amount": parse_money(row.get("LastPaidAmount")),
+            "balance": parse_money(row.get("CurrentBalance")),
+            "email": row.get("Email", "").strip() or None,
+            "phone": row.get("HomePhone", "").strip() or None,
+            "mobile": row.get("MobilePhone", "").strip() or None,
+            "is_active": is_active,
+        }
+
+        for source_field, target_field in (
+            ("DueDate", "due_date"),
+            ("ContractBegin", "start_date"),
+            ("ContractEnd", "end_date"),
+            ("SignupDate", "signup_date"),
+            ("LastPaidDate", "last_payment"),
+            ("BirthDate", "birthdate"),
+        ):
+            _parse_csv_date(
+                row,
+                source_field,
+                target_field,
+                row_number,
+                record,
+                issues,
+            )
+        record["next_payment"] = record.get("due_date")
+
+        visits = row.get("NUM_VISITS_TOTAL", "").strip()
+        if visits:
+            try:
+                record["visits"] = int(float(visits))
+            except ValueError:
+                issues.append(
+                    ImportIssue(
+                        row_number,
+                        "visits",
+                        visits,
+                        "Visit count could not be parsed",
+                    )
+                )
+
+        responsible_id = row.get("ResponsibleMemberNum", "").strip()
+        if responsible_id.isdigit() and int(responsible_id) > 0:
+            record["responsible_member_id"] = responsible_id
+        members.append(record)
+
+    members_by_id = {
+        str(member["member_id"]): member
+        for member in members
+        if member.get("member_id")
+    }
+    dependent_ids_by_responsible: dict[str, list[str]] = {}
+    for member in members:
+        responsible_id = str(member.get("responsible_member_id") or "")
+        if responsible_id and responsible_id in members_by_id:
+            dependent_ids_by_responsible.setdefault(responsible_id, []).append(
+                str(member["member_id"])
+            )
+    for responsible_id, dependent_ids in dependent_ids_by_responsible.items():
+        members_by_id[responsible_id]["dependent_member_ids"] = ",".join(
+            sorted(set(dependent_ids), key=int)
+        )
+
+    return ImportResult(members, issues)
+
+
 def attach_backup_member_relationships(members: list[dict], raw_records: list[dict[str, str]]) -> None:
     members_by_id = {str(member.get("member_id")): member for member in members if member.get("member_id")}
     for fields in raw_records:
@@ -421,9 +747,9 @@ def parse_members_btx(path: str | Path) -> ImportResult:
     return _parse_backup_text(text)
 
 
-def _parse_member_log_text(text: str) -> ImportResult:
+def _parse_member_log_events_text(text: str) -> MemberLogResult:
     issues: list[ImportIssue] = []
-    members: list[dict] = []
+    events: list[MemberLogEvent] = []
 
     for line_number, line in enumerate(text.splitlines(), start=1):
         line = line.strip()
@@ -431,11 +757,25 @@ def _parse_member_log_text(text: str) -> ImportResult:
             continue
 
         payload = line
+        occurred_at = None
         if "|" in line:
             parts = line.split("|", 3)
             if len(parts) < 4:
                 continue
             payload = parts[3]
+            timestamp = parts[0].strip()
+            try:
+                occurred_at = datetime.strptime(timestamp, "%Y/%m/%d %H:%M:%S")
+            except ValueError:
+                issues.append(
+                    ImportIssue(
+                        line_number,
+                        "occurred_at",
+                        timestamp,
+                        "Member log timestamp could not be parsed",
+                        critical=True,
+                    )
+                )
 
         if "MN=" not in payload:
             continue
@@ -450,20 +790,56 @@ def _parse_member_log_text(text: str) -> ImportResult:
 
         if not fields:
             continue
+        if (fields.get("MN") or "").strip() in {"", "0"}:
+            continue
 
         member, row_issues = normalize_backup_update_record(fields, line_number)
         issues.extend(row_issues)
         if member:
-            members.append(member)
+            events.append(
+                MemberLogEvent(
+                    row_number=line_number,
+                    occurred_at=occurred_at,
+                    member=member,
+                )
+            )
 
-    return ImportResult(members, issues)
+    return MemberLogResult(events, issues)
+
+
+def _parse_member_log_text(text: str) -> ImportResult:
+    result = _parse_member_log_events_text(text)
+    return ImportResult(
+        [event.member for event in result.events],
+        result.issues,
+    )
 
 
 def parse_member_log(path: str | Path) -> ImportResult:
+    result = parse_member_log_events(path)
+    return ImportResult(
+        [event.member for event in result.events],
+        result.issues,
+    )
+
+
+def parse_member_log_events(path: str | Path) -> MemberLogResult:
+    path = Path(path)
     text = Path(path).read_text(encoding="latin-1", errors="replace")
     if "\t" not in text and "|" not in text and re.search(r"(?m)^MN=", text):
-        return parse_members_btx(path)
-    return _parse_member_log_text(text)
+        result = parse_members_btx(path)
+        return MemberLogResult(
+            [
+                MemberLogEvent(
+                    row_number=row_number,
+                    occurred_at=None,
+                    member=member,
+                )
+                for row_number, member in enumerate(result.members, start=1)
+            ],
+            result.issues,
+        )
+    return _parse_member_log_events_text(text)
 
 
 def parse_gymassistant_backup(path: str | Path) -> ImportResult:
@@ -490,4 +866,6 @@ def parse_gymassistant_export(path: str | Path) -> ImportResult:
         return parse_members_btx(path)
     if suffix == ".gbu":
         return parse_gymassistant_backup(path)
+    if suffix == ".csv":
+        return parse_official_member_csv(path)
     raise ValueError(f"Unsupported GymAssistant export type: {path.suffix}")

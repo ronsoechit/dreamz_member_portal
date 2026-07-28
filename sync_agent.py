@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 from io import BytesIO
 import json
@@ -17,7 +17,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 import zipfile
 
-from ga_import import ImportIssue, ImportResult, parse_gymassistant_export, parse_member_log
+from ga_import import (
+    ImportIssue,
+    ImportResult,
+    parse_gymassistant_export,
+    parse_member_log_events,
+)
 from ga_journal import (
     parse_gymassistant_billing_catalog_text,
     parse_gymassistant_journal_text,
@@ -32,6 +37,8 @@ DEFAULT_MANIFEST_PATH = Path("instance/sync_manifest.json")
 DEFAULT_STORAGE_PREFIX = "gymassistant"
 PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
 LIVE_MEMBER_DATA_WARNING_GRACE_SECONDS = 24 * 60 * 60
+DEFAULT_OFFICIAL_CSV_MAX_AGE_HOURS = 36
+OFFICIAL_MEMBER_SOURCE_KIND = "gymassistant_official_member_export_csv"
 
 
 @dataclass(frozen=True)
@@ -62,6 +69,16 @@ class SyncDiff:
     removed: list[str]
 
 
+@dataclass(frozen=True)
+class MemberOverlayEvent:
+    occurred_at: datetime
+    priority: int
+    row_number: int
+    path: Path
+    action: str
+    member: dict
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -88,14 +105,13 @@ def temp_files_root(source_root: Path) -> Path:
 
 
 def live_members_path(source_root: Path) -> Path:
-    candidates = []
     configured_path = os.getenv("GYM_ASSISTANT_MEMBERS_PATH", "").strip()
     if configured_path:
-        candidates.append(Path(configured_path))
-    candidates.extend([
+        return Path(configured_path)
+    candidates = [
         data_root(source_root) / "Members.btx",
         source_root / "Members.btx",
-    ])
+    ]
     candidates.extend(root / "Members.btx" for root in backup_root_candidates(source_root))
     return next((path for path in candidates if path.is_file()), candidates[0])
 
@@ -223,9 +239,11 @@ def iter_member_log_files(source_root: Path, backup: Path | None = None) -> Iter
     if not root.exists():
         return
 
+    # AddedMembers.btx is cumulative and has no event timestamps. Replaying it
+    # after a new addition can resurrect members absent from the official CSV.
     candidates = [
-        root / "AddedMembers.btx",
         root / "Added Members.txt",
+        root / "Deleted Members.txt",
     ]
     update_root = root / "Member Updates"
     if update_root.exists():
@@ -255,31 +273,225 @@ def live_member_data_warning(source_root: Path, backup: Path | None) -> str | No
     return None
 
 
-def parse_members_with_live_logs(member_source: Path) -> ImportResult:
+def member_log_action(path: Path) -> str:
+    normalized = path.name.casefold().replace(" ", "")
+    if normalized == "deletedmembers.txt":
+        return "delete"
+    if normalized in {"addedmembers.btx", "addedmembers.txt"}:
+        return "add"
+    return "update"
+
+
+def member_source_kind(path: Path) -> str:
+    if path.suffix.casefold() == ".csv":
+        return OFFICIAL_MEMBER_SOURCE_KIND
+    if path.suffix.casefold() == ".gbu":
+        return "gymassistant_backup"
+    if path.suffix.casefold() == ".btx":
+        return "gymassistant_members_btx"
+    return "gymassistant_export"
+
+
+def official_csv_max_age_hours() -> int:
+    raw = os.getenv(
+        "GYM_ASSISTANT_CSV_MAX_AGE_HOURS",
+        str(DEFAULT_OFFICIAL_CSV_MAX_AGE_HOURS),
+    ).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_OFFICIAL_CSV_MAX_AGE_HOURS
+    return max(value, 1)
+
+
+def official_csv_source_warning(path: Path) -> str | None:
+    now = datetime.now(timezone.utc)
+    modified_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+    if modified_at > now + timedelta(minutes=5):
+        return (
+            "The official GymAssistant member CSV has a future modification time. "
+            "The member set was imported as non-authoritative."
+        )
+    age = now - modified_at
+    max_age = timedelta(hours=official_csv_max_age_hours())
+    if age > max_age:
+        return (
+            "The official GymAssistant member CSV is stale "
+            f"({age.total_seconds() / 3600:.1f} hours old; "
+            f"maximum {official_csv_max_age_hours()} hours). "
+            "The member set was imported as non-authoritative."
+        )
+    return None
+
+
+def member_source_warning(
+    source_root: Path,
+    member_source: Path,
+    backup: Path | None,
+) -> str | None:
+    if member_source.suffix.casefold() == ".csv":
+        return official_csv_source_warning(member_source)
+    return live_member_data_warning(source_root, backup)
+
+
+def parse_member_source_with_live_logs(
+    member_source: Path,
+    source_root: Path | None = None,
+) -> tuple[ImportResult, dict]:
     result = parse_gymassistant_export(member_source)
     member_map = {str(member["member_id"]): dict(member) for member in result.members}
     issues: list[ImportIssue] = list(result.issues)
-    backup = member_source if member_source.suffix.lower() == ".gbu" else None
-    source_root = None
+    inferred_source_root = None
     if member_source.parent.name.lower() == "backup":
         if member_source.parent.parent.name.lower() == "data":
-            source_root = member_source.parent.parent.parent
+            inferred_source_root = member_source.parent.parent.parent
         else:
-            source_root = member_source.parent.parent
+            inferred_source_root = member_source.parent.parent
+    source_root = (source_root or inferred_source_root)
+
+    baseline_at = datetime.fromtimestamp(member_source.stat().st_mtime)
+    pending_events: list[MemberOverlayEvent] = []
+    overlay_files: list[dict] = []
+    ignored_before_baseline = 0
+    overlay_stable = True
     if source_root:
-        for log_file in iter_member_log_files(source_root, backup):
-            log_result = parse_member_log(log_file)
+        for log_file in iter_member_log_files(source_root, member_source):
+            before = log_file.stat()
+            log_result = parse_member_log_events(log_file)
+            after = log_file.stat()
+            file_stable = (
+                before.st_size == after.st_size
+                and before.st_mtime_ns == after.st_mtime_ns
+            )
+            overlay_stable = overlay_stable and file_stable
             issues.extend(log_result.issues)
-            is_added_members_file = log_file.name.lower() in {"addedmembers.btx", "added members.txt"}
-            for member in log_result.members:
-                member_id = str(member["member_id"])
-                if member_id in member_map:
-                    if is_added_members_file:
-                        continue
-                    member_map[member_id].update(dict(member))
-                else:
-                    member_map[member_id] = dict(member)
-    return ImportResult(list(member_map.values()), issues)
+            action = member_log_action(log_file)
+            priority = {"add": 0, "update": 1, "delete": 2}[action]
+            file_event_at = datetime.fromtimestamp(after.st_mtime)
+            overlay_files.append({
+                "path": relative_path(log_file.resolve(), source_root.resolve()),
+                "size": after.st_size,
+                "mtime": datetime.fromtimestamp(
+                    after.st_mtime,
+                    timezone.utc,
+                ).replace(microsecond=0).isoformat(),
+                "sha256": file_sha256(log_file),
+                "stable_during_read": file_stable,
+            })
+            for event in log_result.events:
+                occurred_at = event.occurred_at or file_event_at
+                if occurred_at <= baseline_at:
+                    ignored_before_baseline += 1
+                    continue
+                pending_events.append(
+                    MemberOverlayEvent(
+                        occurred_at=occurred_at,
+                        priority=priority,
+                        row_number=event.row_number,
+                        path=log_file,
+                        action=action,
+                        member=dict(event.member),
+                    )
+                )
+
+    pending_events.sort(
+        key=lambda event: (
+            event.occurred_at,
+            event.priority,
+            str(event.path).casefold(),
+            event.row_number,
+        )
+    )
+    added = updated = deleted = orphan_updates = 0
+    event_digest = hashlib.sha256()
+    for event in pending_events:
+        member_id = str(event.member["member_id"])
+        event_digest.update(
+            json.dumps(
+                {
+                    "occurred_at": event.occurred_at.isoformat(),
+                    "action": event.action,
+                    "member_id": member_id,
+                    "member": json_safe_member(event.member),
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        if event.action == "delete":
+            if member_map.pop(member_id, None) is not None:
+                deleted += 1
+            continue
+        if event.action == "add" and member_id in member_map:
+            continue
+        if member_id in member_map:
+            member_map[member_id].update(dict(event.member))
+            updated += 1
+        else:
+            if (
+                event.action == "update"
+                and member_source.suffix.casefold() == ".csv"
+            ):
+                orphan_updates += 1
+                issues.append(
+                    ImportIssue(
+                        event.row_number,
+                        "member_id",
+                        member_id,
+                        "Edit event references a member absent from the official CSV",
+                        critical=True,
+                    )
+                )
+                continue
+            new_member = dict(event.member)
+            if (
+                not str(new_member.get("billing_status") or "").strip()
+                or new_member.get("is_active") is None
+            ):
+                new_member["billing_status"] = "UNKNOWN"
+                new_member["is_active"] = None
+                issues.append(
+                    ImportIssue(
+                        event.row_number,
+                        "billing_status",
+                        "",
+                        "Added member event is missing a valid GymAssistant ST status",
+                        critical=True,
+                    )
+                )
+            member_map[member_id] = new_member
+            added += 1
+
+    overlay = {
+        "baseline_count": len(result.members),
+        "event_file_count": len(overlay_files),
+        "event_count": len(pending_events),
+        "added_count": added,
+        "updated_count": updated,
+        "deleted_count": deleted,
+        "orphan_update_count": orphan_updates,
+        "ignored_before_baseline_count": ignored_before_baseline,
+        "latest_event_at": (
+            pending_events[-1].occurred_at.isoformat()
+            if pending_events
+            else None
+        ),
+        "events_sha256": event_digest.hexdigest(),
+        "stable_during_read": overlay_stable,
+        "files": overlay_files,
+    }
+    return ImportResult(list(member_map.values()), issues), overlay
+
+
+def parse_members_with_live_logs(
+    member_source: Path,
+    source_root: Path | None = None,
+) -> ImportResult:
+    result, _ = parse_member_source_with_live_logs(
+        member_source,
+        source_root=source_root,
+    )
+    return result
 
 
 def configured_invoice_pilot_member_ids() -> set[str]:
@@ -461,24 +673,46 @@ def scan_source(source_root: Path) -> SyncScan:
 
     backup = latest_backup_path(source_root)
     live_members = live_members_path(source_root)
+    configured_member_source = bool(
+        os.getenv("GYM_ASSISTANT_MEMBERS_PATH", "").strip()
+    )
+    if configured_member_source and not live_members.is_file():
+        raise FileNotFoundError(
+            f"Configured GymAssistant member source does not exist: {live_members}"
+        )
     live_dat = live_members_dat_path(source_root)
     files: list[FileSignature] = []
     member_count = 0
     member_source: Path | None = None
 
     if live_members.exists():
-        files.append(file_signature(live_members, source_root, "member_data"))
+        source_file_kind = (
+            "member_export_csv"
+            if live_members.suffix.casefold() == ".csv"
+            else "member_data"
+        )
+        files.append(file_signature(live_members, source_root, source_file_kind))
         member_source = live_members
-        member_count = len(parse_gymassistant_export(live_members).members)
+        member_count = len(
+            parse_member_source_with_live_logs(
+                live_members,
+                source_root=source_root,
+            )[0].members
+        )
     elif backup:
         member_source = backup
-        member_count = len(parse_members_with_live_logs(backup).members)
+        member_count = len(
+            parse_member_source_with_live_logs(
+                backup,
+                source_root=source_root,
+            )[0].members
+        )
 
     if backup:
         files.append(file_signature(backup, source_root, "backup"))
     if live_dat.exists():
         files.append(file_signature(live_dat, source_root, "live_member_data"))
-    for log_file in iter_member_log_files(source_root, backup):
+    for log_file in iter_member_log_files(source_root, member_source):
         files.append(file_signature(log_file, source_root, "member_log"))
 
     files.extend(iter_attachment_files(source_root) or [])
@@ -490,7 +724,11 @@ def scan_source(source_root: Path) -> SyncScan:
         scanned_at=utc_now_iso(),
         member_source=str(member_source) if member_source else None,
         latest_backup=str(backup) if backup else None,
-        warning=live_member_data_warning(source_root, backup),
+        warning=(
+            member_source_warning(source_root, member_source, backup)
+            if member_source
+            else None
+        ),
         member_count=member_count,
         relevant_file_count=len(files),
         relevant_total_bytes=sum(item.size for item in files),
@@ -685,54 +923,144 @@ def build_sync_payload(
     source_root = source_root.resolve()
     backup = latest_backup_path(source_root)
     member_source = live_members_path(source_root)
+    configured_member_source = bool(
+        os.getenv("GYM_ASSISTANT_MEMBERS_PATH", "").strip()
+    )
+    if configured_member_source and not member_source.is_file():
+        raise FileNotFoundError(
+            f"Configured GymAssistant member source does not exist: {member_source}"
+        )
     if not member_source.exists():
         member_source = backup
     if not member_source:
         raise FileNotFoundError(
-            f"No live Members.btx or GymAssistant .gbu backup found under {data_root(source_root)}"
+            "No configured GymAssistant member CSV, Members.btx, or .gbu backup "
+            f"was found under {data_root(source_root)}"
         )
 
     member_source_before = member_source.stat()
-    import_result = parse_members_with_live_logs(member_source) if member_source.suffix.lower() == ".gbu" else parse_gymassistant_export(member_source)
+    member_source_bytes = member_source.read_bytes()
+    member_source_sha256 = hashlib.sha256(member_source_bytes).hexdigest()
+    member_source_snapshot_at = datetime.fromtimestamp(
+        member_source_before.st_mtime,
+        timezone.utc,
+    ).replace(microsecond=0).isoformat()
+    import_result, member_overlay = parse_member_source_with_live_logs(
+        member_source,
+        source_root=source_root,
+    )
     member_source_after = member_source.stat()
     member_source_stable = (
         member_source_before.st_size == member_source_after.st_size
         and member_source_before.st_mtime_ns == member_source_after.st_mtime_ns
+        and len(member_source_bytes) == member_source_after.st_size
     )
     source_members = import_result.members[:member_limit] if member_limit else import_result.members
     members = [dict(member) for member in source_members]
     member_ids = [str(member.get("member_id") or "").strip() for member in members]
     unique_member_ids = sorted(set(member_ids))
-    source_warning = live_member_data_warning(source_root, backup)
+    source_warning = member_source_warning(source_root, member_source, backup)
     scope_complete = member_limit is None
     skipped_record_count = sum(
         1
         for issue in import_result.issues
         if str(issue.message or "").casefold().startswith("skipped ")
     )
-    complete_member_source = member_source.name.casefold() == "members.btx"
+    critical_issue_count = sum(
+        1
+        for issue in import_result.issues
+        if issue.critical
+    )
+    unknown_billing_status_count = sum(
+        1
+        for member in import_result.members
+        if (
+            not str(member.get("billing_status") or "").strip()
+            or str(member.get("billing_status") or "").strip().upper() == "UNKNOWN"
+            or member.get("is_active") is None
+        )
+    )
+    if critical_issue_count:
+        issue_warning = (
+            "The GymAssistant member source contains "
+            f"{critical_issue_count} critical parsing issue(s). "
+            "The member set was imported as non-authoritative."
+        )
+        source_warning = (
+            f"{source_warning}\n{issue_warning}"
+            if source_warning
+            else issue_warning
+        )
+        if member_source.suffix.casefold() == ".csv":
+            raise ValueError(issue_warning)
+    complete_member_source = (
+        member_source.suffix.casefold() == ".csv"
+        and member_source_kind(member_source) == OFFICIAL_MEMBER_SOURCE_KIND
+    )
+    source_age_seconds = max(
+        0,
+        int(
+            (
+                datetime.now(timezone.utc)
+                - datetime.fromtimestamp(
+                    member_source_after.st_mtime,
+                    timezone.utc,
+                )
+            ).total_seconds()
+        ),
+    )
+    member_ids_sha256 = hashlib.sha256(
+        "\n".join(unique_member_ids).encode("utf-8")
+    ).hexdigest()
+    snapshot_id = hashlib.sha256(
+        json.dumps(
+            {
+                "source_sha256": member_source_sha256,
+                "source_mtime_ns": member_source_after.st_mtime_ns,
+                "member_ids_sha256": member_ids_sha256,
+                "overlay_events_sha256": member_overlay["events_sha256"],
+                "sent_count": len(members),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     member_snapshot = {
-        "schema_version": 1,
+        "schema_version": 2,
         "scope_complete": scope_complete,
         "source_stable_during_read": member_source_stable,
+        "overlay_stable_during_read": member_overlay["stable_during_read"],
         "authoritative_for_absence": bool(
             scope_complete
             and complete_member_source
             and member_source_stable
+            and member_overlay["stable_during_read"]
             and not source_warning
             and members
             and len(unique_member_ids) == len(member_ids)
             and all(member_id.isdigit() and int(member_id) > 0 for member_id in member_ids)
             and skipped_record_count == 0
+            and critical_issue_count == 0
+            and unknown_billing_status_count == 0
         ),
+        "source_kind": member_source_kind(member_source),
+        "source_path": str(member_source),
+        "source_mtime": member_source_snapshot_at,
+        "source_mtime_ns": member_source_after.st_mtime_ns,
+        "source_size": member_source_after.st_size,
+        "source_sha256": member_source_sha256,
+        "source_age_seconds": source_age_seconds,
+        "snapshot_id": snapshot_id,
+        "baseline_count": member_overlay["baseline_count"],
         "source_count": len(import_result.members),
         "sent_count": len(members),
         "unique_count": len(unique_member_ids),
-        "member_ids_sha256": hashlib.sha256(
-            "\n".join(unique_member_ids).encode("utf-8")
-        ).hexdigest(),
+        "member_ids_sha256": member_ids_sha256,
         "parse_issue_count": len(import_result.issues),
+        "critical_issue_count": critical_issue_count,
+        "unknown_billing_status_count": unknown_billing_status_count,
         "skipped_record_count": skipped_record_count,
+        "overlay": member_overlay,
     }
     selected_invoice_member_ids = (
         configured_invoice_pilot_member_ids()
