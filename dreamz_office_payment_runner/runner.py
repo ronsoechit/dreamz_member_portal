@@ -24,7 +24,7 @@ import uuid
 import gymassistant_payment_writer as payment_writer
 
 
-PACKAGE_VERSION = "1.0.0"
+PACKAGE_VERSION = "1.0.1"
 AGENT_ID = "dreamz_office"
 AGENT_LABEL = "Dreamz Office PC"
 PORTAL_URL = "https://dreamzmemberportal-production.up.railway.app"
