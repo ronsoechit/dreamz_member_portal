@@ -154,14 +154,34 @@ def normalize_configured_source_root(value: object) -> str:
     if "\x00" in text or any(character in text for character in '*?"<>|'):
         raise RunnerError("source_root_invalid")
     drive, tail = ntpath.splitdrive(text)
-    if not drive or not tail.startswith(("\\", "/")):
+    unc_drive = drive.startswith(("\\\\", "//"))
+    if unc_drive:
+        unc_parts = [
+            part
+            for part in re.split(r"[\\/]+", drive)
+            if part
+        ]
+        absolute = (
+            len(unc_parts) == 2
+            and all(
+                part not in {".", ".."} and ":" not in part
+                for part in unc_parts
+            )
+            and (not tail or tail.startswith(("\\", "/")))
+        )
+    else:
+        absolute = bool(
+            re.fullmatch(r"[A-Za-z]:", drive)
+            and tail.startswith(("\\", "/"))
+        )
+    if not absolute:
         raise RunnerError("source_root_must_be_absolute")
     path_parts = [
         part
         for part in re.split(r"[\\/]+", tail)
         if part
     ]
-    if any(part in {".", ".."} for part in path_parts):
+    if any(part in {".", ".."} or ":" in part for part in path_parts):
         raise RunnerError("source_root_invalid")
     normalized = ntpath.normpath(text)
     if not normalized or normalized in {".", "\\"}:

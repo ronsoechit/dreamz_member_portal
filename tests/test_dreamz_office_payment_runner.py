@@ -168,8 +168,22 @@ class FixedScopeTests(unittest.TestCase):
         invalid = {
             "": "source_root_missing",
             r"relative\Gym Assistant": "source_root_must_be_absolute",
+            "C:": "source_root_must_be_absolute",
+            r"1:\Gym Assistant": "source_root_must_be_absolute",
+            r"\\DREAMZ-FRNTDSK": "source_root_must_be_absolute",
+            r"\\DREAMZ-FRNTDSK\.": "source_root_must_be_absolute",
             r"Y:\Gym Assistant\..\Other": "source_root_invalid",
+            r"\\DREAMZ-FRNTDSK\Gym Assistant 2.6\..\Other": (
+                "source_root_invalid"
+            ),
+            r"Y:\Gym Assistant:Other": "source_root_invalid",
+            r"\\DREAMZ-FRNTDSK\Gym Assistant:Other": (
+                "source_root_must_be_absolute"
+            ),
             r"X:\Runtime": "source_root_reserved_for_transfer",
+            r"\\DREAMZ-OFFICE-P\Shared Operations": (
+                "source_root_reserved_for_transfer"
+            ),
             r"\\DREAMZ-OFFICE-P\Shared Operations\Runtime": (
                 "source_root_reserved_for_transfer"
             ),
@@ -178,6 +192,20 @@ class FixedScopeTests(unittest.TestCase):
             with self.subTest(source_root=source_root):
                 with self.assertRaisesRegex(runner.RunnerError, reason):
                     runner.normalize_configured_source_root(source_root)
+
+    def test_runtime_config_accepts_exact_unc_share_root(self):
+        source_root = r"\\DREAMZ-FRNTDSK\Gym Assistant 2.6"
+
+        self.assertEqual(
+            runner.normalize_configured_source_root(source_root),
+            source_root,
+        )
+
+        config = runner.RuntimeConfig(source_root=source_root)
+        self.assertEqual(
+            config.expected_data_root,
+            source_root + r"\Data",
+        )
 
     def test_runtime_config_loads_installer_recorded_source(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -898,6 +926,50 @@ class SanitizedStateTests(unittest.TestCase):
         self.assertEqual(
             payload["expected_data_root"],
             TEST_SOURCE_ROOT + r"\Data",
+        )
+
+    def test_health_check_accepts_exact_unc_share_root(self):
+        source_root = r"\\DREAMZ-FRNTDSK\Gym Assistant 2.6"
+        with tempfile.TemporaryDirectory() as temporary:
+            config_path = Path(temporary) / "runtime.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "source_root": source_root,
+                        "idle_seconds": 300,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            ledger = Path(temporary) / "state" / "payment-receipts.json"
+            runner.atomic_write_json(
+                ledger,
+                {"schema": 2, "receipts": {}},
+                durable=True,
+            )
+            output = io.StringIO()
+            with (
+                patch("sys.stdout", output),
+                patch.object(
+                    runner.urlrequest,
+                    "urlopen",
+                    side_effect=AssertionError("health check must not use network"),
+                ),
+                patch.object(
+                    runner,
+                    "workstation_readiness",
+                    side_effect=AssertionError("health check must not inspect UI"),
+                ),
+            ):
+                exit_code = runner.run_health_check(config_path)
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(output.getvalue())
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["source_root"], source_root)
+        self.assertEqual(
+            payload["expected_data_root"],
+            source_root + r"\Data",
         )
 
 
