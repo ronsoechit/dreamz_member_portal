@@ -206,8 +206,8 @@ def load_runtime_config(path: Path) -> RuntimeConfig:
         idle_seconds=_bounded_int(
             raw.get("idle_seconds"),
             default=DEFAULT_IDLE_SECONDS,
-            minimum=1,
-            maximum=300,
+            minimum=DEFAULT_IDLE_SECONDS,
+            maximum=DEFAULT_IDLE_SECONDS,
         ),
         command_ttl_seconds=_bounded_int(
             raw.get("command_ttl_seconds"),

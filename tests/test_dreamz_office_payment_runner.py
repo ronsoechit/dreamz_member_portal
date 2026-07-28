@@ -197,6 +197,24 @@ class FixedScopeTests(unittest.TestCase):
         self.assertEqual(config.expected_data_root, TEST_SOURCE_ROOT + r"\Data")
         self.assertEqual(config.idle_seconds, 300)
 
+    def test_runtime_config_cannot_lower_office_idle_safety_floor(self):
+        for configured_idle in (1, 299, 301, 3600):
+            with self.subTest(configured_idle=configured_idle):
+                with tempfile.TemporaryDirectory() as temporary:
+                    path = Path(temporary) / "runtime.json"
+                    path.write_text(
+                        json.dumps(
+                            {
+                                "source_root": TEST_SOURCE_ROOT,
+                                "idle_seconds": configured_idle,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    config = runner.load_runtime_config(path)
+
+                self.assertEqual(config.idle_seconds, 300)
+
     def test_no_member_sync_or_scan_code_is_referenced(self):
         source = Path(runner.__file__).read_text(encoding="utf-8")
         self.assertNotIn("import sync_agent", source)
