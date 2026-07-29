@@ -1508,6 +1508,42 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(wrong_agent.status_code, 403)
         self.assertEqual(non_payment.status_code, 403)
 
+    def test_reserve_command_peek_is_read_only_and_sanitized(self):
+        app.config[
+            "FEP_PAYMENT_SYNC_TOKEN_RESERVE_8KM7V7D"
+        ] = "reserve-payment-token"
+        command = FepPaymentProcessCommand(
+            source="fep",
+            status="pending",
+            target_agent="reserve_8km7v7d",
+            requested_limit=1,
+            requested_by="test-admin",
+            upload_id=522,
+            upload_filename="sensitive-filename.csv",
+        )
+        db.session.add(command)
+        db.session.commit()
+
+        response = self.client.get(
+            "/api/sync/fep-payment-process-commands"
+            "?agent_id=reserve_8km7v7d&peek=1",
+            headers={"X-Sync-Token": "reserve-payment-token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json["read_only"])
+        self.assertTrue(response.json["pending_command_available"])
+        self.assertTrue(response.json["writer_reserved"])
+        self.assertEqual(response.json["commands"], [])
+        self.assertNotIn("upload_filename", response.json)
+        self.assertNotIn("requested_by", response.json)
+        db.session.refresh(command)
+        self.assertEqual(command.status, "pending")
+        self.assertIsNone(command.claimed_by)
+        self.assertIsNone(command.claimed_at)
+        self.assertIsNone(command.claim_expires_at)
+        self.assertIsNone(command.started_at)
+
     def test_dedicated_token_never_becomes_general_sync_token(self):
         app.config["FEP_PAYMENT_SYNC_TOKEN_RON_LAPTOP"] = "sync-test-token"
 
