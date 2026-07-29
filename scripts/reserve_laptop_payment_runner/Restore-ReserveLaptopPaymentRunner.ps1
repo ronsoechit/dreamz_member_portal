@@ -187,7 +187,6 @@ if (
 Push-Location $packageRoot
 try {
   $healthOutput = & $PythonPath `
-    -I `
     -m reserve_laptop_payment_runner.runner `
     --config $runtimeFile `
     --health-check 2>&1

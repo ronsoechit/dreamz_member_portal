@@ -158,8 +158,14 @@ class RunnerScriptSafetyTests(unittest.TestCase):
             self.assertIn("desktop-8km7v7d", content)
             self.assertIn('"ron"', content)
         self.assertIn("--preflight", preflight)
+        self.assertNotIn("-i", preflight.split())
         self.assertNotIn("sync-token.dpapi", preflight)
         self.assertNotIn("sync_api_token", preflight)
+
+        restore = (
+            SCRIPT_ROOT / "Restore-ReserveLaptopPaymentRunner.ps1"
+        ).read_text(encoding="utf-8").casefold()
+        self.assertNotIn("-i", restore.split())
 
 
 if __name__ == "__main__":
