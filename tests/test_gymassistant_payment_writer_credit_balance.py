@@ -313,13 +313,11 @@ class CreditBalancePromptTests(unittest.TestCase):
                 side_effect=PaymentSafetyError("unknown prompt"),
             ),
             patch("gymassistant_payment_writer.post_command") as post_command,
-            patch("gymassistant_payment_writer.click_window_center") as mouse_fallback,
         ):
             with self.assertRaisesRegex(PaymentSafetyError, "unknown prompt"):
                 open_payment_dialog(1, "2255", 1, update=valid_update())
 
         post_command.assert_not_called()
-        mouse_fallback.assert_not_called()
 
 
 class CreditBalancePaymentValidationTests(unittest.TestCase):

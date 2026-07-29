@@ -774,6 +774,156 @@ class CommandProcessingTests(unittest.TestCase):
         self.assertNotIn("Sensitive Name", serialized)
         self.assertNotIn("61.00", serialized)
 
+    def test_payment_dialog_timeout_result_clears_receipt_and_allows_retry(self):
+        update = queued_update()
+        first_client = FakePortalClient()
+        deferred_writer = Mock(
+            return_value={
+                "status": "deferred",
+                "applied": False,
+                "reason": "payment_dialog_did_not_open",
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt_path = Path(temporary) / "receipts.json"
+            receipts = runner.ReceiptStore(receipt_path)
+            first_outcome = runner.process_one_update(
+                first_client,
+                update,
+                receipts,
+                runtime_config(),
+                523,
+                readiness_check=ready,
+                writer_call=deferred_writer,
+            )
+
+            self.assertIsNone(
+                receipts.state(7, "test-idempotency-key")
+            )
+
+            retry_client = FakePortalClient()
+            retry_writer = Mock(
+                return_value={"status": "applied", "applied": True}
+            )
+            retry_outcome = runner.process_one_update(
+                retry_client,
+                update,
+                receipts,
+                runtime_config(),
+                523,
+                readiness_check=ready,
+                writer_call=retry_writer,
+            )
+
+        self.assertEqual(first_outcome, "deferred")
+        self.assertEqual(
+            first_client.update_results[0][1],
+            {
+                "status": "deferred",
+                "reason": "payment_dialog_did_not_open",
+                "writer": "gymassistant_payment_writer",
+            },
+        )
+        self.assertEqual(retry_outcome, "applied")
+        deferred_writer.assert_called_once()
+        retry_writer.assert_called_once()
+
+    def test_deferred_receipt_clear_failure_stays_manual_only(self):
+        update = queued_update()
+        client = FakePortalClient()
+        writer = Mock(
+            return_value={
+                "status": "deferred",
+                "applied": False,
+                "reason": "payment_dialog_did_not_open",
+            }
+        )
+        real_atomic_write = runner.atomic_write_json
+        writes = {"count": 0}
+
+        def fail_second_write(*args, **kwargs):
+            writes["count"] += 1
+            if writes["count"] == 2:
+                raise OSError("disk full while clearing unapplied receipt")
+            return real_atomic_write(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt_path = Path(temporary) / "receipts.json"
+            receipts = runner.ReceiptStore(receipt_path)
+            with patch.object(
+                runner,
+                "atomic_write_json",
+                side_effect=fail_second_write,
+            ):
+                with self.assertRaisesRegex(
+                    runner.ReceiptLedgerError,
+                    "receipt_ledger_write_failed",
+                ):
+                    runner.process_one_update(
+                        client,
+                        update,
+                        receipts,
+                        runtime_config(),
+                        523,
+                        readiness_check=ready,
+                        writer_call=writer,
+                    )
+
+            reloaded = runner.ReceiptStore(receipt_path)
+
+        self.assertEqual(
+            reloaded.state(7, "test-idempotency-key"),
+            "writer_started",
+        )
+        self.assertEqual(client.update_results, [])
+
+    def test_malformed_or_unknown_deferred_result_stays_manual_only(self):
+        unsafe_results = (
+            {
+                "status": "deferred",
+                "applied": True,
+                "reason": "payment_dialog_did_not_open",
+            },
+            {
+                "status": "deferred",
+                "applied": False,
+                "reason": "unreviewed_retry_reason",
+            },
+        )
+
+        for index, unsafe_result in enumerate(unsafe_results, start=1):
+            with self.subTest(unsafe_result=unsafe_result):
+                update = queued_update(
+                    update_id=index,
+                    idempotency_key=f"unsafe-deferred-{index}",
+                )
+                client = FakePortalClient()
+                writer = Mock(return_value=unsafe_result)
+                with tempfile.TemporaryDirectory() as temporary:
+                    receipt_path = Path(temporary) / "receipts.json"
+                    receipts = runner.ReceiptStore(receipt_path)
+                    outcome = runner.process_one_update(
+                        client,
+                        update,
+                        receipts,
+                        runtime_config(),
+                        523,
+                        readiness_check=ready,
+                        writer_call=writer,
+                    )
+                    reloaded = runner.ReceiptStore(receipt_path)
+
+                self.assertEqual(outcome, "ambiguous")
+                self.assertEqual(
+                    reloaded.state(index, f"unsafe-deferred-{index}"),
+                    "ambiguous",
+                )
+                self.assertEqual(
+                    client.update_results[0][1]["error"],
+                    "manual_reconciliation_required",
+                )
+
 
 class SanitizedStateTests(unittest.TestCase):
     def test_status_contains_only_operational_summary(self):

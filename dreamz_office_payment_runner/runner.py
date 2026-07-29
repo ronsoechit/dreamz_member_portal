@@ -24,7 +24,7 @@ import uuid
 import gymassistant_payment_writer as payment_writer
 
 
-PACKAGE_VERSION = "1.0.1"
+PACKAGE_VERSION = "1.0.2"
 AGENT_ID = "dreamz_office"
 AGENT_LABEL = "Dreamz Office PC"
 PORTAL_URL = "https://dreamzmemberportal-production.up.railway.app"
@@ -800,14 +800,17 @@ def command_recency(command: dict, ttl_seconds: int, *, now: datetime | None = N
     return Readiness(True, "ready")
 
 
-def sanitized_deferred_reason(value: object) -> str:
+def retry_safe_deferred_reason(result: dict) -> str | None:
     allowed = {
         "desktop_not_idle",
         "payment_dialog_already_open",
+        "payment_dialog_did_not_open",
         "gym_assistant_not_running",
     }
-    reason = str(value or "").strip().lower()
-    return reason if reason in allowed else "workstation_not_ready"
+    if result.get("applied") is not False:
+        return None
+    reason = str(result.get("reason") or "").strip().lower()
+    return reason if reason in allowed else None
 
 
 def _positive_int(value: object, error: str) -> int:
@@ -1031,17 +1034,19 @@ def process_one_update(
         return "ambiguous"
 
     if str(result.get("status") or "").strip().lower() == "deferred":
-        receipts.clear_unapplied(update_id, idempotency_key)
-        _post_update_result_with_retry(
-            client,
-            update_id,
-            {
-                "status": "deferred",
-                "reason": sanitized_deferred_reason(result.get("reason")),
-                "writer": "gymassistant_payment_writer",
-            },
-        )
-        return "deferred"
+        deferred_reason = retry_safe_deferred_reason(result)
+        if deferred_reason:
+            receipts.clear_unapplied(update_id, idempotency_key)
+            _post_update_result_with_retry(
+                client,
+                update_id,
+                {
+                    "status": "deferred",
+                    "reason": deferred_reason,
+                    "writer": "gymassistant_payment_writer",
+                },
+            )
+            return "deferred"
     if str(result.get("status") or "").strip().lower() != "applied" or not result.get("applied"):
         try:
             receipts.mark_ambiguous(update_id, idempotency_key)

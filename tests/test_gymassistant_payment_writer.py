@@ -1,13 +1,17 @@
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from decimal import Decimal
 
 from gymassistant_payment_writer import (
     BlockingDialog,
+    PaymentDialogTimeout,
     Rect,
     WindowInfo,
     find_main_window,
     find_member_activation_prompt,
+    open_payment_dialog,
+    run_writer,
     wait_for_payment_dialog,
 )
 
@@ -154,6 +158,121 @@ class GymAssistantPaymentWriterTests(unittest.TestCase):
         self.assertEqual(hwnd, 99)
         accept_activation.assert_called_once_with(activation_dialog)
         self.assertEqual(activation_events, [activation_dialog.reason])
+
+    def test_run_writer_defers_when_payment_dialog_never_opens(self):
+        payload = {
+            "source_root": str(Path.cwd()),
+            "update": {"member_id": "18951"},
+        }
+
+        with (
+            patch("gymassistant_payment_writer.find_main_window", return_value=10),
+            patch("gymassistant_payment_writer.window_process_id", return_value=20),
+            patch("gymassistant_payment_writer.find_open_payment_dialog", return_value=None),
+            patch("gymassistant_payment_writer.find_dependent_payment_prompt", return_value=None),
+            patch("gymassistant_payment_writer.select_member"),
+            patch("gymassistant_payment_writer.member_view_blocking_reason", return_value=None),
+            patch(
+                "gymassistant_payment_writer.open_payment_dialog",
+                side_effect=PaymentDialogTimeout("payment form did not open"),
+            ),
+            patch("gymassistant_payment_writer.apply_payment") as apply_payment,
+        ):
+            result = run_writer(
+                payload,
+                apply=True,
+                timeout=1,
+                foreground_ui=True,
+            )
+
+        self.assertEqual(
+            result,
+            {
+                "status": "deferred",
+                "applied": False,
+                "member_id": "18951",
+                "reason": "payment_dialog_did_not_open",
+            },
+        )
+        apply_payment.assert_not_called()
+
+    def test_open_payment_dialog_retries_only_the_outer_button_handle(self):
+        outer_button = WindowInfo(
+            hwnd=42,
+            parent=10,
+            control_id=7,
+            class_name="Button",
+            text="Record a Payment",
+            enabled=True,
+            visible=True,
+            rect=Rect(10, 10, 110, 40),
+        )
+
+        with (
+            patch("gymassistant_payment_writer.user32") as user32,
+            patch("gymassistant_payment_writer.wait_until", return_value=outer_button),
+            patch("gymassistant_payment_writer.credit_balance_decline_authorized", return_value=False),
+            patch("gymassistant_payment_writer.read_selected_member_balance", return_value=Decimal("0.00")),
+            patch("gymassistant_payment_writer.find_credit_balance_prompt", return_value=None),
+            patch(
+                "gymassistant_payment_writer.wait_for_payment_dialog",
+                side_effect=PaymentDialogTimeout("payment form did not open"),
+            ) as wait_for_dialog,
+            patch("gymassistant_payment_writer.click_button") as click_button,
+            patch("gymassistant_payment_writer.post_command") as post_command,
+        ):
+            with self.assertRaises(PaymentDialogTimeout):
+                open_payment_dialog(
+                    10,
+                    "18951",
+                    1,
+                    update={},
+                )
+
+        self.assertEqual(wait_for_dialog.call_count, 3)
+        self.assertEqual(
+            [call.args for call in click_button.call_args_list],
+            [(42,), (42,)],
+        )
+        post_command.assert_called_once_with(10, 2004)
+        self.assertEqual(user32.SetForegroundWindow.call_count, 2)
+
+    def test_run_writer_keeps_post_commit_error_ambiguous(self):
+        payload = {
+            "source_root": str(Path.cwd()),
+            "update": {"member_id": "18951"},
+        }
+
+        with (
+            patch("gymassistant_payment_writer.find_main_window", return_value=10),
+            patch("gymassistant_payment_writer.window_process_id", return_value=20),
+            patch("gymassistant_payment_writer.find_open_payment_dialog", return_value=None),
+            patch("gymassistant_payment_writer.find_dependent_payment_prompt", return_value=None),
+            patch("gymassistant_payment_writer.select_member"),
+            patch("gymassistant_payment_writer.member_view_blocking_reason", return_value=None),
+            patch("gymassistant_payment_writer.open_payment_dialog", return_value=30),
+            patch(
+                "gymassistant_payment_writer.inspect_payment_dialog",
+                return_value={"current_balance": "0.00"},
+            ),
+            patch(
+                "gymassistant_payment_writer.apply_payment",
+                side_effect=RuntimeError("transaction result not observed"),
+            ),
+            patch("gymassistant_payment_writer.verify_member_payment_readback") as readback,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "transaction result not observed",
+            ):
+                run_writer(
+                    payload,
+                    apply=True,
+                    timeout=1,
+                    foreground_ui=True,
+                )
+
+        readback.assert_not_called()
 
 
 if __name__ == "__main__":

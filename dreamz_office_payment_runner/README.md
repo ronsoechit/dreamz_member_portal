@@ -82,10 +82,13 @@ A cooperative stop is checked between every payment. A named Windows mutex
 prevents two Office runners in the same interactive session. Before the
 official UI writer is invoked, a durable local receipt stores only an update
 id, an idempotency-key hash, state and timestamps. Success advances it to
-`applied` before API acknowledgement. A writer exception or interrupted
-`writer_started` state becomes manual reconciliation; a later claim never
-clicks Gym Assistant again. Invalid, missing or unwritable receipt state blocks
-the installed runner.
+`applied` before API acknowledgement. If Gym Assistant never opens the Member
+Payment form, the writer proves that the inner `Record Payment` button was not
+reached, clears the unapplied receipt and leaves the row available for a
+deliberate retry. Any error from the inner `Record Payment` click onward, or an
+interrupted `writer_started` state, becomes manual reconciliation; a later
+claim never clicks Gym Assistant again. Invalid, missing or unwritable receipt
+state blocks the installed runner.
 
 Logs and `state/status.json` contain only operational states, configured source
 root and counts. They do not contain member ids, names, amounts, API tokens,
@@ -155,8 +158,11 @@ uninstall snapshot; it refuses pre-upgrade or stale-ledger snapshots.
   is known to be unused.
 - Drive mappings are per logon session. The runner waits without claiming when
   the configured source is absent.
-- A crash after the durable `writer_started` receipt intentionally blocks
-  automatic retry. Staff must reconcile that payment manually.
+- A failure before the Member Payment form opens is safe to retry deliberately:
+  the inner `Record Payment` button was never reached.
+- A crash after the durable `writer_started` receipt, or any uncertainty from
+  the inner `Record Payment` click onward, intentionally blocks automatic
+  retry. Staff must reconcile that payment manually.
 - FEP/Portal authorization, upload scoping and queue idempotency remain the
   server-side authority. This package does not add another payment mutation
   route.

@@ -21,8 +21,6 @@ WM_COMMAND = 0x0111
 BM_CLICK = 0x00F5
 GA_COMMAND_RECORD_PAYMENT = 2004
 FEP_AUTO_PAYMENT_SOURCE = "fep_manager_bank_upload_auto"
-MOUSEEVENTF_LEFTDOWN = 0x0002
-MOUSEEVENTF_LEFTUP = 0x0004
 
 
 if os.name == "nt":
@@ -53,10 +51,6 @@ if os.name == "nt":
     user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
     user32.GetWindowThreadProcessId.restype = wintypes.DWORD
     user32.SetProcessDPIAware.restype = wintypes.BOOL
-    user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
-    user32.SetCursorPos.restype = wintypes.BOOL
-    user32.mouse_event.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p]
-    user32.mouse_event.restype = None
     user32.GetDlgCtrlID.argtypes = [wintypes.HWND]
     user32.GetDlgCtrlID.restype = ctypes.c_int
     user32.PostMessageW.argtypes = [wintypes.HWND, ctypes.c_uint, wintypes.WPARAM, wintypes.LPARAM]
@@ -191,16 +185,6 @@ def set_text(hwnd: int, text: str) -> None:
 
 def click_button(hwnd: int) -> None:
     user32.SendMessageW(hwnd, BM_CLICK, 0, 0)
-
-
-def click_window_center(info: WindowInfo) -> None:
-    x = int((info.rect.left + info.rect.right) / 2)
-    y = int((info.rect.top + info.rect.bottom) / 2)
-    user32.SetCursorPos(x, y)
-    time.sleep(0.05)
-    user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, None)
-    time.sleep(0.05)
-    user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, None)
 
 
 def post_command(hwnd: int, command_id: int) -> None:
@@ -802,7 +786,7 @@ def open_payment_dialog(
         )
     except PaymentDialogTimeout:
         user32.SetForegroundWindow(main_hwnd)
-        click_window_center(button)
+        click_button(button.hwnd)
         return wait_for_payment_dialog(
             member_id,
             timeout,
@@ -1150,14 +1134,24 @@ def run_writer(
         raise RuntimeError(blocking_reason)
     activation_events: list[str] = []
     credit_balance_events: list[dict] = []
-    dialog_hwnd = open_payment_dialog(
-        main_hwnd,
-        member_id,
-        timeout,
-        activation_events,
-        update=update,
-        credit_balance_events=credit_balance_events,
-    )
+    try:
+        dialog_hwnd = open_payment_dialog(
+            main_hwnd,
+            member_id,
+            timeout,
+            activation_events,
+            update=update,
+            credit_balance_events=credit_balance_events,
+        )
+    except PaymentDialogTimeout:
+        if apply:
+            return {
+                "status": "deferred",
+                "applied": False,
+                "member_id": member_id,
+                "reason": "payment_dialog_did_not_open",
+            }
+        raise
     if len(credit_balance_events) > 1:
         cancel_dialog(dialog_hwnd)
         raise PaymentSafetyError("Multiple credit-balance decisions were recorded for one payment.")
