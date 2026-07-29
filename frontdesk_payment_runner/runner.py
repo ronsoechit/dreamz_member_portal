@@ -24,13 +24,15 @@ import uuid
 import gymassistant_payment_writer as payment_writer
 
 
-PACKAGE_VERSION = "1.0.2"
-AGENT_ID = "dreamz_office"
-AGENT_LABEL = "Dreamz Office PC"
+PACKAGE_VERSION = "1.0.0"
+AGENT_ID = "frontdesk_dreamz"
+AGENT_LABEL = "Frontdesk Dreamz"
 PORTAL_URL = "https://dreamzmemberportal-production.up.railway.app"
-MUTEX_NAME = r"Local\DreamzOfficePaymentRunner"
-EXPECTED_COMPUTER_NAME = "DREAMZ-OFFICE-P"
-RESERVED_TRANSFER_ROOT = r"\\DREAMZ-OFFICE-P\Shared Operations"
+MUTEX_NAME = r"Local\DreamzFrontdeskPaymentManualOnce"
+EXPECTED_COMPUTER_NAME = "DREAMZ-FRNTDSK"
+EXPECTED_WINDOWS_USER = "Dreamz Fitness"
+EXPECTED_SOURCE_ROOT = r"C:\Gym Assistant 2.6"
+RESERVED_TRANSFER_ROOT = r"C:\DreamzPortalSync\Transfer"
 
 DEFAULT_POLL_SECONDS = 5
 DEFAULT_IDLE_SECONDS = 300
@@ -50,6 +52,7 @@ UOI_NAME = 2
 
 if os.name == "nt":
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
     _user32 = ctypes.WinDLL("user32", use_last_error=True)
 
     _kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
@@ -68,6 +71,12 @@ if os.name == "nt":
     _kernel32.ProcessIdToSessionId.restype = wintypes.BOOL
     _kernel32.WTSGetActiveConsoleSessionId.restype = wintypes.DWORD
 
+    _advapi32.GetUserNameW.argtypes = [
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    _advapi32.GetUserNameW.restype = wintypes.BOOL
+
     _user32.OpenInputDesktop.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     _user32.OpenInputDesktop.restype = wintypes.HANDLE
     _user32.CloseDesktop.argtypes = [wintypes.HANDLE]
@@ -83,6 +92,7 @@ if os.name == "nt":
     _user32.GetForegroundWindow.restype = wintypes.HWND
 else:
     _kernel32 = None
+    _advapi32 = None
     _user32 = None
 
 
@@ -222,7 +232,7 @@ def load_runtime_config(path: Path) -> RuntimeConfig:
     }
     if forbidden.intersection(raw):
         raise RunnerError("runtime_config_contains_fixed_or_secret_field")
-    return RuntimeConfig(
+    config = RuntimeConfig(
         source_root=normalize_configured_source_root(raw.get("source_root")),
         poll_seconds=_bounded_int(
             raw.get("poll_seconds"),
@@ -255,6 +265,13 @@ def load_runtime_config(path: Path) -> RuntimeConfig:
             maximum=120,
         ),
     )
+    if normalize_windows_path(config.source_root) != normalize_windows_path(
+        EXPECTED_SOURCE_ROOT
+    ):
+        raise RunnerError("frontdesk_source_root_mismatch")
+    if int(config.idle_seconds) != DEFAULT_IDLE_SECONDS:
+        raise RunnerError("frontdesk_idle_floor_mismatch")
+    return config
 
 
 def atomic_write_json(path: Path, payload: dict, *, durable: bool = False) -> None:
@@ -575,6 +592,17 @@ def native_computer_name() -> str | None:
     return value or None
 
 
+def native_windows_user() -> str | None:
+    if os.name != "nt":
+        return None
+    buffer = ctypes.create_unicode_buffer(257)
+    size = wintypes.DWORD(len(buffer))
+    if not _advapi32.GetUserNameW(buffer, ctypes.byref(size)):
+        return None
+    value = buffer.value.strip()
+    return value or None
+
+
 def current_input_desktop_name() -> str | None:
     if os.name != "nt":
         return None
@@ -677,6 +705,11 @@ def workstation_readiness(config: RuntimeConfig) -> Readiness:
         return Readiness(False, "computer_identity_unavailable")
     if computer_name.casefold() != EXPECTED_COMPUTER_NAME.casefold():
         return Readiness(False, "unexpected_computer")
+    windows_user = native_windows_user()
+    if not windows_user:
+        return Readiness(False, "windows_user_identity_unavailable")
+    if windows_user.casefold() != EXPECTED_WINDOWS_USER.casefold():
+        return Readiness(False, "unexpected_windows_user")
     desktop = desktop_availability()
     if not desktop.ready:
         return desktop
@@ -710,7 +743,7 @@ class PortalClient:
         body = None
         headers = {
             "Accept": "application/json",
-            "User-Agent": f"Dreamz-OfficePaymentRunner/{PACKAGE_VERSION}",
+            "User-Agent": f"Dreamz-FrontdeskPaymentRunner/{PACKAGE_VERSION}",
             "X-Sync-Agent": AGENT_ID,
             "X-Sync-Token": self._token,
         }
@@ -1439,7 +1472,7 @@ def process_available_command(
 
 def configure_logger(path: Path) -> logging.Logger:
     path.parent.mkdir(parents=True, exist_ok=True)
-    logger = logging.getLogger("dreamz_office_payment_runner")
+    logger = logging.getLogger("frontdesk_payment_runner")
     logger.setLevel(logging.INFO)
     logger.propagate = False
     for handler in list(logger.handlers):
@@ -1602,6 +1635,113 @@ def run_loop(
         mutex.close()
 
 
+def run_once(
+    config_path: Path,
+    *,
+    max_command_limit: int = MAX_COMMAND_LIMIT,
+    client_factory: Callable[[str, int], PortalClient] = PortalClient,
+) -> int:
+    """Process at most one fixed-scope Frontdesk command, then exit."""
+    global MAX_COMMAND_LIMIT
+
+    home = config_path.parent
+    state_dir = home / "state"
+    status = StatusStore(state_dir / "status.json")
+    stop_path = state_dir / "stop.request"
+    logger = configure_logger(home / "logs" / "runner.log")
+    mutex = NamedMutex()
+    receipts: ReceiptStore | None = None
+    original_limit = MAX_COMMAND_LIMIT
+
+    try:
+        MAX_COMMAND_LIMIT = max(1, min(int(max_command_limit), original_limit))
+        if not mutex.acquire():
+            logger.error("state=stopped reason=runner_already_active")
+            return 3
+        status.update(
+            "starting",
+            reason="startup_validation",
+            receipt_count=0,
+        )
+        config = load_runtime_config(config_path)
+        status.set_source_root(config.source_root)
+        receipts = ReceiptStore(
+            state_dir / "payment-receipts.json",
+            require_existing=True,
+        )
+        if stop_path.exists():
+            status.update(
+                "stopped",
+                reason="stop_requested",
+                receipt_count=receipts.count(),
+            )
+            return 3
+
+        token = str(os.getenv("FEP_PAYMENT_RUNNER_TOKEN") or "").strip()
+        if not token:
+            status.update(
+                "configuration_error",
+                reason="payment_token_missing",
+                receipt_count=receipts.count(),
+            )
+            return 2
+        client = client_factory(token, config.request_timeout_seconds)
+        token = ""
+        os.environ.pop("FEP_PAYMENT_RUNNER_TOKEN", None)
+
+        state, summary = process_available_command(
+            client,
+            receipts,
+            config,
+            stop_check=stop_path.exists,
+        )
+        status.update(
+            state,
+            reason=None if state == "completed" else state,
+            summary=summary,
+            receipt_count=receipts.count(),
+        )
+        print(
+            json.dumps(
+                {
+                    "agent_id": AGENT_ID,
+                    "state": state,
+                    "summary": summary.public(),
+                },
+                sort_keys=True,
+            )
+        )
+        if state in {"completed", "idle"}:
+            return 0
+        if state == "payment_result_ack_pending":
+            return 4
+        return 3
+    except RunnerError as exc:
+        reason = str(exc)
+        status.update(
+            "stopped",
+            reason=reason,
+            receipt_count=receipts.count() if receipts else 0,
+        )
+        logger.error("state=stopped reason=%s", reason)
+        return 3
+    except Exception:
+        status.update(
+            "stopped",
+            reason="unexpected_runner_error",
+            receipt_count=receipts.count() if receipts else 0,
+        )
+        logger.error("state=stopped reason=unexpected_runner_error")
+        return 3
+    finally:
+        MAX_COMMAND_LIMIT = original_limit
+        os.environ.pop("FEP_PAYMENT_RUNNER_TOKEN", None)
+        for handler in list(logger.handlers):
+            logger.removeHandler(handler)
+            handler.close()
+        mutex.close()
+
+
 def run_health_check(config_path: Path) -> int:
     """Validate local non-secret configuration/state without API or UI access."""
     try:
@@ -1641,9 +1781,9 @@ def run_health_check(config_path: Path) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Dedicated outbound-only FEP payment runner. "
-            "Agent dreamz_office is fixed; the exact Gym Assistant source root "
-            "must be recorded by the installer."
+            "Manual one-shot outbound-only Frontdesk FEP payment runner. "
+            "Agent frontdesk_dreamz, host, user, idle floor, and Gym Assistant "
+            "source are fixed."
         )
     )
     parser.add_argument(
@@ -1652,13 +1792,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path(__file__).resolve().parents[1] / "runtime.json",
         help="Path to the non-secret runtime tuning file.",
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument(
+        "--once",
+        action="store_true",
+        help="Process at most one fixed-scope payment command and exit.",
+    )
+    mode.add_argument(
         "--health-check",
         action="store_true",
         help=(
             "Validate only local non-secret config and receipt state. "
             "Does not contact Portal, inspect Gym Assistant, claim, or write."
         ),
+    )
+    parser.add_argument(
+        "--max-command-limit",
+        type=int,
+        choices=range(1, MAX_COMMAND_LIMIT + 1),
+        default=MAX_COMMAND_LIMIT,
+        help="Local upper bound for the single command (1-500).",
     )
     return parser
 
@@ -1668,7 +1821,10 @@ def main(argv: list[str] | None = None) -> int:
     config_path = args.config.resolve()
     if args.health_check:
         return run_health_check(config_path)
-    return run_loop(config_path)
+    return run_once(
+        config_path,
+        max_command_limit=args.max_command_limit,
+    )
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -20,8 +20,7 @@ WM_SETTEXT = 0x000C
 WM_COMMAND = 0x0111
 BM_CLICK = 0x00F5
 GA_COMMAND_RECORD_PAYMENT = 2004
-MOUSEEVENTF_LEFTDOWN = 0x0002
-MOUSEEVENTF_LEFTUP = 0x0004
+FEP_AUTO_PAYMENT_SOURCE = "fep_manager_bank_upload_auto"
 
 
 if os.name == "nt":
@@ -49,11 +48,9 @@ if os.name == "nt":
     user32.SetForegroundWindow.restype = wintypes.BOOL
     user32.GetParent.argtypes = [wintypes.HWND]
     user32.GetParent.restype = wintypes.HWND
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
     user32.SetProcessDPIAware.restype = wintypes.BOOL
-    user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
-    user32.SetCursorPos.restype = wintypes.BOOL
-    user32.mouse_event.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p]
-    user32.mouse_event.restype = None
     user32.GetDlgCtrlID.argtypes = [wintypes.HWND]
     user32.GetDlgCtrlID.restype = ctypes.c_int
     user32.PostMessageW.argtypes = [wintypes.HWND, ctypes.c_uint, wintypes.WPARAM, wintypes.LPARAM]
@@ -111,6 +108,21 @@ class BlockingDialog:
     texts: list[str]
 
 
+@dataclass
+class CreditBalancePrompt:
+    hwnd: int
+    display_amount: str
+    texts: list[str]
+
+
+class PaymentDialogTimeout(RuntimeError):
+    """The expected payment form did not appear before the bounded deadline."""
+
+
+class PaymentSafetyError(RuntimeError):
+    """Gym Assistant showed a state that the guarded writer cannot prove safe."""
+
+
 def require_windows() -> None:
     if os.name != "nt":
         raise RuntimeError("Gym Assistant payment writer only runs on Windows.")
@@ -134,6 +146,18 @@ def window_text(hwnd: int) -> str:
     buffer = ctypes.create_unicode_buffer(max(length + 1, 256))
     user32.GetWindowTextW(hwnd, buffer, len(buffer))
     return buffer.value
+
+
+def window_process_id(hwnd: int) -> int:
+    process_id = wintypes.DWORD()
+    thread_id = user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+    if not thread_id or not process_id.value:
+        raise RuntimeError("Could not determine the Gym Assistant window process.")
+    return int(process_id.value)
+
+
+def window_is_visible(hwnd: int) -> bool:
+    return bool(user32.IsWindowVisible(hwnd))
 
 
 def class_name(hwnd: int) -> str:
@@ -161,16 +185,6 @@ def set_text(hwnd: int, text: str) -> None:
 
 def click_button(hwnd: int) -> None:
     user32.SendMessageW(hwnd, BM_CLICK, 0, 0)
-
-
-def click_window_center(info: WindowInfo) -> None:
-    x = int((info.rect.left + info.rect.right) / 2)
-    y = int((info.rect.top + info.rect.bottom) / 2)
-    user32.SetCursorPos(x, y)
-    time.sleep(0.05)
-    user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, None)
-    time.sleep(0.05)
-    user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, None)
 
 
 def post_command(hwnd: int, command_id: int) -> None:
@@ -249,17 +263,28 @@ def find_main_window(source_root: Path) -> int:
     )
 
 
-def find_open_payment_dialog(member_id: str | None = None) -> int | None:
+def find_open_payment_dialog(
+    member_id: str | None = None,
+    process_id: int | None = None,
+) -> int | None:
     prefix = f"Member Payment for #{member_id}," if member_id else "Member Payment for #"
     for info in enum_top_windows():
-        if info.visible and info.text.startswith(prefix):
+        if (
+            info.visible
+            and info.text.startswith(prefix)
+            and (process_id is None or window_process_id(info.hwnd) == process_id)
+        ):
             return info.hwnd
     return None
 
 
-def find_transaction_payment_dialog() -> int | None:
+def find_transaction_payment_dialog(process_id: int | None = None) -> int | None:
     for info in enum_top_windows():
-        if info.visible and info.text.startswith("Transaction - Member Payment"):
+        if (
+            info.visible
+            and info.text.startswith("Transaction - Member Payment")
+            and (process_id is None or window_process_id(info.hwnd) == process_id)
+        ):
             return info.hwnd
     return None
 
@@ -273,9 +298,11 @@ def dialog_texts(hwnd: int) -> list[str]:
     return [text.strip() for text in texts if text and text.strip()]
 
 
-def find_credit_card_approval_dialog() -> int | None:
+def find_credit_card_approval_dialog(process_id: int | None = None) -> int | None:
     for info in enum_top_windows():
         if not info.visible:
+            continue
+        if process_id is not None and window_process_id(info.hwnd) != process_id:
             continue
         combined = " ".join(dialog_texts(info.hwnd)).casefold()
         if "was credit card charge approved" in combined and "approved" in combined:
@@ -283,9 +310,11 @@ def find_credit_card_approval_dialog() -> int | None:
     return None
 
 
-def find_credit_card_result_dialog() -> int | None:
+def find_credit_card_result_dialog(process_id: int | None = None) -> int | None:
     for info in enum_top_windows():
         if not info.visible:
+            continue
+        if process_id is not None and window_process_id(info.hwnd) != process_id:
             continue
         combined = " ".join(dialog_texts(info.hwnd)).casefold()
         if info.text.startswith("CC Charge Results") or ("result: approved" in combined and "amount:" in combined):
@@ -293,10 +322,15 @@ def find_credit_card_result_dialog() -> int | None:
     return None
 
 
-def find_next_payment_due_dialog(member_id: str | None = None) -> int | None:
+def find_next_payment_due_dialog(
+    member_id: str | None = None,
+    process_id: int | None = None,
+) -> int | None:
     member_fragment = f"for #{member_id}" if member_id else "for #"
     for info in enum_top_windows():
         if not info.visible:
+            continue
+        if process_id is not None and window_process_id(info.hwnd) != process_id:
             continue
         combined = " ".join(dialog_texts(info.hwnd)).casefold()
         if (
@@ -308,9 +342,11 @@ def find_next_payment_due_dialog(member_id: str | None = None) -> int | None:
     return None
 
 
-def find_dependent_payment_prompt() -> BlockingDialog | None:
+def find_dependent_payment_prompt(process_id: int | None = None) -> BlockingDialog | None:
     for info in enum_top_windows():
         if not info.visible:
+            continue
+        if process_id is not None and window_process_id(info.hwnd) != process_id:
             continue
         texts = dialog_texts(info.hwnd)
         combined = " ".join(texts)
@@ -330,10 +366,15 @@ def find_dependent_payment_prompt() -> BlockingDialog | None:
     return None
 
 
-def find_member_activation_prompt(member_id: str | None = None) -> BlockingDialog | None:
+def find_member_activation_prompt(
+    member_id: str | None = None,
+    process_id: int | None = None,
+) -> BlockingDialog | None:
     member_fragment = f"#{member_id}" if member_id else "#"
     for info in enum_top_windows():
         if not info.visible:
+            continue
+        if process_id is not None and window_process_id(info.hwnd) != process_id:
             continue
         texts = dialog_texts(info.hwnd)
         combined = " ".join(texts)
@@ -344,6 +385,85 @@ def find_member_activation_prompt(member_id: str | None = None) -> BlockingDialo
             continue
         reason = "Gym Assistant member was inactive; activation prompt was accepted before recording payment."
         return BlockingDialog(info.hwnd, reason, texts)
+    return None
+
+
+_CREDIT_BALANCE_PROMPT_RE = re.compile(
+    r"Member has a credit balance of\s+"
+    r"(?P<amount>\$?\s*\d[\d,]*\.\d{2}\s*(?:\(CR\)|CR)?)"
+    r"\s*\.?\s*Apply this balance now\?",
+    re.IGNORECASE,
+)
+
+
+def find_credit_balance_prompt(main_hwnd: int) -> CreditBalancePrompt | None:
+    main_process_id = window_process_id(main_hwnd)
+    matches: list[CreditBalancePrompt] = []
+    for info in enum_top_windows():
+        if not info.visible or info.class_name != "#32770":
+            continue
+        if window_process_id(info.hwnd) != main_process_id:
+            continue
+        texts = dialog_texts(info.hwnd)
+        combined = " ".join(" ".join(text.split()) for text in texts)
+        match = _CREDIT_BALANCE_PROMPT_RE.search(combined)
+        if not match:
+            continue
+        matches.append(
+            CreditBalancePrompt(
+                hwnd=info.hwnd,
+                display_amount=" ".join(match.group("amount").split()),
+                texts=texts,
+            )
+        )
+    if len(matches) > 1:
+        raise PaymentSafetyError(
+            "Multiple matching Gym Assistant credit-balance prompts are visible; refusing to choose one."
+        )
+    return matches[0] if matches else None
+
+
+def dialog_enabled_buttons(dialog_hwnd: int) -> list[WindowInfo]:
+    return [
+        child
+        for child in enum_children(dialog_hwnd)
+        if child.class_name == "Button" and child.enabled and child.visible
+    ]
+
+
+def decline_credit_balance_prompt(prompt: CreditBalancePrompt, timeout: float) -> None:
+    buttons = dialog_enabled_buttons(prompt.hwnd)
+    labels = [button.text.replace("&", "").strip().casefold() for button in buttons]
+    no_buttons = [button for button, label in zip(buttons, labels) if label == "no"]
+    yes_buttons = [button for button, label in zip(buttons, labels) if label == "yes"]
+    if len(no_buttons) != 1 or len(yes_buttons) != 1 or len(buttons) != 2:
+        raise PaymentSafetyError(
+            "Gym Assistant credit-balance prompt did not contain exactly one enabled Yes and one enabled No button."
+        )
+    click_button(no_buttons[0].hwnd)
+    wait_until(
+        lambda: not window_is_visible(prompt.hwnd),
+        timeout,
+        "Gym Assistant credit-balance prompt did not close after choosing No.",
+    )
+
+
+def find_unknown_gym_yes_no_prompt(main_hwnd: int) -> BlockingDialog | None:
+    main_process_id = window_process_id(main_hwnd)
+    for info in enum_top_windows():
+        if not info.visible or info.class_name != "#32770":
+            continue
+        if window_process_id(info.hwnd) != main_process_id:
+            continue
+        buttons = dialog_enabled_buttons(info.hwnd)
+        labels = [button.text.replace("&", "").strip().casefold() for button in buttons]
+        if labels.count("yes") == 1 and labels.count("no") == 1:
+            texts = dialog_texts(info.hwnd)
+            return BlockingDialog(
+                info.hwnd,
+                "unrecognized Gym Assistant Yes/No prompt; manual review required.",
+                texts,
+            )
     return None
 
 
@@ -388,25 +508,78 @@ def member_view_blocking_reason(main_hwnd: int) -> str | None:
     return None
 
 
-def wait_for_payment_dialog(member_id: str, timeout: float, activation_events: list[str] | None = None) -> int:
+def wait_for_payment_dialog(
+    member_id: str,
+    timeout: float,
+    activation_events: list[str] | None = None,
+    *,
+    main_hwnd: int | None = None,
+    allow_credit_balance_decline: bool = False,
+    expected_credit_balance: Decimal | None = None,
+    credit_balance_events: list[dict] | None = None,
+) -> int:
     deadline = time.time() + timeout
+    gym_process_id = window_process_id(main_hwnd) if main_hwnd is not None else None
     while time.time() < deadline:
-        hwnd = find_open_payment_dialog(member_id)
+        hwnd = find_open_payment_dialog(member_id, process_id=gym_process_id)
         if hwnd:
             return hwnd
-        blocking_dialog = find_dependent_payment_prompt()
+        blocking_dialog = find_dependent_payment_prompt(process_id=gym_process_id)
         if blocking_dialog:
             cancel_blocking_dialog(blocking_dialog)
             raise RuntimeError(blocking_dialog.reason)
-        activation_dialog = find_member_activation_prompt(member_id)
+        activation_dialog = find_member_activation_prompt(
+            member_id,
+            process_id=gym_process_id,
+        )
         if activation_dialog:
             accept_activation_dialog(activation_dialog)
             if activation_events is not None:
                 activation_events.append(activation_dialog.reason)
             time.sleep(0.3)
             continue
+        if main_hwnd is not None:
+            credit_prompt = find_credit_balance_prompt(main_hwnd)
+            if credit_prompt:
+                if not allow_credit_balance_decline:
+                    raise PaymentSafetyError(
+                        "Gym Assistant asked to apply a credit balance, but this update is not an authorized "
+                        "FEP automatic bank payment."
+                    )
+                prompt_amount = abs(decimal_money(credit_prompt.display_amount))
+                if expected_credit_balance is None or expected_credit_balance >= 0:
+                    raise PaymentSafetyError(
+                        "Gym Assistant showed a credit-balance prompt, but the selected member did not have "
+                        "a matching credit balance before Record a Payment was clicked."
+                    )
+                if abs(expected_credit_balance) != prompt_amount:
+                    raise PaymentSafetyError(
+                        f"Gym Assistant credit prompt amount {credit_prompt.display_amount} does not match "
+                        f"the selected member credit {expected_credit_balance}."
+                    )
+                if credit_balance_events:
+                    raise PaymentSafetyError(
+                        "Gym Assistant showed the credit-balance prompt more than once for one payment."
+                    )
+                decline_credit_balance_prompt(
+                    credit_prompt,
+                    max(0.5, min(timeout, deadline - time.time())),
+                )
+                if credit_balance_events is not None:
+                    credit_balance_events.append(
+                        {
+                            "action": "declined_apply_credit_balance",
+                            "display_amount": credit_prompt.display_amount,
+                            "selected_member_credit": str(expected_credit_balance),
+                        }
+                    )
+                time.sleep(0.2)
+                continue
+            unknown_prompt = find_unknown_gym_yes_no_prompt(main_hwnd)
+            if unknown_prompt:
+                raise PaymentSafetyError(unknown_prompt.reason)
         time.sleep(0.2)
-    raise RuntimeError(f"Timed out waiting for Member Payment dialog for #{member_id}.")
+    raise PaymentDialogTimeout(f"Timed out waiting for Member Payment dialog for #{member_id}.")
 
 
 def find_record_payment_button(main_hwnd: int) -> WindowInfo | None:
@@ -475,8 +648,13 @@ def value_right_of_label_prefix(
 
 
 def decimal_money(value) -> Decimal:
+    text = str(value).replace("$", "").replace(",", "").strip()
+    is_credit = bool(re.search(r"(?:\(\s*CR\s*\)|\bCR\b)\s*$", text, re.IGNORECASE))
+    if is_credit:
+        text = re.sub(r"(?:\(\s*CR\s*\)|\bCR\b)\s*$", "", text, flags=re.IGNORECASE).strip()
     try:
-        return Decimal(str(value).replace("$", "").replace(",", "").strip()).quantize(Decimal("0.01"))
+        parsed = Decimal(text).quantize(Decimal("0.01"))
+        return -abs(parsed) if is_credit else parsed
     except (InvalidOperation, ValueError):
         raise RuntimeError(f"Could not parse money value {value!r}.")
 
@@ -521,27 +699,110 @@ def select_member(main_hwnd: int, member_id: str, timeout: float) -> None:
     wait_until(payment_button_enabled, timeout, f"Timed out selecting Gym Assistant member #{member_id}.")
 
 
-def open_payment_dialog(main_hwnd: int, member_id: str, timeout: float, activation_events: list[str] | None = None) -> int:
+def selected_member_heading(children: list[WindowInfo], member_id: str) -> str:
+    return next(
+        (
+            child.text
+            for child in children
+            if child.text and re.match(rf"^#{re.escape(member_id)}(?:\s|$)", child.text.strip())
+        ),
+        "",
+    )
+
+
+def read_selected_member_balance(main_hwnd: int, member_id: str) -> Decimal:
+    children = enum_children(main_hwnd)
+    if not selected_member_heading(children, member_id):
+        raise PaymentSafetyError(
+            f"Gym Assistant main view does not prove that member #{member_id} is selected."
+        )
+    return decimal_money(value_right_of(children, "Current Balance:").text)
+
+
+def credit_balance_decline_authorized(update: dict) -> bool:
+    try:
+        member_id = str(update.get("member_id") or "").strip()
+        period_start = parse_period_start(str(update.get("membership_period") or "").strip())
+        gym_amount = decimal_money(update.get("gym_billing_amount"))
+        bank_amount = decimal_money(update.get("bank_amount"))
+        target_values = update.get("target_values") or {}
+        target_due = date.fromisoformat(str(target_values.get("next_payment") or target_values.get("due_date")))
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return False
+    return (
+        str(update.get("source") or "").strip() == FEP_AUTO_PAYMENT_SOURCE
+        and bool(re.fullmatch(r"\d+", member_id))
+        and gym_amount > 0
+        and bank_amount >= gym_amount
+        and target_due == next_month_start(period_start)
+    )
+
+
+def open_payment_dialog(
+    main_hwnd: int,
+    member_id: str,
+    timeout: float,
+    activation_events: list[str] | None = None,
+    *,
+    update: dict | None = None,
+    credit_balance_events: list[dict] | None = None,
+) -> int:
     user32.SetForegroundWindow(main_hwnd)
     button = wait_until(
         lambda: find_record_payment_button(main_hwnd),
         timeout,
         "Record a Payment button is not enabled.",
     )
+    allow_credit_balance_decline = credit_balance_decline_authorized(update or {})
+    selected_member_balance = read_selected_member_balance(main_hwnd, member_id)
+    stale_credit_prompt = find_credit_balance_prompt(main_hwnd)
+    if stale_credit_prompt:
+        raise PaymentSafetyError(
+            "A Gym Assistant credit-balance prompt was already visible before this payment attempt; "
+            "refusing to associate it with the selected member."
+        )
     click_button(button.hwnd)
     try:
-        return wait_for_payment_dialog(member_id, min(timeout, 2.0), activation_events)
-    except RuntimeError:
+        return wait_for_payment_dialog(
+            member_id,
+            min(timeout, 2.0),
+            activation_events,
+            main_hwnd=main_hwnd,
+            allow_credit_balance_decline=allow_credit_balance_decline,
+            expected_credit_balance=selected_member_balance,
+            credit_balance_events=credit_balance_events,
+        )
+    except PaymentDialogTimeout:
         post_command(main_hwnd, GA_COMMAND_RECORD_PAYMENT)
     try:
-        return wait_for_payment_dialog(member_id, min(timeout, 2.0), activation_events)
-    except RuntimeError:
+        return wait_for_payment_dialog(
+            member_id,
+            min(timeout, 2.0),
+            activation_events,
+            main_hwnd=main_hwnd,
+            allow_credit_balance_decline=allow_credit_balance_decline,
+            expected_credit_balance=selected_member_balance,
+            credit_balance_events=credit_balance_events,
+        )
+    except PaymentDialogTimeout:
         user32.SetForegroundWindow(main_hwnd)
-        click_window_center(button)
-        return wait_for_payment_dialog(member_id, timeout, activation_events)
+        click_button(button.hwnd)
+        return wait_for_payment_dialog(
+            member_id,
+            timeout,
+            activation_events,
+            main_hwnd=main_hwnd,
+            allow_credit_balance_decline=allow_credit_balance_decline,
+            expected_credit_balance=selected_member_balance,
+            credit_balance_events=credit_balance_events,
+        )
 
 
-def inspect_payment_dialog(dialog_hwnd: int, update: dict) -> dict:
+def inspect_payment_dialog(
+    dialog_hwnd: int,
+    update: dict,
+    credit_balance_event: dict | None = None,
+) -> dict:
     target_values = update.get("target_values") or {}
     member_id = str(update.get("member_id") or "").strip()
     membership_period = str(update.get("membership_period") or "").strip()
@@ -562,6 +823,9 @@ def inspect_payment_dialog(dialog_hwnd: int, update: dict) -> dict:
         "billing_periods": get_text(value_right_of_label_prefix(children, "Billing Periods", ("ComboBox", "Edit")).hwnd),
         "membership_fees": get_text(value_right_of(children, "Membership Fees:", ("Edit", "Static")).hwnd),
         "other_fees": get_text(value_right_of(children, "Other Fees:", ("Edit", "Static")).hwnd),
+        "payment_on_current_balance": get_text(
+            value_right_of(children, "Payment on Current Balance:", ("Edit", "Static")).hwnd
+        ),
         "total_payment_due": value_right_of(children, "Total Payment Due:").text,
         "next_payment_due": get_text(value_right_of(children, "Next Payment Due:", ("Edit", "Static")).hwnd),
     }
@@ -574,7 +838,20 @@ def inspect_payment_dialog(dialog_hwnd: int, update: dict) -> dict:
         )
     if not money_equal(observed["billing_amount"], amount):
         raise RuntimeError(f"Billing amount {observed['billing_amount']} does not match expected {amount}.")
-    if not money_equal(observed["current_balance"], Decimal("0.00")):
+    current_balance = decimal_money(observed["current_balance"])
+    if credit_balance_event:
+        prompt_amount = abs(decimal_money(credit_balance_event.get("display_amount")))
+        if current_balance >= 0:
+            raise RuntimeError(
+                f"Current balance is {observed['current_balance']} after declining a credit; "
+                "the original credit was not preserved."
+            )
+        if abs(current_balance) != prompt_amount:
+            raise RuntimeError(
+                f"Current credit balance {observed['current_balance']} does not match the declined prompt amount "
+                f"{credit_balance_event.get('display_amount')}."
+            )
+    elif current_balance != Decimal("0.00"):
         raise RuntimeError(f"Current balance is {observed['current_balance']}; manual review required.")
     if observed["billing_periods"].strip() != "1":
         raise RuntimeError(f"Billing periods is {observed['billing_periods']}, expected 1.")
@@ -582,6 +859,11 @@ def inspect_payment_dialog(dialog_hwnd: int, update: dict) -> dict:
         raise RuntimeError(f"Membership fees {observed['membership_fees']} does not match expected {amount}.")
     if not money_equal(observed["other_fees"], Decimal("0.00")):
         raise RuntimeError(f"Other fees is {observed['other_fees']}; manual review required.")
+    if not money_equal(observed["payment_on_current_balance"], Decimal("0.00")):
+        raise RuntimeError(
+            f"Payment on current balance is {observed['payment_on_current_balance']}; "
+            "membership-only payment required."
+        )
     if not money_equal(observed["total_payment_due"], amount):
         raise RuntimeError(f"Total payment due {observed['total_payment_due']} does not match expected {amount}.")
     if observed["next_payment_due"] != iso_to_gym_date(str(target_due)):
@@ -601,7 +883,8 @@ def apply_payment(
     timeout: float,
     payment_method: str = "Credit Card",
     member_id: str | None = None,
-) -> None:
+) -> dict:
+    gym_process_id = window_process_id(dialog_hwnd)
     children = enum_children(dialog_hwnd)
     record = find_child(children, text="&Record Payment", class_name_="Button", enabled=True)
     click_button(record.hwnd)
@@ -609,18 +892,21 @@ def apply_payment(
     deadline = time.time() + timeout
     transaction_hwnd = None
     while time.time() < deadline:
-        transaction_hwnd = find_transaction_payment_dialog()
+        transaction_hwnd = find_transaction_payment_dialog(process_id=gym_process_id)
         if transaction_hwnd:
             break
-        if not find_open_payment_dialog():
+        if not find_open_payment_dialog(process_id=gym_process_id):
             grace_deadline = min(deadline, time.time() + 1.0)
             while time.time() < grace_deadline:
-                transaction_hwnd = find_transaction_payment_dialog()
+                transaction_hwnd = find_transaction_payment_dialog(process_id=gym_process_id)
                 if transaction_hwnd:
                     break
                 time.sleep(0.1)
             if not transaction_hwnd:
-                return
+                raise PaymentSafetyError(
+                    "Member Payment dialog closed without an observed transaction dialog; "
+                    "payment outcome is ambiguous and requires manual reconciliation."
+                )
             break
         time.sleep(0.1)
 
@@ -632,7 +918,7 @@ def apply_payment(
         raise RuntimeError(f"Could not find enabled payment method button {payment_method!r}.")
 
     def transaction_closed():
-        return not find_transaction_payment_dialog()
+        return not find_transaction_payment_dialog(process_id=gym_process_id)
 
     wait_until(
         transaction_closed,
@@ -644,7 +930,7 @@ def apply_payment(
         approval_deadline = time.time() + min(timeout, 5.0)
         approval_hwnd = None
         while time.time() < approval_deadline:
-            approval_hwnd = find_credit_card_approval_dialog()
+            approval_hwnd = find_credit_card_approval_dialog(process_id=gym_process_id)
             if approval_hwnd:
                 break
             time.sleep(0.1)
@@ -655,7 +941,7 @@ def apply_payment(
                 raise RuntimeError("Could not find enabled Credit Card approval button.")
 
             wait_until(
-                lambda: not find_credit_card_approval_dialog(),
+                lambda: not find_credit_card_approval_dialog(process_id=gym_process_id),
                 timeout,
                 "Timed out waiting for Gym Assistant credit card approval dialog to close.",
             )
@@ -663,7 +949,7 @@ def apply_payment(
         result_deadline = time.time() + min(timeout, 5.0)
         result_hwnd = None
         while time.time() < result_deadline:
-            result_hwnd = find_credit_card_result_dialog()
+            result_hwnd = find_credit_card_result_dialog(process_id=gym_process_id)
             if result_hwnd:
                 break
             time.sleep(0.1)
@@ -673,17 +959,17 @@ def apply_payment(
                 raise RuntimeError("Could not find enabled OK button on Credit Card result dialog.")
 
             wait_until(
-                lambda: not find_credit_card_result_dialog(),
+                lambda: not find_credit_card_result_dialog(process_id=gym_process_id),
                 timeout,
                 "Timed out waiting for Gym Assistant credit card result dialog to close.",
             )
 
     wait_until(
         lambda: (
-            not find_open_payment_dialog()
-            and not find_transaction_payment_dialog()
-            and not find_credit_card_approval_dialog()
-            and not find_credit_card_result_dialog()
+            not find_open_payment_dialog(process_id=gym_process_id)
+            and not find_transaction_payment_dialog(process_id=gym_process_id)
+            and not find_credit_card_approval_dialog(process_id=gym_process_id)
+            and not find_credit_card_result_dialog(process_id=gym_process_id)
         ),
         timeout,
         "Timed out waiting for Gym Assistant payment dialogs to close after applying payment.",
@@ -692,7 +978,10 @@ def apply_payment(
     next_due_deadline = time.time() + min(timeout, 5.0)
     next_due_hwnd = None
     while time.time() < next_due_deadline:
-        next_due_hwnd = find_next_payment_due_dialog(member_id)
+        next_due_hwnd = find_next_payment_due_dialog(
+            member_id,
+            process_id=gym_process_id,
+        )
         if next_due_hwnd:
             break
         time.sleep(0.1)
@@ -701,10 +990,87 @@ def apply_payment(
         if not click_dialog_button(next_due_hwnd, {"OK"}):
             raise RuntimeError("Could not find enabled OK button on next payment due dialog.")
         wait_until(
-            lambda: not find_next_payment_due_dialog(member_id),
+            lambda: not find_next_payment_due_dialog(
+                member_id,
+                process_id=gym_process_id,
+            ),
             timeout,
             "Timed out waiting for Gym Assistant next payment due dialog to close.",
         )
+    return {
+        "transaction_dialog_observed": True,
+        "payment_method": payment_method,
+        "credit_card_approval_observed": bool(approval_hwnd) if payment_method.strip().casefold() == "credit card" else False,
+        "credit_card_result_observed": bool(result_hwnd) if payment_method.strip().casefold() == "credit card" else False,
+        "next_payment_due_dialog_observed": bool(next_due_hwnd),
+    }
+
+
+def read_member_payment_state(main_hwnd: int, member_id: str) -> dict:
+    children = enum_children(main_hwnd)
+    member_heading = selected_member_heading(children, member_id)
+    if not member_heading:
+        raise RuntimeError(f"Gym Assistant main view does not show member #{member_id}.")
+    return {
+        "member_heading": member_heading,
+        "due_date": value_right_of(children, "Due Date:").text,
+        "last_paid_date": value_right_of(children, "Last Paid Date:").text,
+        "last_paid_amount": value_right_of(children, "Last Paid Amount:").text,
+        "current_balance": value_right_of(children, "Current Balance:").text,
+    }
+
+
+def verify_member_payment_readback(
+    main_hwnd: int,
+    update: dict,
+    timeout: float,
+    expected_current_balance: Decimal,
+) -> dict:
+    member_id = str(update.get("member_id") or "").strip()
+    target_values = update.get("target_values") or {}
+    target_due = target_values.get("next_payment") or target_values.get("due_date")
+    expected_last_paid = date.fromisoformat(str(target_values.get("last_payment")))
+    membership_period_start = parse_period_start(str(update.get("membership_period") or ""))
+    expected_amount = decimal_money(update.get("gym_billing_amount"))
+    latest_acceptable_paid = date.today() + timedelta(days=1)
+
+    select_member(main_hwnd, member_id, timeout)
+    deadline = time.time() + timeout
+    last_error = "Gym Assistant did not expose refreshed member values."
+    while time.time() < deadline:
+        try:
+            observed = read_member_payment_state(main_hwnd, member_id)
+            if observed["due_date"] != iso_to_gym_date(str(target_due)):
+                raise RuntimeError(
+                    f"Due date remained {observed['due_date']}; expected {iso_to_gym_date(str(target_due))}."
+                )
+            if not money_equal(observed["last_paid_amount"], expected_amount):
+                raise RuntimeError(
+                    f"Last paid amount is {observed['last_paid_amount']}; expected {expected_amount}."
+                )
+            actual_last_paid = datetime.strptime(observed["last_paid_date"], "%d/%m/%Y").date()
+            booked_on_allowed_date = expected_last_paid <= actual_last_paid <= latest_acceptable_paid
+            booked_for_membership_period = actual_last_paid == membership_period_start
+            if not booked_on_allowed_date and not booked_for_membership_period:
+                raise RuntimeError(
+                    f"Last paid date is {observed['last_paid_date']}; expected either the paid membership "
+                    f"period {membership_period_start.isoformat()} or a booking date between "
+                    f"{expected_last_paid.isoformat()} and {latest_acceptable_paid.isoformat()}."
+                )
+            actual_current_balance = decimal_money(observed["current_balance"])
+            if actual_current_balance != expected_current_balance:
+                raise RuntimeError(
+                    f"Current balance changed from {expected_current_balance} to "
+                    f"{observed['current_balance']}."
+                )
+            return observed
+        except (RuntimeError, ValueError) as exc:
+            last_error = str(exc)
+            time.sleep(0.2)
+    raise PaymentSafetyError(
+        "Gym Assistant payment was submitted but the refreshed member state could not be verified: "
+        f"{last_error} Manual reconciliation is required."
+    )
 
 
 def run_writer(
@@ -736,20 +1102,6 @@ def run_writer(
                 "idle_seconds": round(idle_seconds, 1),
                 "required_idle_seconds": require_idle_seconds,
             }
-    if find_open_payment_dialog():
-        if apply:
-            return {
-                "status": "deferred",
-                "applied": False,
-                "member_id": member_id,
-                "reason": "payment_dialog_already_open",
-            }
-        raise RuntimeError("A Gym Assistant payment dialog is already open. Close it before running the writer.")
-    blocking_dialog = find_dependent_payment_prompt()
-    if blocking_dialog:
-        cancel_blocking_dialog(blocking_dialog)
-        raise RuntimeError(blocking_dialog.reason)
-
     try:
         main_hwnd = find_main_window(source_root)
     except RuntimeError as exc:
@@ -762,14 +1114,50 @@ def run_writer(
                 "error": str(exc),
             }
         raise
+    gym_process_id = window_process_id(main_hwnd)
+    if find_open_payment_dialog(process_id=gym_process_id):
+        if apply:
+            return {
+                "status": "deferred",
+                "applied": False,
+                "member_id": member_id,
+                "reason": "payment_dialog_already_open",
+            }
+        raise RuntimeError("A Gym Assistant payment dialog is already open. Close it before running the writer.")
+    blocking_dialog = find_dependent_payment_prompt(process_id=gym_process_id)
+    if blocking_dialog:
+        cancel_blocking_dialog(blocking_dialog)
+        raise RuntimeError(blocking_dialog.reason)
     select_member(main_hwnd, member_id, timeout)
     blocking_reason = member_view_blocking_reason(main_hwnd)
     if blocking_reason:
         raise RuntimeError(blocking_reason)
     activation_events: list[str] = []
-    dialog_hwnd = open_payment_dialog(main_hwnd, member_id, timeout, activation_events)
+    credit_balance_events: list[dict] = []
     try:
-        observed = inspect_payment_dialog(dialog_hwnd, update)
+        dialog_hwnd = open_payment_dialog(
+            main_hwnd,
+            member_id,
+            timeout,
+            activation_events,
+            update=update,
+            credit_balance_events=credit_balance_events,
+        )
+    except PaymentDialogTimeout:
+        if apply:
+            return {
+                "status": "deferred",
+                "applied": False,
+                "member_id": member_id,
+                "reason": "payment_dialog_did_not_open",
+            }
+        raise
+    if len(credit_balance_events) > 1:
+        cancel_dialog(dialog_hwnd)
+        raise PaymentSafetyError("Multiple credit-balance decisions were recorded for one payment.")
+    credit_balance_event = credit_balance_events[0] if credit_balance_events else None
+    try:
+        observed = inspect_payment_dialog(dialog_hwnd, update, credit_balance_event)
     except Exception:
         cancel_dialog(dialog_hwnd)
         raise
@@ -784,16 +1172,33 @@ def run_writer(
             "error": "Dry run only. Re-run with --apply to record the Gym Assistant payment.",
         }
 
-    apply_payment(dialog_hwnd, timeout, payment_method=payment_method, member_id=member_id)
+    completion_evidence = apply_payment(
+        dialog_hwnd,
+        timeout,
+        payment_method=payment_method,
+        member_id=member_id,
+    )
+    expected_current_balance = decimal_money(observed["current_balance"])
+    readback = verify_member_payment_readback(
+        main_hwnd,
+        update,
+        timeout,
+        expected_current_balance=expected_current_balance,
+    )
     result = {
         "status": "applied",
         "applied": True,
         "member_id": member_id,
         "observed": observed,
+        "completion_evidence": completion_evidence,
+        "readback": readback,
     }
     if activation_events:
         result["activation_prompt_accepted"] = True
         result["activation_events"] = activation_events
+    if credit_balance_event:
+        result["credit_balance_declined"] = True
+        result["credit_balance_event"] = credit_balance_event
     return result
 
 

@@ -385,10 +385,10 @@ class PreflightTests(unittest.TestCase):
 
     def test_unexpected_computer_is_rejected_before_desktop_inspection(self):
         with (
-            patch.dict(
-                runner.os.environ,
-                {"COMPUTERNAME": "NOT-THE-OFFICE-PC"},
-                clear=False,
+            patch.object(
+                runner,
+                "native_computer_name",
+                return_value="NOT-THE-OFFICE-PC",
             ),
             patch.object(
                 runner,
@@ -420,10 +420,10 @@ class PreflightTests(unittest.TestCase):
 
     def test_workstation_preflight_checks_exactly_one_window(self):
         with (
-            patch.dict(
-                runner.os.environ,
-                {"COMPUTERNAME": runner.EXPECTED_COMPUTER_NAME},
-                clear=False,
+            patch.object(
+                runner,
+                "native_computer_name",
+                return_value=runner.EXPECTED_COMPUTER_NAME,
             ),
             patch.object(
                 runner,
