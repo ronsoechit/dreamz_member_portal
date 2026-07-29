@@ -18,6 +18,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["SECRET_KEY"] = "test-secret"
 
 from dreamz_portal import (  # noqa: E402
+    FEP_PAYMENT_AGENT_DREAMZ_OFFICE,
     FEP_PAYMENT_AGENT_RESERVE_8KM7V7D,
     FEP_PAYMENT_COMMAND_STATUS_COMPLETED,
     FEP_PAYMENT_COMMAND_STATUS_FAILED,
@@ -103,6 +104,7 @@ class FepPaymentQueueCancelTests(unittest.TestCase):
     def add_source_command(
         self,
         *,
+        command_id=None,
         upload_id=523,
         status=FEP_PAYMENT_COMMAND_STATUS_FAILED,
         target_agent=FEP_PAYMENT_AGENT_RESERVE_8KM7V7D,
@@ -111,6 +113,7 @@ class FepPaymentQueueCancelTests(unittest.TestCase):
     ):
         now = datetime.now()
         command = FepPaymentProcessCommand(
+            id=command_id,
             source="fep_manager_payment_process_request",
             status=status,
             target_agent=target_agent,
@@ -289,6 +292,61 @@ class FepPaymentQueueCancelTests(unittest.TestCase):
             0,
         )
 
+    def test_cancel_handles_dreamz_office_command_12_with_13_pending(self):
+        office_records = [
+            self.add_payment(
+                suffix=str(index),
+                target_agent=FEP_PAYMENT_AGENT_DREAMZ_OFFICE,
+            )
+            for index in range(1, 14)
+        ]
+        reserve_record = self.add_payment(
+            suffix="reserve-sentinel",
+            target_agent=FEP_PAYMENT_AGENT_RESERVE_8KM7V7D,
+        )
+        source = self.add_source_command(
+            command_id=12,
+            target_agent=FEP_PAYMENT_AGENT_DREAMZ_OFFICE,
+        )
+        payload = self.cancel_payload(
+            source,
+            office_records,
+            target_agent=FEP_PAYMENT_AGENT_DREAMZ_OFFICE,
+        )
+
+        response = self.post_cancel(payload)
+
+        self.assertEqual(source.id, 12)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["cancelled_count"], 13)
+        self.assertEqual(
+            response.json["target_agent"],
+            FEP_PAYMENT_AGENT_DREAMZ_OFFICE,
+        )
+        self.assertEqual(response.json["source_command_id"], 12)
+        self.assertEqual(
+            FepPaymentUpdate.query.filter_by(
+                upload_id=523,
+                target_agent=FEP_PAYMENT_AGENT_DREAMZ_OFFICE,
+                status=FEP_PAYMENT_STATUS_PENDING,
+            ).count(),
+            0,
+        )
+        self.assertEqual(
+            FepPaymentUpdate.query.filter_by(
+                upload_id=523,
+                target_agent=FEP_PAYMENT_AGENT_DREAMZ_OFFICE,
+                status=FEP_PAYMENT_STATUS_FAILED,
+            ).count(),
+            13,
+        )
+        db.session.refresh(reserve_record)
+        self.assertEqual(
+            reserve_record.status,
+            FEP_PAYMENT_STATUS_PENDING,
+        )
+        self.assertIsNone(reserve_record.error)
+
     def test_exact_replay_is_idempotent(self):
         record = self.add_payment()
         source = self.add_source_command()
@@ -305,6 +363,63 @@ class FepPaymentQueueCancelTests(unittest.TestCase):
             first.json["audit_command_id"],
         )
         self.assertEqual(FepPaymentProcessCommand.query.count(), 2)
+
+    def test_replay_identity_is_scoped_by_request_id_and_target_agent(self):
+        shared_request_id = "queue-cancel:shared-request-id"
+        reserve_record = self.add_payment(
+            upload_id=523,
+            suffix="reserve",
+            target_agent=FEP_PAYMENT_AGENT_RESERVE_8KM7V7D,
+        )
+        office_record = self.add_payment(
+            upload_id=524,
+            suffix="office",
+            target_agent=FEP_PAYMENT_AGENT_DREAMZ_OFFICE,
+        )
+        reserve_source = self.add_source_command(
+            upload_id=523,
+            target_agent=FEP_PAYMENT_AGENT_RESERVE_8KM7V7D,
+        )
+        office_source = self.add_source_command(
+            upload_id=524,
+            target_agent=FEP_PAYMENT_AGENT_DREAMZ_OFFICE,
+        )
+        reserve_payload = self.cancel_payload(
+            reserve_source,
+            [reserve_record],
+            request_id=shared_request_id,
+            target_agent=FEP_PAYMENT_AGENT_RESERVE_8KM7V7D,
+        )
+        office_payload = self.cancel_payload(
+            office_source,
+            [office_record],
+            request_id=shared_request_id,
+            target_agent=FEP_PAYMENT_AGENT_DREAMZ_OFFICE,
+        )
+
+        reserve_first = self.post_cancel(reserve_payload)
+        office_first = self.post_cancel(office_payload)
+        reserve_replay = self.post_cancel(reserve_payload)
+        office_replay = self.post_cancel(office_payload)
+
+        self.assertEqual(reserve_first.status_code, 200)
+        self.assertEqual(office_first.status_code, 200)
+        self.assertFalse(reserve_first.json["duplicate"])
+        self.assertFalse(office_first.json["duplicate"])
+        self.assertNotEqual(
+            reserve_first.json["audit_command_id"],
+            office_first.json["audit_command_id"],
+        )
+        self.assertTrue(reserve_replay.json["duplicate"])
+        self.assertTrue(office_replay.json["duplicate"])
+        self.assertEqual(
+            reserve_replay.json["audit_command_id"],
+            reserve_first.json["audit_command_id"],
+        )
+        self.assertEqual(
+            office_replay.json["audit_command_id"],
+            office_first.json["audit_command_id"],
+        )
 
     def test_request_id_reuse_with_changed_payload_is_rejected(self):
         record = self.add_payment()
@@ -335,7 +450,8 @@ class FepPaymentQueueCancelTests(unittest.TestCase):
 
         cases = (
             ("unknown field", {"unexpected": True}, 400),
-            ("wrong target", {"target_agent": "dreamz_office"}, 400),
+            ("unknown target", {"target_agent": "unknown_agent"}, 400),
+            ("target alias", {"target_agent": "office"}, 400),
             ("wrong source", {"source": "generic_cancel"}, 400),
         )
         for label, changes, expected_status in cases:

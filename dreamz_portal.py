@@ -6669,10 +6669,12 @@ def validate_fep_payment_queue_cancel_payload(payload):
         )
 
     target_agent = payload.get("target_agent")
-    if target_agent != FEP_PAYMENT_AGENT_RESERVE_8KM7V7D:
+    if (
+        not isinstance(target_agent, str)
+        or target_agent not in FEP_PAYMENT_AGENT_LABELS
+    ):
         raise FepPaymentReject(
-            "target_agent must be exactly "
-            f"{FEP_PAYMENT_AGENT_RESERVE_8KM7V7D}.",
+            "target_agent must be an exact known FEP payment agent.",
             400,
         )
 
@@ -6717,13 +6719,17 @@ def validate_fep_payment_queue_cancel_payload(payload):
     }
 
 
-def fep_payment_queue_cancel_audit_for_request_id(request_id, *, for_update=False):
+def fep_payment_queue_cancel_audit_for_request_id(
+    request_id,
+    target_agent,
+    *,
+    for_update=False,
+):
     query = (
         FepPaymentProcessCommand.query
         .filter(
             FepPaymentProcessCommand.source == FEP_PAYMENT_QUEUE_CANCEL_SOURCE,
-            FepPaymentProcessCommand.target_agent
-            == FEP_PAYMENT_AGENT_RESERVE_8KM7V7D,
+            FepPaymentProcessCommand.target_agent == target_agent,
         )
         .order_by(FepPaymentProcessCommand.id.desc())
     )
@@ -6772,6 +6778,7 @@ def fep_payment_queue_cancel_audit_public(audit, duplicate=False):
     if (
         audit.status != FEP_PAYMENT_COMMAND_STATUS_COMPLETED
         or audit.completed_at is None
+        or audit.target_agent != metadata.get("target_agent")
         or audit.claimed_by is not None
         or audit.claimed_at is not None
         or audit.claim_expires_at is not None
@@ -6794,11 +6801,10 @@ def create_fep_payment_queue_cancel(payload):
     validated = validate_fep_payment_queue_cancel_payload(payload)
     now = datetime.now()
 
-    with hold_fep_payment_writer_lock(
-        FEP_PAYMENT_AGENT_RESERVE_8KM7V7D
-    ):
+    with hold_fep_payment_writer_lock(validated["target_agent"]):
         existing = fep_payment_queue_cancel_audit_for_request_id(
             validated["request_id"],
+            validated["target_agent"],
             for_update=True,
         )
         if existing:
@@ -6931,20 +6937,20 @@ def create_fep_payment_queue_cancel(payload):
         )
         if stored_keys != validated["idempotency_keys"]:
             raise FepPaymentReject(
-                "idempotency_keys must exactly equal every pending reserve "
-                "payment for this upload.",
+                "idempotency_keys must exactly equal every pending payment "
+                "for this upload and target agent.",
                 409,
             )
 
         for record in source_rows:
             if record.target_agent != validated["target_agent"]:
                 raise FepPaymentReject(
-                    "a reserve payment target changed during cancellation.",
+                    "a payment target changed during cancellation.",
                     409,
                 )
             if record.status != FEP_PAYMENT_STATUS_PENDING:
                 raise FepPaymentReject(
-                    "a reserve payment status changed during cancellation.",
+                    "a payment status changed during cancellation.",
                     409,
                 )
             if any(
