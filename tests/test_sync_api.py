@@ -44,6 +44,7 @@ class SyncApiTests(unittest.TestCase):
         app.config["SYNC_API_TOKEN"] = "sync-test-token"
         app.config["FEP_PAYMENT_SYNC_TOKEN_RON_LAPTOP"] = None
         app.config["FEP_PAYMENT_SYNC_TOKEN_DREAMZ_OFFICE"] = None
+        app.config["FEP_PAYMENT_SYNC_TOKEN_RESERVE_8KM7V7D"] = None
         app.config["FEP_API_TOKEN"] = "fep-test-token"
         app.config["_RUNTIME_SCHEMA_READY"] = False
         self.ctx = app.app_context()
@@ -59,6 +60,7 @@ class SyncApiTests(unittest.TestCase):
         app.config["SYNC_API_TOKEN"] = None
         app.config["FEP_PAYMENT_SYNC_TOKEN_RON_LAPTOP"] = None
         app.config["FEP_PAYMENT_SYNC_TOKEN_DREAMZ_OFFICE"] = None
+        app.config["FEP_PAYMENT_SYNC_TOKEN_RESERVE_8KM7V7D"] = None
         app.config["FEP_API_TOKEN"] = None
         app.config["_RUNTIME_SCHEMA_READY"] = False
 
@@ -1168,6 +1170,32 @@ class SyncApiTests(unittest.TestCase):
         record = FepPaymentUpdate.query.one()
         self.assertEqual(record.target_agent, "ron_laptop")
 
+    def test_fep_payment_update_accepts_reserve_target_only_by_allowlisted_alias(self):
+        self.assertEqual(
+            normalize_fep_payment_agent(
+                "Reserve laptop 8KM7V7D",
+                strict=True,
+            ),
+            "reserve_8km7v7d",
+        )
+        self.add_direct_debit_member()
+
+        response = self.client.post(
+            "/api/fep/payment-update",
+            json=self.fep_payment_payload(
+                target_agent="Reserve laptop 8KM7V7D"
+            ),
+            headers=self.fep_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json["target_agent"],
+            "reserve_8km7v7d",
+        )
+        record = FepPaymentUpdate.query.one()
+        self.assertEqual(record.target_agent, "reserve_8km7v7d")
+
     def test_fep_payment_update_accepts_strict_dreamz_office_aliases(self):
         for alias in (
             "office",
@@ -1439,6 +1467,46 @@ class SyncApiTests(unittest.TestCase):
         self.assertEqual(ron_with_office.status_code, 403)
         self.assertEqual(non_payment.status_code, 403)
         self.assertEqual(frontdesk_legacy.status_code, 200)
+
+    def test_reserve_agent_requires_its_own_payment_only_token(self):
+        without_dedicated = self.client.get(
+            "/api/sync/fep-payment-updates"
+            "?agent_id=reserve_8km7v7d&peek=1",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+
+        app.config[
+            "FEP_PAYMENT_SYNC_TOKEN_RESERVE_8KM7V7D"
+        ] = "reserve-payment-token"
+        matching = self.client.get(
+            "/api/sync/fep-payment-updates"
+            "?agent_id=reserve_8km7v7d&peek=1",
+            headers={"X-Sync-Token": "reserve-payment-token"},
+        )
+        shared = self.client.get(
+            "/api/sync/fep-payment-updates"
+            "?agent_id=reserve_8km7v7d&peek=1",
+            headers={"X-Sync-Token": "sync-test-token"},
+        )
+        wrong_agent = self.client.get(
+            "/api/sync/fep-payment-updates"
+            "?agent_id=ron_laptop&peek=1",
+            headers={"X-Sync-Token": "reserve-payment-token"},
+        )
+        non_payment = self.client.get(
+            "/api/sync/member-ids",
+            headers={"X-Sync-Token": "reserve-payment-token"},
+        )
+
+        self.assertEqual(without_dedicated.status_code, 503)
+        self.assertEqual(matching.status_code, 200)
+        self.assertEqual(
+            matching.json["agent_label"],
+            "Reserve laptop 8KM7V7D",
+        )
+        self.assertEqual(shared.status_code, 403)
+        self.assertEqual(wrong_agent.status_code, 403)
+        self.assertEqual(non_payment.status_code, 403)
 
     def test_dedicated_token_never_becomes_general_sync_token(self):
         app.config["FEP_PAYMENT_SYNC_TOKEN_RON_LAPTOP"] = "sync-test-token"

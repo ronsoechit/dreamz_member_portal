@@ -28,6 +28,8 @@ SYNC_API_TOKEN=<long random sync token>
 FEP_PAYMENT_SYNC_TOKEN_RON_LAPTOP=<different long random token>
 # Optional, unique payment-only token for the dedicated Dreamz Office PC runner.
 FEP_PAYMENT_SYNC_TOKEN_DREAMZ_OFFICE=<different long random token>
+# Required, unique payment-only token for reserve agent reserve_8km7v7d.
+FEP_PAYMENT_SYNC_TOKEN_RESERVE_8KM7V7D=<different long random token>
 FEP_API_TOKEN=<long random FEP token>
 SIGNUP_PORTAL_INTEGRATION_TOKEN=<shared random token of at least 32 characters>
 PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED=false
@@ -128,10 +130,13 @@ Linked GymAssistant memberships are excluded from automatic write-back. If a mem
 The frontdesk sync agent can listen for an explicit FEP command before pushing normal member sync data. This is the preferred production mode: normal syncs do not book payments unless FEP has first sent a `payment-process-request` for that target agent.
 
 Payment agents are strictly allowlisted as `frontdesk_dreamz`, `ron_laptop`,
-and `dreamz_office` (`Dreamz Office PC`). The optional
+`dreamz_office` (`Dreamz Office PC`), and `reserve_8km7v7d`
+(`Reserve laptop 8KM7V7D`). The optional
 `FEP_PAYMENT_SYNC_TOKEN_RON_LAPTOP` and
-`FEP_PAYMENT_SYNC_TOKEN_DREAMZ_OFFICE` variables provide payment-only,
-agent-bound credentials. Roll them out one computer at a time:
+`FEP_PAYMENT_SYNC_TOKEN_DREAMZ_OFFICE` variables and the mandatory
+`FEP_PAYMENT_SYNC_TOKEN_RESERVE_8KM7V7D` variable provide payment-only,
+agent-bound credentials. The reserve agent fails closed until its dedicated
+token is configured. Roll them out one computer at a time:
 
 1. Confirm that no payment command or update is running or processing.
 2. Generate a new token that differs from `SYNC_API_TOKEN` and every other

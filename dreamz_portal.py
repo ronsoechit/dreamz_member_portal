@@ -122,6 +122,9 @@ app.config["FEP_PAYMENT_SYNC_TOKEN_RON_LAPTOP"] = os.getenv(
 app.config["FEP_PAYMENT_SYNC_TOKEN_DREAMZ_OFFICE"] = os.getenv(
     "FEP_PAYMENT_SYNC_TOKEN_DREAMZ_OFFICE"
 )
+app.config["FEP_PAYMENT_SYNC_TOKEN_RESERVE_8KM7V7D"] = os.getenv(
+    "FEP_PAYMENT_SYNC_TOKEN_RESERVE_8KM7V7D"
+)
 app.config["SIGNUP_PORTAL_INTEGRATION_TOKEN"] = os.getenv("SIGNUP_PORTAL_INTEGRATION_TOKEN")
 app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED"] = os.getenv(
     "PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED",
@@ -5553,14 +5556,22 @@ FEP_PAYMENT_CENT = Decimal("0.01")
 FEP_PAYMENT_AGENT_FRONTDESK = "frontdesk_dreamz"
 FEP_PAYMENT_AGENT_RON_LAPTOP = "ron_laptop"
 FEP_PAYMENT_AGENT_DREAMZ_OFFICE = "dreamz_office"
+FEP_PAYMENT_AGENT_RESERVE_8KM7V7D = "reserve_8km7v7d"
 FEP_PAYMENT_AGENT_LABELS = {
     FEP_PAYMENT_AGENT_FRONTDESK: "Frontdesk computer Dreamz",
     FEP_PAYMENT_AGENT_RON_LAPTOP: "Ron laptop",
     FEP_PAYMENT_AGENT_DREAMZ_OFFICE: "Dreamz Office PC",
+    FEP_PAYMENT_AGENT_RESERVE_8KM7V7D: "Reserve laptop 8KM7V7D",
 }
 FEP_PAYMENT_DEDICATED_TOKEN_CONFIG = {
     FEP_PAYMENT_AGENT_RON_LAPTOP: "FEP_PAYMENT_SYNC_TOKEN_RON_LAPTOP",
     FEP_PAYMENT_AGENT_DREAMZ_OFFICE: "FEP_PAYMENT_SYNC_TOKEN_DREAMZ_OFFICE",
+    FEP_PAYMENT_AGENT_RESERVE_8KM7V7D: (
+        "FEP_PAYMENT_SYNC_TOKEN_RESERVE_8KM7V7D"
+    ),
+}
+FEP_PAYMENT_DEDICATED_TOKEN_REQUIRED = {
+    FEP_PAYMENT_AGENT_RESERVE_8KM7V7D,
 }
 FEP_PAYMENT_QUEUE_STATUSES = {
     FEP_PAYMENT_STATUS_PENDING,
@@ -5706,6 +5717,9 @@ def normalize_fep_payment_agent(value, *, default=FEP_PAYMENT_AGENT_FRONTDESK, s
         "dreamz_office": FEP_PAYMENT_AGENT_DREAMZ_OFFICE,
         "dreamz_office_pc": FEP_PAYMENT_AGENT_DREAMZ_OFFICE,
         "office_computer_dreamz": FEP_PAYMENT_AGENT_DREAMZ_OFFICE,
+        "reserve_8km7v7d": FEP_PAYMENT_AGENT_RESERVE_8KM7V7D,
+        "reserve_laptop_8km7v7d": FEP_PAYMENT_AGENT_RESERVE_8KM7V7D,
+        "reserve_laptop": FEP_PAYMENT_AGENT_RESERVE_8KM7V7D,
     }
     if not text:
         return default
@@ -11883,6 +11897,11 @@ def require_fep_payment_sync_access(agent_id):
         abort(403, "Payment sync token is not valid for this agent.")
 
     dedicated_token = dedicated_tokens.get(agent_id)
+    if (
+        agent_id in FEP_PAYMENT_DEDICATED_TOKEN_REQUIRED
+        and not dedicated_token
+    ):
+        abort(503, "Dedicated payment sync token is required for this agent.")
     if dedicated_token:
         if not supplied_token or not secrets.compare_digest(
             str(supplied_token),
