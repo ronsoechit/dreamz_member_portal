@@ -823,6 +823,26 @@ class FepPaymentProcessCommand(db.Model):
     completed_at = db.Column(db.DateTime)
 
 
+class FepPaymentQueueHandoffAudit(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    request_id = db.Column(db.String(128), unique=True, nullable=False, index=True)
+    request_payload_hash = db.Column(db.String(64), nullable=False, index=True)
+    request_payload_json = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(32), nullable=False, index=True)
+    source = db.Column(db.String, nullable=False)
+    requested_by = db.Column(db.String, nullable=False)
+    upload_id = db.Column(db.Integer, nullable=False, index=True)
+    source_command_id = db.Column(db.Integer, nullable=False, index=True)
+    destination_command_id = db.Column(db.Integer, nullable=False, index=True)
+    from_agent = db.Column(db.String, nullable=False, index=True)
+    to_agent = db.Column(db.String, nullable=False, index=True)
+    payment_count = db.Column(db.Integer, nullable=False)
+    idempotency_keys_sha256 = db.Column(db.String(64), nullable=False)
+    result_json = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+    completed_at = db.Column(db.DateTime, nullable=False)
+
+
 class MemberPortalPreference(db.Model):
     member_id = db.Column(db.String, primary_key=True)
     invoice_language = db.Column(db.String(8), default=DEFAULT_LANGUAGE, nullable=False)
@@ -5555,6 +5575,21 @@ FEP_PAYMENT_COMMAND_ACTIVE_STATUSES = {
     FEP_PAYMENT_COMMAND_STATUS_RUNNING,
 }
 FEP_PAYMENT_PROCESS_REQUEST_MAX_LIMIT = 500
+FEP_PAYMENT_QUEUE_HANDOFF_SCHEMA = 1
+FEP_PAYMENT_QUEUE_HANDOFF_SOURCE = "fep_manager_payment_queue_handoff"
+FEP_PAYMENT_QUEUE_HANDOFF_STATUS_COMPLETED = "completed"
+FEP_PAYMENT_QUEUE_HANDOFF_REQUEST_FIELDS = frozenset({
+    "schema",
+    "request_id",
+    "request_payload_hash",
+    "source",
+    "requested_by",
+    "upload_id",
+    "source_command_id",
+    "from_agent",
+    "to_agent",
+    "idempotency_keys",
+})
 FEP_PAYMENT_WRITER_LOCK_NAMESPACE = "dreamz-fep-payment-writer-global-v1"
 _FEP_PAYMENT_WRITER_THREAD_LOCK = threading.RLock()
 
@@ -5573,6 +5608,12 @@ def stable_json_hash(payload):
 def stable_fep_payment_request_hash(payload):
     hash_payload = dict(payload or {})
     hash_payload.pop("target_agent", None)
+    return stable_json_hash(hash_payload)
+
+
+def stable_fep_payment_queue_handoff_request_hash(payload):
+    hash_payload = dict(payload or {})
+    hash_payload.pop("request_payload_hash", None)
     return stable_json_hash(hash_payload)
 
 
@@ -5967,48 +6008,56 @@ def validate_fep_payment_payload(payload):
 
 
 def create_fep_payment_update(payload):
-    payload_hash = stable_fep_payment_request_hash(payload)
-    idempotency_key = str((payload or {}).get("idempotency_key") or "").strip()
-    existing = FepPaymentUpdate.query.filter_by(idempotency_key=idempotency_key).first() if idempotency_key else None
-    if existing:
-        if existing.request_payload_hash != payload_hash:
-            raise FepPaymentReject("idempotency_key was already used with a different payload.", 409)
-        return existing, True
-
-    validated = validate_fep_payment_payload(payload)
-    record = FepPaymentUpdate(
-        idempotency_key=validated["idempotency_key"],
-        source=validated["source"],
-        status=FEP_PAYMENT_STATUS_PENDING,
-        member_id=validated["member_id"],
-        member_name=validated["member_name"],
-        target_agent=validated["target_agent"],
-        membership_period=validated["membership_period"],
-        upload_id=validated["upload_id"],
-        upload_filename=validated["upload_filename"],
-        record_id=validated["record_id"],
-        statement_id=validated["statement_id"],
-        transaction_date=validated["transaction_date"],
-        statement_date=validated["statement_date"],
-        bank_amount=float(validated["bank_amount"]),
-        base_amount=float(validated["base_amount"]) if validated["base_amount"] is not None else None,
-        gym_billing_amount=float(validated["gym_billing_amount"]),
-        request_payload_hash=payload_hash,
-        request_payload_json=json_text(masked_fep_payload(payload)),
-        old_values_json=json_text(validated["old_values"]),
-        new_values_json=json_text(validated["new_values"]),
-        actor=validated["source"],
-    )
-    db.session.add(record)
-    try:
-        db.session.commit()
-    except IntegrityError:
-        db.session.rollback()
-        existing = FepPaymentUpdate.query.filter_by(idempotency_key=validated["idempotency_key"]).first()
-        if existing and existing.request_payload_hash == payload_hash:
+    # Serialize queue insertion with handoff and writer claims. Without the
+    # global lock a new update could be added to the old or destination queue
+    # between the handoff's exact-set checks and its commit.
+    with hold_fep_payment_writer_lock():
+        payload_hash = stable_fep_payment_request_hash(payload)
+        idempotency_key = str((payload or {}).get("idempotency_key") or "").strip()
+        existing = FepPaymentUpdate.query.filter_by(idempotency_key=idempotency_key).first() if idempotency_key else None
+        if existing:
+            if existing.request_payload_hash != payload_hash:
+                raise FepPaymentReject("idempotency_key was already used with a different payload.", 409)
+            # End the advisory-lock transaction before serializing the
+            # duplicate response, so unrelated writers are never held up by
+            # request teardown or response rendering.
+            db.session.commit()
             return existing, True
-        raise
-    return record, False
+
+        validated = validate_fep_payment_payload(payload)
+        record = FepPaymentUpdate(
+            idempotency_key=validated["idempotency_key"],
+            source=validated["source"],
+            status=FEP_PAYMENT_STATUS_PENDING,
+            member_id=validated["member_id"],
+            member_name=validated["member_name"],
+            target_agent=validated["target_agent"],
+            membership_period=validated["membership_period"],
+            upload_id=validated["upload_id"],
+            upload_filename=validated["upload_filename"],
+            record_id=validated["record_id"],
+            statement_id=validated["statement_id"],
+            transaction_date=validated["transaction_date"],
+            statement_date=validated["statement_date"],
+            bank_amount=float(validated["bank_amount"]),
+            base_amount=float(validated["base_amount"]) if validated["base_amount"] is not None else None,
+            gym_billing_amount=float(validated["gym_billing_amount"]),
+            request_payload_hash=payload_hash,
+            request_payload_json=json_text(masked_fep_payload(payload)),
+            old_values_json=json_text(validated["old_values"]),
+            new_values_json=json_text(validated["new_values"]),
+            actor=validated["source"],
+        )
+        db.session.add(record)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            existing = FepPaymentUpdate.query.filter_by(idempotency_key=validated["idempotency_key"]).first()
+            if existing and existing.request_payload_hash == payload_hash:
+                return existing, True
+            raise
+        return record, False
 
 
 def pending_fep_payment_updates_for_agent(agent_id, upload_id=None):
@@ -6096,6 +6145,413 @@ def create_fep_payment_process_command(payload):
         db.session.add(command)
         db.session.commit()
         return command, False, pending_payments
+
+
+def validate_fep_payment_queue_handoff_payload(payload):
+    if not isinstance(payload, dict):
+        raise FepPaymentReject("Expected JSON payment queue handoff payload.", 400)
+
+    supplied_fields = set(payload)
+    if supplied_fields != FEP_PAYMENT_QUEUE_HANDOFF_REQUEST_FIELDS:
+        missing = sorted(FEP_PAYMENT_QUEUE_HANDOFF_REQUEST_FIELDS - supplied_fields)
+        unknown = sorted(supplied_fields - FEP_PAYMENT_QUEUE_HANDOFF_REQUEST_FIELDS)
+        details = []
+        if missing:
+            details.append(f"missing fields: {', '.join(missing)}")
+        if unknown:
+            details.append(f"unknown fields: {', '.join(unknown)}")
+        raise FepPaymentReject(
+            "payment queue handoff payload fields are not exact"
+            + (f" ({'; '.join(details)})" if details else "")
+            + ".",
+            400,
+        )
+
+    if type(payload.get("schema")) is not int or payload["schema"] != FEP_PAYMENT_QUEUE_HANDOFF_SCHEMA:
+        raise FepPaymentReject("schema must be exactly 1.", 400)
+
+    request_id = payload.get("request_id")
+    if not isinstance(request_id, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._:-]{7,127}",
+        request_id,
+    ):
+        raise FepPaymentReject("request_id is invalid.", 400)
+
+    supplied_hash = payload.get("request_payload_hash")
+    if not isinstance(supplied_hash, str) or not re.fullmatch(r"[a-f0-9]{64}", supplied_hash):
+        raise FepPaymentReject("request_payload_hash must be a lowercase SHA-256 value.", 400)
+    calculated_hash = stable_fep_payment_queue_handoff_request_hash(payload)
+    if not secrets.compare_digest(supplied_hash, calculated_hash):
+        raise FepPaymentReject("request_payload_hash does not match the exact request payload.", 409)
+
+    source = payload.get("source")
+    if source != FEP_PAYMENT_QUEUE_HANDOFF_SOURCE:
+        raise FepPaymentReject(
+            f"source must be exactly {FEP_PAYMENT_QUEUE_HANDOFF_SOURCE}.",
+            400,
+        )
+
+    requested_by = payload.get("requested_by")
+    if (
+        not isinstance(requested_by, str)
+        or not requested_by.strip()
+        or requested_by != requested_by.strip()
+        or len(requested_by) > 120
+        or any(ord(character) < 32 for character in requested_by)
+    ):
+        raise FepPaymentReject("requested_by is invalid.", 400)
+
+    upload_id = payload.get("upload_id")
+    source_command_id = payload.get("source_command_id")
+    if type(upload_id) is not int or upload_id <= 0:
+        raise FepPaymentReject("upload_id must be a positive integer.", 400)
+    if type(source_command_id) is not int or source_command_id <= 0:
+        raise FepPaymentReject("source_command_id must be a positive integer.", 400)
+
+    from_agent = payload.get("from_agent")
+    to_agent = payload.get("to_agent")
+    if from_agent != FEP_PAYMENT_AGENT_DREAMZ_OFFICE:
+        raise FepPaymentReject(
+            f"from_agent must be exactly {FEP_PAYMENT_AGENT_DREAMZ_OFFICE}.",
+            400,
+        )
+    if to_agent != FEP_PAYMENT_AGENT_FRONTDESK:
+        raise FepPaymentReject(
+            f"to_agent must be exactly {FEP_PAYMENT_AGENT_FRONTDESK}.",
+            400,
+        )
+
+    idempotency_keys = payload.get("idempotency_keys")
+    if not isinstance(idempotency_keys, list):
+        raise FepPaymentReject("idempotency_keys must be a list.", 400)
+    if not idempotency_keys:
+        raise FepPaymentReject("idempotency_keys must not be empty.", 400)
+    if len(idempotency_keys) > FEP_PAYMENT_PROCESS_REQUEST_MAX_LIMIT:
+        raise FepPaymentReject(
+            f"idempotency_keys cannot contain more than {FEP_PAYMENT_PROCESS_REQUEST_MAX_LIMIT} entries.",
+            400,
+        )
+    if any(
+        not isinstance(key, str)
+        or not key
+        or key != key.strip()
+        or len(key) > 255
+        for key in idempotency_keys
+    ):
+        raise FepPaymentReject("idempotency_keys contains an invalid value.", 400)
+    if idempotency_keys != sorted(set(idempotency_keys)):
+        raise FepPaymentReject(
+            "idempotency_keys must be unique and sorted exactly.",
+            400,
+        )
+
+    return {
+        "schema": FEP_PAYMENT_QUEUE_HANDOFF_SCHEMA,
+        "request_id": request_id,
+        "request_payload_hash": supplied_hash,
+        "source": source,
+        "requested_by": requested_by,
+        "upload_id": upload_id,
+        "source_command_id": source_command_id,
+        "from_agent": from_agent,
+        "to_agent": to_agent,
+        "idempotency_keys": idempotency_keys,
+    }
+
+
+def fep_payment_queue_handoff_audit_public(audit, duplicate=False):
+    try:
+        result = json.loads(audit.result_json or "{}")
+    except json.JSONDecodeError:
+        result = {}
+    if not isinstance(result, dict):
+        result = {}
+    command = result.get("command")
+    if not isinstance(command, dict):
+        raise FepPaymentReject(
+            "completed payment queue handoff audit is incomplete; manual review is required.",
+            409,
+        )
+    expected_command_fields = {
+        "command_id": audit.destination_command_id,
+        "status": FEP_PAYMENT_COMMAND_STATUS_PENDING,
+        "target_agent": audit.to_agent,
+        "requested_limit": audit.payment_count,
+        "pending_payments": audit.payment_count,
+        "upload_id": audit.upload_id,
+    }
+    if any(command.get(key) != value for key, value in expected_command_fields.items()):
+        raise FepPaymentReject(
+            "completed payment queue handoff command snapshot is inconsistent; manual review is required.",
+            409,
+        )
+    return {
+        "ok": True,
+        "duplicate": bool(duplicate),
+        "request_id": audit.request_id,
+        "request_payload_hash": audit.request_payload_hash,
+        "moved_count": audit.payment_count,
+        "from_agent": audit.from_agent,
+        "to_agent": audit.to_agent,
+        "upload_id": audit.upload_id,
+        "source_command_id": audit.source_command_id,
+        "command": command,
+    }
+
+
+def create_fep_payment_queue_handoff(payload):
+    validated = validate_fep_payment_queue_handoff_payload(payload)
+    now = datetime.now()
+
+    with hold_fep_payment_writer_lock():
+        existing_query = FepPaymentQueueHandoffAudit.query.filter(
+            FepPaymentQueueHandoffAudit.request_id == validated["request_id"]
+        )
+        if db.session.get_bind().dialect.name == "postgresql":
+            existing_query = existing_query.with_for_update()
+        existing = existing_query.first()
+        if existing:
+            if not secrets.compare_digest(
+                existing.request_payload_hash,
+                validated["request_payload_hash"],
+            ):
+                raise FepPaymentReject(
+                    "request_id was already used with a different payload.",
+                    409,
+                )
+            if existing.status != FEP_PAYMENT_QUEUE_HANDOFF_STATUS_COMPLETED:
+                raise FepPaymentReject(
+                    "request_id exists without a completed handoff; manual review is required.",
+                    409,
+                )
+            expected_keys_hash = stable_json_hash(validated["idempotency_keys"])
+            expected_audit_fields = {
+                "source": validated["source"],
+                "requested_by": validated["requested_by"],
+                "upload_id": validated["upload_id"],
+                "source_command_id": validated["source_command_id"],
+                "from_agent": validated["from_agent"],
+                "to_agent": validated["to_agent"],
+                "payment_count": len(validated["idempotency_keys"]),
+                "idempotency_keys_sha256": expected_keys_hash,
+            }
+            if any(
+                getattr(existing, key, None) != value
+                for key, value in expected_audit_fields.items()
+            ):
+                raise FepPaymentReject(
+                    "completed handoff audit does not match the exact replay; manual review is required.",
+                    409,
+                )
+            db.session.commit()
+            return existing, True
+
+        source_command_query = FepPaymentProcessCommand.query.filter(
+            FepPaymentProcessCommand.id == validated["source_command_id"]
+        )
+        if db.session.get_bind().dialect.name == "postgresql":
+            source_command_query = source_command_query.with_for_update()
+        source_command = source_command_query.first()
+        if not source_command:
+            raise FepPaymentReject("source payment process command was not found.", 404)
+        if source_command.upload_id != validated["upload_id"]:
+            raise FepPaymentReject("source command does not match upload_id.", 409)
+        if source_command.target_agent != validated["from_agent"]:
+            raise FepPaymentReject("source command does not match from_agent.", 409)
+        if source_command.status != FEP_PAYMENT_COMMAND_STATUS_FAILED:
+            raise FepPaymentReject(
+                "source command must be terminal failed before handoff.",
+                409,
+            )
+        if source_command.completed_at is None:
+            raise FepPaymentReject(
+                "source command is not durably terminal.",
+                409,
+            )
+        if any(
+            value is not None
+            for value in (
+                source_command.claimed_by,
+                source_command.claimed_at,
+                source_command.claim_expires_at,
+            )
+        ):
+            raise FepPaymentReject(
+                "source command is still claimed; handoff is blocked.",
+                409,
+            )
+
+        newer_source_command_query = FepPaymentProcessCommand.query.filter(
+            FepPaymentProcessCommand.upload_id == validated["upload_id"],
+            FepPaymentProcessCommand.target_agent == validated["from_agent"],
+            FepPaymentProcessCommand.id > source_command.id,
+        )
+        if db.session.get_bind().dialect.name == "postgresql":
+            newer_source_command_query = newer_source_command_query.with_for_update()
+        if newer_source_command_query.first() is not None:
+            raise FepPaymentReject(
+                "source command is not the latest command for this upload and agent.",
+                409,
+            )
+
+        active_commands_query = FepPaymentProcessCommand.query.filter(
+            FepPaymentProcessCommand.status.in_(FEP_PAYMENT_COMMAND_ACTIVE_STATUSES)
+        )
+        if db.session.get_bind().dialect.name == "postgresql":
+            active_commands_query = active_commands_query.with_for_update()
+        if active_commands_query.first() is not None:
+            raise FepPaymentReject(
+                "an active payment process command exists; handoff is blocked.",
+                409,
+            )
+
+        processing_query = FepPaymentUpdate.query.filter(
+            FepPaymentUpdate.status == FEP_PAYMENT_STATUS_PROCESSING
+        )
+        if db.session.get_bind().dialect.name == "postgresql":
+            processing_query = processing_query.with_for_update()
+        if processing_query.first() is not None:
+            raise FepPaymentReject(
+                "a payment update is processing; handoff is blocked.",
+                409,
+            )
+
+        destination_pending_query = FepPaymentUpdate.query.filter(
+            FepPaymentUpdate.status == FEP_PAYMENT_STATUS_PENDING,
+            fep_payment_agent_filter(validated["to_agent"]),
+        )
+        if db.session.get_bind().dialect.name == "postgresql":
+            destination_pending_query = destination_pending_query.with_for_update()
+        if destination_pending_query.first() is not None:
+            raise FepPaymentReject(
+                "destination agent already has pending payment updates; handoff is blocked.",
+                409,
+            )
+
+        source_rows_query = (
+            FepPaymentUpdate.query
+            .filter(
+                FepPaymentUpdate.upload_id == validated["upload_id"],
+                FepPaymentUpdate.target_agent == validated["from_agent"],
+                FepPaymentUpdate.status == FEP_PAYMENT_STATUS_PENDING,
+            )
+            .order_by(FepPaymentUpdate.id.asc())
+        )
+        if db.session.get_bind().dialect.name == "postgresql":
+            source_rows_query = source_rows_query.with_for_update()
+        source_rows = source_rows_query.all()
+        stored_keys = sorted(record.idempotency_key for record in source_rows)
+        if stored_keys != validated["idempotency_keys"]:
+            raise FepPaymentReject(
+                "idempotency_keys must exactly equal every pending source payment for this upload.",
+                409,
+            )
+
+        for record in source_rows:
+            if record.target_agent != validated["from_agent"]:
+                raise FepPaymentReject("a source payment target changed during handoff.", 409)
+            if record.status != FEP_PAYMENT_STATUS_PENDING:
+                raise FepPaymentReject("a source payment status changed during handoff.", 409)
+            if any(
+                value is not None
+                for value in (
+                    record.claimed_by,
+                    record.claimed_at,
+                    record.claim_expires_at,
+                )
+            ):
+                raise FepPaymentReject(
+                    f"payment update {record.id} is claimed; handoff is blocked.",
+                    409,
+                )
+            if record.apply_attempts != 0:
+                raise FepPaymentReject(
+                    f"payment update {record.id} already has an apply attempt; handoff is blocked.",
+                    409,
+                )
+            if record.applied_at is not None or record.confirmed_at is not None:
+                raise FepPaymentReject(
+                    f"payment update {record.id} has write confirmation state; handoff is blocked.",
+                    409,
+                )
+            if record.error is not None:
+                raise FepPaymentReject(
+                    f"payment update {record.id} has an error; handoff is blocked.",
+                    409,
+                )
+            if record.result_json not in (None, ""):
+                raise FepPaymentReject(
+                    f"payment update {record.id} already has a writer result; handoff is blocked.",
+                    409,
+                )
+
+        destination_command = FepPaymentProcessCommand(
+            source=FEP_PAYMENT_QUEUE_HANDOFF_SOURCE,
+            status=FEP_PAYMENT_COMMAND_STATUS_PENDING,
+            target_agent=validated["to_agent"],
+            requested_limit=len(source_rows),
+            requested_by=validated["requested_by"],
+            upload_id=validated["upload_id"],
+            upload_filename=source_command.upload_filename,
+            request_payload_json=json_text({
+                "schema": validated["schema"],
+                "request_id": validated["request_id"],
+                "request_payload_hash": validated["request_payload_hash"],
+                "source_command_id": validated["source_command_id"],
+                "from_agent": validated["from_agent"],
+                "to_agent": validated["to_agent"],
+                "payment_count": len(source_rows),
+            }),
+            created_at=now,
+            updated_at=now,
+        )
+        db.session.add(destination_command)
+        db.session.flush()
+
+        for record in source_rows:
+            record.target_agent = validated["to_agent"]
+            record.updated_at = now
+
+        keys_hash = stable_json_hash(validated["idempotency_keys"])
+        result = {
+            "command": fep_payment_command_public(
+                destination_command,
+                duplicate=False,
+                pending_payments=len(source_rows),
+            ),
+        }
+        audit = FepPaymentQueueHandoffAudit(
+            request_id=validated["request_id"],
+            request_payload_hash=validated["request_payload_hash"],
+            request_payload_json=json_text({
+                "schema": validated["schema"],
+                "request_id": validated["request_id"],
+                "source": validated["source"],
+                "requested_by": validated["requested_by"],
+                "upload_id": validated["upload_id"],
+                "source_command_id": validated["source_command_id"],
+                "from_agent": validated["from_agent"],
+                "to_agent": validated["to_agent"],
+                "payment_count": len(source_rows),
+                "idempotency_keys_sha256": keys_hash,
+            }),
+            status=FEP_PAYMENT_QUEUE_HANDOFF_STATUS_COMPLETED,
+            source=validated["source"],
+            requested_by=validated["requested_by"],
+            upload_id=validated["upload_id"],
+            source_command_id=source_command.id,
+            destination_command_id=destination_command.id,
+            from_agent=validated["from_agent"],
+            to_agent=validated["to_agent"],
+            payment_count=len(source_rows),
+            idempotency_keys_sha256=keys_hash,
+            result_json=json_text(result),
+            created_at=now,
+            completed_at=now,
+        )
+        db.session.add(audit)
+        db.session.commit()
+        return audit, False
 
 
 def fep_payment_update_target(record):
@@ -13846,6 +14302,27 @@ def api_fep_payment_process_request_status():
         )
         db.session.commit()
         return jsonify(response_payload)
+
+
+@app.post("/api/fep/payment-queue-handoff")
+def api_fep_payment_queue_handoff():
+    require_fep_access()
+    ensure_runtime_schema()
+    payload = request.get_json(silent=True)
+    try:
+        audit, duplicate = create_fep_payment_queue_handoff(payload)
+        response_payload = fep_payment_queue_handoff_audit_public(
+            audit,
+            duplicate=duplicate,
+        )
+    except FepPaymentReject as exc:
+        db.session.rollback()
+        return fep_error_response(str(exc), exc.status_code)
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.exception("FEP payment-queue-handoff failed.")
+        return fep_error_response(str(exc), 500)
+    return jsonify(response_payload)
 
 
 def safe_storage_upload_key(raw_key):
