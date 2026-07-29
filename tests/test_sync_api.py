@@ -1525,8 +1525,8 @@ class SyncApiTests(unittest.TestCase):
         db.session.commit()
 
         response = self.client.get(
-            "/api/sync/fep-payment-process-commands"
-            "?agent_id=reserve_8km7v7d&peek=1",
+            "/api/sync/fep-payment-process-commands/peek"
+            "?agent_id=reserve_8km7v7d",
             headers={"X-Sync-Token": "reserve-payment-token"},
         )
 

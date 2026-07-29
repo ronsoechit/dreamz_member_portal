@@ -14766,6 +14766,75 @@ def fep_payment_process_command_sync_item(command):
     }
 
 
+def fep_payment_process_commands_read_only_status(agent_id):
+    with hold_fep_payment_writer_lock(agent_id):
+        running_commands = running_fep_payment_process_commands(
+            for_update=False
+        )
+        processing_records = processing_fep_payment_updates(
+            for_update=False
+        ).all()
+        pending_command = (
+            FepPaymentProcessCommand.query
+            .filter(
+                FepPaymentProcessCommand.target_agent == agent_id,
+                FepPaymentProcessCommand.status
+                == FEP_PAYMENT_COMMAND_STATUS_PENDING,
+            )
+            .order_by(
+                FepPaymentProcessCommand.created_at.asc(),
+                FepPaymentProcessCommand.id.asc(),
+            )
+            .first()
+        )
+        running_command = (
+            running_commands[0] if len(running_commands) == 1 else None
+        )
+        writer_agent_id = None
+        if running_command is not None:
+            writer_agent_id = normalize_fep_payment_agent(
+                running_command.target_agent
+            )
+        elif processing_records:
+            writer_agent_id = normalize_fep_payment_agent(
+                processing_records[0].claimed_by,
+                strict=False,
+            )
+        elif pending_command is not None:
+            writer_agent_id = agent_id
+        return {
+            "status": "success",
+            "agent_id": agent_id,
+            "agent_label": fep_payment_agent_label(agent_id),
+            "read_only": True,
+            "pending_command_available": pending_command is not None,
+            "command_in_progress": running_command is not None,
+            "agent_command_in_progress": bool(
+                running_command is not None
+                and writer_agent_id == agent_id
+            ),
+            "writer_busy": bool(running_commands or processing_records),
+            "writer_reserved": pending_command is not None,
+            "writer_agent_id": writer_agent_id,
+            "writer_agent_label": (
+                fep_payment_agent_label(writer_agent_id)
+                if writer_agent_id
+                else None
+            ),
+            "writer_conflict": len(running_commands) > 1,
+            "processing_updates": len(processing_records),
+            "commands": [],
+        }
+
+
+@app.get("/api/sync/fep-payment-process-commands/peek")
+def api_sync_fep_payment_process_commands_peek():
+    agent_id = sync_request_agent_id()
+    require_fep_payment_sync_access(agent_id)
+    ensure_runtime_schema()
+    return fep_payment_process_commands_read_only_status(agent_id)
+
+
 @app.get("/api/sync/fep-payment-process-commands")
 def api_sync_fep_payment_process_commands():
     agent_id = sync_request_agent_id()
@@ -14778,66 +14847,7 @@ def api_sync_fep_payment_process_commands():
         "on",
     }
     if peek_only:
-        with hold_fep_payment_writer_lock(agent_id):
-            running_commands = running_fep_payment_process_commands(
-                for_update=False
-            )
-            processing_records = processing_fep_payment_updates(
-                for_update=False
-            ).all()
-            pending_command = (
-                FepPaymentProcessCommand.query
-                .filter(
-                    FepPaymentProcessCommand.target_agent == agent_id,
-                    FepPaymentProcessCommand.status
-                    == FEP_PAYMENT_COMMAND_STATUS_PENDING,
-                )
-                .order_by(
-                    FepPaymentProcessCommand.created_at.asc(),
-                    FepPaymentProcessCommand.id.asc(),
-                )
-                .first()
-            )
-            running_command = (
-                running_commands[0] if len(running_commands) == 1 else None
-            )
-            writer_agent_id = None
-            if running_command is not None:
-                writer_agent_id = normalize_fep_payment_agent(
-                    running_command.target_agent
-                )
-            elif processing_records:
-                writer_agent_id = normalize_fep_payment_agent(
-                    processing_records[0].claimed_by,
-                    strict=False,
-                )
-            elif pending_command is not None:
-                writer_agent_id = agent_id
-            return {
-                "status": "success",
-                "agent_id": agent_id,
-                "agent_label": fep_payment_agent_label(agent_id),
-                "read_only": True,
-                "pending_command_available": pending_command is not None,
-                "command_in_progress": running_command is not None,
-                "agent_command_in_progress": bool(
-                    running_command is not None
-                    and writer_agent_id == agent_id
-                ),
-                "writer_busy": bool(
-                    running_commands or processing_records
-                ),
-                "writer_reserved": pending_command is not None,
-                "writer_agent_id": writer_agent_id,
-                "writer_agent_label": (
-                    fep_payment_agent_label(writer_agent_id)
-                    if writer_agent_id
-                    else None
-                ),
-                "writer_conflict": len(running_commands) > 1,
-                "processing_updates": len(processing_records),
-                "commands": [],
-            }
+        return fep_payment_process_commands_read_only_status(agent_id)
     now = datetime.now()
     claim_until = now + timedelta(seconds=fep_payment_command_claim_seconds())
     with hold_fep_payment_writer_lock(agent_id):
