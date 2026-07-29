@@ -26,7 +26,7 @@ if (-not (Test-Path -LiteralPath $pythonPath -PathType Leaf)) {
 
 Push-Location $installRoot
 try {
-  & $pythonPath -I -m reserve_laptop_payment_runner.runner `
+  & $pythonPath -m reserve_laptop_payment_runner.runner `
     --config $runtimeFile `
     --preflight
   exit $LASTEXITCODE
