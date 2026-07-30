@@ -13283,6 +13283,12 @@ PORTAL_INVITATION_REQUEST_TYPES = {
     PORTAL_INVITATION_REQUEST_TYPE_EXISTING_MEMBER_REVERIFICATION,
 }
 PORTAL_INVITATION_SIGNUP_PLANS = {"month", "under18", "six", "twelve", "kmar_2026"}
+PORTAL_KMAR_GYM_ASSISTANT_PLAN_NAMES = frozenset(
+    {
+        "kmar medewerker",
+        "kmar medewerker 2018",
+    }
+)
 PORTAL_INVITATION_TERMINAL_STATUSES = {"sent", "manual_review"}
 PORTAL_INVITATION_RECONCILABLE_STATUSES = {
     "waiting_for_member",
@@ -13311,7 +13317,7 @@ def portal_member_signup_plan(plan_type):
     normalized = re.sub(r"[^a-z0-9]+", " ", str(plan_type or "").lower()).strip()
     if not normalized:
         return None
-    if normalized == "kmar medewerker 2018":
+    if normalized in PORTAL_KMAR_GYM_ASSISTANT_PLAN_NAMES:
         return "kmar_2026"
     if any(blocked in normalized for blocked in ("day pass", "week pass", "delfins", "hotel", "guest")):
         return None
