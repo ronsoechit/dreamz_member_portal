@@ -21,6 +21,8 @@ from dreamz_portal import (  # noqa: E402
     build_portal_activation_email,
     db,
     ensure_runtime_schema,
+    portal_invitation_member_plan_matches,
+    portal_member_signup_plan,
 )
 
 
@@ -500,7 +502,52 @@ class PortalInvitationTests(unittest.TestCase):
         self.assertEqual(response.json["status"], "manual_review")
         self.assertEqual(EmailLog.query.count(), 0)
 
-    def test_kmar_invitation_requires_exact_internal_gym_assistant_plan(self):
+    def test_kmar_invitation_accepts_current_internal_gym_assistant_plan(self):
+        db.session.add(Member(
+            member_id="42001",
+            name="KMAR, Member",
+            email="new.member@example.com",
+            plan_type="KMAR medewerker",
+        ))
+        db.session.commit()
+
+        response = self.post_invitation(signup_plan="kmar_2026")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["status"], "sent")
+        self.assertEqual(PortalInvitation.query.one().signup_plan, "kmar_2026")
+        self.assertEqual(EmailLog.query.count(), 1)
+
+    def test_kmar_current_plan_from_sync_unlocks_waiting_invitation(self):
+        waiting = self.post_invitation(signup_plan="kmar_2026")
+        self.assertEqual(waiting.status_code, 202)
+        self.assertEqual(waiting.json["status"], "waiting_for_member")
+        self.assertEqual(EmailLog.query.count(), 0)
+
+        synced = self.client.post(
+            "/api/sync/members",
+            headers={"X-Sync-Token": "sync-test-token"},
+            json={
+                "source": "kmar-current-plan-test",
+                "members": [{
+                    "member_id": "42001",
+                    "name": "KMAR, Member",
+                    "email": "new.member@example.com",
+                    "plan_type": "KMAR medewerker",
+                }],
+            },
+        )
+
+        self.assertEqual(synced.status_code, 200)
+        self.assertEqual(synced.json["members_new"], 1)
+        member = Member.query.filter_by(member_id="42001").one()
+        self.assertEqual(member.plan_type, "KMAR medewerker")
+        invitation = PortalInvitation.query.one()
+        self.assertEqual(invitation.status, "sent")
+        self.assertEqual(invitation.signup_plan, "kmar_2026")
+        self.assertEqual(EmailLog.query.count(), 1)
+
+    def test_kmar_invitation_preserves_legacy_internal_gym_assistant_plan(self):
         db.session.add(Member(
             member_id="42001",
             name="KMAR, Member",
@@ -515,6 +562,44 @@ class PortalInvitationTests(unittest.TestCase):
         self.assertEqual(response.json["status"], "sent")
         self.assertEqual(PortalInvitation.query.one().signup_plan, "kmar_2026")
         self.assertEqual(EmailLog.query.count(), 1)
+
+    def test_kmar_plan_mapping_allows_only_current_and_legacy_normalized_names(self):
+        for plan_type in (
+            "KMAR medewerker",
+            " kmar   MEDEWERKER ",
+            "KMAR medewerker 2018",
+        ):
+            with self.subTest(plan_type=plan_type):
+                self.assertEqual(portal_member_signup_plan(plan_type), "kmar_2026")
+                self.assertTrue(
+                    portal_invitation_member_plan_matches("kmar_2026", plan_type)
+                )
+                self.assertFalse(
+                    portal_invitation_member_plan_matches("month", plan_type)
+                )
+
+        for plan_type in (
+            "KMAR",
+            "KMAR medewerker 2018 extra",
+            "KMAR medewerker 2026",
+            "KMAR medewerkers",
+        ):
+            with self.subTest(plan_type=plan_type):
+                self.assertIsNone(portal_member_signup_plan(plan_type))
+                self.assertFalse(
+                    portal_invitation_member_plan_matches("kmar_2026", plan_type)
+                )
+
+        self.assertEqual(
+            portal_member_signup_plan("Contract 12 months 2024"),
+            "twelve",
+        )
+        self.assertFalse(
+            portal_invitation_member_plan_matches(
+                "kmar_2026",
+                "Contract 12 months 2024",
+            )
+        )
 
     def test_kmar_invitation_fails_closed_for_other_gym_assistant_plan(self):
         db.session.add(Member(
