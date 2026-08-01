@@ -16,6 +16,7 @@ from sqlalchemy import inspect, text  # noqa: E402
 from dreamz_portal import (  # noqa: E402
     EmailLog,
     Member,
+    MemberPortalPreference,
     PortalInvitation,
     app,
     build_portal_activation_email,
@@ -441,6 +442,124 @@ class PortalInvitationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         expected_subject, _, _ = build_portal_activation_email(member, "es")
         self.assertEqual(EmailLog.query.one().subject, expected_subject)
+
+    def test_existing_member_first_handoff_initializes_supported_language_before_delivery(self):
+        for offset, language in enumerate(("en", "nl", "pap", "es"), start=1):
+            with self.subTest(language=language):
+                member_id = str(42100 + offset)
+                email = f"existing.member.{offset}@example.com"
+                reference = f"DF-20260726-{910000 + offset}"
+                self.enable_existing_member_pilot(member_id=member_id, email=email)
+                self.add_existing_member(member_id=member_id, email=email)
+                payload = self.existing_member_payload(
+                    reference=reference,
+                    member_number=member_id,
+                    expected_email=email,
+                    language=language,
+                )
+
+                def assert_preference_exists_before_delivery(*_args, **_kwargs):
+                    preference = db.session.get(MemberPortalPreference, member_id)
+                    self.assertIsNotNone(preference)
+                    self.assertEqual(preference.invoice_language, language)
+                    return "sent"
+
+                with patch(
+                    "dreamz_portal.deliver_email",
+                    side_effect=assert_preference_exists_before_delivery,
+                ):
+                    response = self.post_existing_member(payload=payload)
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json["status"], "sent")
+                self.assertEqual(
+                    db.session.get(MemberPortalPreference, member_id).invoice_language,
+                    language,
+                )
+
+    def test_existing_member_idempotent_retry_does_not_rewrite_initialized_language(self):
+        self.enable_existing_member_pilot()
+        self.add_existing_member()
+        payload = self.existing_member_payload(language="pap")
+
+        first = self.post_existing_member(payload=payload)
+        preference = db.session.get(MemberPortalPreference, "42001")
+        first_updated_at = preference.updated_at
+        duplicate = self.post_existing_member(payload=payload)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(duplicate.status_code, 200)
+        self.assertTrue(duplicate.json["duplicate"])
+        preference = db.session.get(MemberPortalPreference, "42001")
+        self.assertEqual(preference.invoice_language, "pap")
+        self.assertEqual(preference.updated_at, first_updated_at)
+        self.assertEqual(EmailLog.query.count(), 1)
+
+    def test_existing_member_handoff_does_not_overwrite_later_member_language_choice(self):
+        self.enable_existing_member_pilot()
+        self.add_existing_member()
+        first = self.post_existing_member(payload=self.existing_member_payload(language="nl"))
+        self.assertEqual(first.status_code, 200)
+
+        with self.client.session_transaction() as member_session:
+            member_session["member_id"] = "42001"
+        changed = self.client.get("/language?lang=es&next=/account")
+        self.assertEqual(changed.status_code, 302)
+        self.assertEqual(
+            db.session.get(MemberPortalPreference, "42001").invoice_language,
+            "es",
+        )
+
+        retry_payload = self.existing_member_payload(
+            reference="DF-20260726-900002",
+            language="nl",
+        )
+        second_handoff = self.post_existing_member(payload=retry_payload)
+
+        self.assertEqual(second_handoff.status_code, 200)
+        self.assertEqual(
+            db.session.get(MemberPortalPreference, "42001").invoice_language,
+            "es",
+        )
+
+    def test_existing_member_invalid_language_uses_existing_default_contract(self):
+        self.enable_existing_member_pilot()
+        self.add_existing_member()
+        payload = self.existing_member_payload(language="invalid")
+        canonical = {
+            key: value
+            for key, value in payload.items()
+            if key != "idempotency_key"
+        }
+        canonical["language"] = "en"
+        payload["idempotency_key"] = hashlib.sha256(
+            json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+        response = self.post_existing_member(payload=payload)
+
+        self.assertEqual(response.status_code, 200)
+        invitation = PortalInvitation.query.one()
+        self.assertEqual(invitation.language, "en")
+        self.assertEqual(
+            db.session.get(MemberPortalPreference, "42001").invoice_language,
+            "en",
+        )
+
+    def test_regular_signup_invitation_does_not_initialize_member_language_preference(self):
+        db.session.add(Member(
+            member_id="42001",
+            email="new.member@example.com",
+            plan_type="no contract 1 month Dreamz",
+        ))
+        db.session.commit()
+
+        response = self.post_invitation(language="pap")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["request_type"], "new_member")
+        self.assertEqual(response.json["status"], "sent")
+        self.assertIsNone(db.session.get(MemberPortalPreference, "42001"))
 
     def test_invitation_waits_for_exact_synced_member_then_sends_once(self):
         waiting = self.post_invitation()

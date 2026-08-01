@@ -13396,6 +13396,37 @@ def portal_invitation_member_plan_matches(signup_plan, plan_type):
     return portal_eligible_member_plan(plan_type)
 
 
+def initialize_existing_member_portal_language_preference(record):
+    """Initialize, but never replace, the member's language preference."""
+    request_type = record.request_type or PORTAL_INVITATION_REQUEST_TYPE_NEW_MEMBER
+    if request_type != PORTAL_INVITATION_REQUEST_TYPE_EXISTING_MEMBER_REVERIFICATION:
+        return None
+
+    member_id = str(record.member_id or "").strip()
+    if not member_id:
+        return None
+
+    preference = db.session.get(MemberPortalPreference, member_id)
+    if preference:
+        return preference
+
+    preference = MemberPortalPreference(
+        member_id=member_id,
+        invoice_language=normalize_language(record.language or DEFAULT_LANGUAGE),
+        updated_at=datetime.now(),
+    )
+    db.session.add(preference)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # A concurrent explicit member choice always wins over this initializer.
+        db.session.rollback()
+        preference = db.session.get(MemberPortalPreference, member_id)
+        if not preference:
+            raise
+    return preference
+
+
 def portal_invitation_public(record, duplicate=False):
     request_type = record.request_type or PORTAL_INVITATION_REQUEST_TYPE_NEW_MEMBER
     response = {
@@ -13617,6 +13648,22 @@ def reconcile_portal_invitation(record):
     db.session.refresh(record)
     if claimed != 1:
         return record
+
+    if request_type == PORTAL_INVITATION_REQUEST_TYPE_EXISTING_MEMBER_REVERIFICATION:
+        try:
+            preference = initialize_existing_member_portal_language_preference(record)
+        except SQLAlchemyError:
+            db.session.rollback()
+            record = db.session.get(PortalInvitation, record.id)
+            return mark_portal_invitation_for_review(
+                record,
+                "portal_language_preference_initialization_failed",
+            )
+        if not preference:
+            return mark_portal_invitation_for_review(
+                record,
+                "portal_language_preference_initialization_failed",
+            )
 
     try:
         delivery_result = deliver_email([member_email], subject, body, html_body=html_body)
