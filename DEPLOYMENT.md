@@ -35,6 +35,12 @@ SIGNUP_PORTAL_INTEGRATION_TOKEN=<shared random token of at least 32 characters>
 PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED=false
 PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS=
 PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS=
+EXISTING_MEMBER_JOURNAL_EVIDENCE_ENABLED=false
+EXISTING_MEMBER_JOURNAL_EVIDENCE_SOURCE_COVERAGE_PROVEN=false
+EXISTING_MEMBER_JOURNAL_EVIDENCE_AGENT_PUBLIC_KEYS_JSON={}
+EXISTING_MEMBER_JOURNAL_EVIDENCE_PORTAL_SIGNING_KEY_ID=
+EXISTING_MEMBER_JOURNAL_EVIDENCE_PORTAL_PRIVATE_KEY=
+EXISTING_MEMBER_JOURNAL_EVIDENCE_CLAIM_SECONDS=120
 MEMBER_PORTAL_PUBLIC_URL=https://dreamzfitness.app
 WORDPRESS_SCHEDULE_WEBHOOK_URL=https://dreamzfitness.com/wp-json/dreamz/v1/group-class-schedule
 WORDPRESS_SCHEDULE_WEBHOOK_TOKEN=<shared random token used only for schedule publication>
@@ -125,6 +131,37 @@ and the SHA-256 digest of the canonical request both in `idempotency_key` and th
 number, verified email and mapped plan, targets only the already-synced member,
 and echoes `request_type`, `member_number` and `idempotency_key` to the protected
 caller. It never creates a second Portal member.
+
+The protected writer has a second, independent journal-evidence gate. Keep
+`EXISTING_MEMBER_JOURNAL_EVIDENCE_ENABLED=false` until all of the following have
+been reviewed together: the authoritative live `Data\Journal.jtx` source coverage,
+the exact Portal Sync classifier, the Portal and agent Ed25519 public-key maps,
+and a Signup Bridge that advertises and enforces
+`dreamz.signup-bridge.existing-member-journal-evidence.v2`. The Portal owns its
+receipt-signing private key; the frontdesk Portal Sync agent owns a different
+agent-signing private key. Never exchange, log, commit or reuse those private
+keys.
+
+When the gate is eventually enabled, the local `Dreamz Portal Sync` task also
+requires these profile-scoped settings:
+
+```text
+PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_ENABLED=true
+PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_SOURCE_COVERAGE=dreamz.ga.journal.member-lines.v1
+PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_AGENT_ID=frontdesk_dreamz
+PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_KEY_ID=<current agent key ID>
+PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_PRIVATE_KEY=<frontdesk-only Ed25519 private key>
+PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_TIMEOUT_SECONDS=15
+PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_LIMIT=1
+PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_RETRIES=1
+```
+
+The five-minute task cycle must remain healthy. A signed PRE receipt is required
+before the existing-member update becomes claimable. A successful local read-back
+is provisional: only an exact signed POST receipt with verdict
+`verified_unchanged` completes the workflow and permits the Portal invitation.
+Missing, expired, unstable, incomplete, mismatched or legacy evidence always
+stops in manual review and never replays the writer.
 
 ### Sync monitoring
 

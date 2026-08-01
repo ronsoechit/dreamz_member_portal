@@ -31,6 +31,9 @@ from ga_journal import (
 )
 from ga_journal_snapshot import parse_member_scoped_journal_snapshot_bytes
 from ga_documents import infer_member_document_records
+from portal_sync_journal_evidence import (
+    process_journal_evidence_queue_if_configured,
+)
 from storage_backend import s3_client, upload_file_to_s3
 
 
@@ -1915,6 +1918,17 @@ def main() -> None:
         )
         print("FEP payment processing response:")
         print(json.dumps(result, indent=2))
+
+    journal_evidence_summary = process_journal_evidence_queue_if_configured(
+        source_root=source_root,
+        portal_url=args.portal_url,
+        sync_token=args.sync_token,
+        agent_id=args.agent_id,
+        snapshot_builder=build_existing_member_journal_evidence,
+    )
+    if journal_evidence_summary["enabled"]:
+        print("Existing-member journal evidence response:")
+        print(json.dumps(journal_evidence_summary, indent=2))
 
     scan = scan_source(source_root)
     previous = load_manifest(manifest_path)
