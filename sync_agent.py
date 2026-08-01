@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import stat
 import subprocess
 from typing import Iterable
 from urllib import request as urlrequest
@@ -28,6 +29,7 @@ from ga_journal import (
     parse_gymassistant_journal_text,
     service_period_matches_catalog_interval,
 )
+from ga_journal_snapshot import parse_member_scoped_journal_snapshot_bytes
 from ga_documents import infer_member_document_records
 from storage_backend import s3_client, upload_file_to_s3
 
@@ -42,6 +44,7 @@ DEFAULT_MEMBER_SYNC_API_TIMEOUT_SECONDS = 180
 MIN_MEMBER_SYNC_API_TIMEOUT_SECONDS = 30
 MAX_MEMBER_SYNC_API_TIMEOUT_SECONDS = 900
 OFFICIAL_MEMBER_SOURCE_KIND = "gymassistant_official_member_export_csv"
+WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 
 
 @dataclass(frozen=True)
@@ -80,6 +83,32 @@ class MemberOverlayEvent:
     path: Path
     action: str
     member: dict
+
+
+@dataclass(frozen=True)
+class StableExactFileSnapshot:
+    data: bytes
+    byte_length: int
+    source_sha256: str
+    file_identity_sha256: str
+    stable_read_count: int
+
+
+@dataclass(frozen=True)
+class _ExactFileRead:
+    data: bytes
+    byte_length: int
+    mtime_ns: int
+    file_identity: tuple[int, int]
+    file_identity_sha256: str
+
+
+class JournalSourceUnstableError(RuntimeError):
+    pass
+
+
+class JournalSourceIdentityChangedError(RuntimeError):
+    pass
 
 
 def utc_now_iso() -> str:
@@ -134,6 +163,45 @@ def live_journal_path(source_root: Path) -> Path:
     ])
     candidates.extend(root / "Journal.jtx" for root in backup_root_candidates(source_root))
     return next((path for path in candidates if path.is_file()), candidates[0])
+
+
+def _path_is_symlink_or_reparse_point(path: Path) -> bool:
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        return False
+    return bool(
+        path.is_symlink()
+        or (
+            int(getattr(path_stat, "st_file_attributes", 0))
+            & WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT
+        )
+    )
+
+
+def authoritative_live_journal_path(source_root: Path) -> Path:
+    """Return only the authoritative live Data/Journal.jtx.
+
+    This evidence path intentionally does not reuse ``live_journal_path``:
+    invoice sync may fall back to backups, while preservation evidence must
+    fail closed rather than observe a backup or a configured alternate source.
+    """
+    source_root = Path(source_root)
+    configured_data_directory = source_root / "Data"
+    if _path_is_symlink_or_reparse_point(configured_data_directory):
+        raise ValueError("authoritative live journal data path is a reparse point")
+    data_directory = configured_data_directory.resolve(strict=True)
+    candidate = configured_data_directory / "Journal.jtx"
+    if any(part.casefold() == "backup" for part in candidate.parts):
+        raise ValueError("authoritative live journal cannot be under a backup root")
+    if _path_is_symlink_or_reparse_point(candidate):
+        raise ValueError("authoritative live Journal.jtx is a reparse point")
+    if not candidate.is_file():
+        raise FileNotFoundError("authoritative live Data/Journal.jtx is missing")
+    resolved = candidate.resolve(strict=True)
+    if resolved.parent != data_directory or resolved.name.casefold() != "journal.jtx":
+        raise ValueError("authoritative live journal data-path identity drifted")
+    return resolved
 
 
 def backup_root_candidates(source_root: Path) -> list[Path]:
@@ -205,6 +273,187 @@ def read_stable_file_snapshot(path: Path) -> tuple[bytes, str, str]:
         .isoformat()
     )
     return data, snapshot_at, hashlib.sha256(data).hexdigest()
+
+
+def _canonical_fingerprint(value: dict) -> str:
+    encoded = json.dumps(
+        value,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _file_identity(stat_result: os.stat_result) -> tuple[int, int]:
+    identity = (int(stat_result.st_dev), int(stat_result.st_ino))
+    if identity[1] <= 0:
+        raise JournalSourceIdentityChangedError(
+            "authoritative live journal has no usable file identity"
+        )
+    return identity
+
+
+def _read_exact_file_once(path: Path) -> _ExactFileRead:
+    try:
+        if _path_is_symlink_or_reparse_point(path):
+            raise JournalSourceIdentityChangedError(
+                "authoritative live journal is a reparse point"
+            )
+        resolved_before = path.resolve(strict=True)
+        path_before = resolved_before.stat()
+        if not stat.S_ISREG(path_before.st_mode):
+            raise JournalSourceIdentityChangedError(
+                "authoritative live journal is not a regular file"
+            )
+        with resolved_before.open("rb") as handle:
+            descriptor_before = os.fstat(handle.fileno())
+            data = handle.read()
+            descriptor_after = os.fstat(handle.fileno())
+        if _path_is_symlink_or_reparse_point(path):
+            raise JournalSourceIdentityChangedError(
+                "authoritative live journal became a reparse point"
+            )
+        resolved_after = path.resolve(strict=True)
+        path_after = resolved_after.stat()
+    except JournalSourceIdentityChangedError:
+        raise
+    except (FileNotFoundError, OSError) as exc:
+        raise JournalSourceUnstableError(
+            "authoritative live journal could not be read stably"
+        ) from exc
+
+    identities = {
+        _file_identity(path_before),
+        _file_identity(descriptor_before),
+        _file_identity(descriptor_after),
+        _file_identity(path_after),
+    }
+    if resolved_before != resolved_after or len(identities) != 1:
+        raise JournalSourceIdentityChangedError(
+            "authoritative live journal was replaced during observation"
+        )
+    if (
+        descriptor_before.st_size != descriptor_after.st_size
+        or descriptor_before.st_mtime_ns != descriptor_after.st_mtime_ns
+        or path_before.st_size != path_after.st_size
+        or path_before.st_mtime_ns != path_after.st_mtime_ns
+        or descriptor_after.st_size != path_after.st_size
+        or len(data) != descriptor_after.st_size
+    ):
+        raise JournalSourceUnstableError(
+            "authoritative live journal changed during observation"
+        )
+
+    identity = identities.pop()
+    return _ExactFileRead(
+        data=data,
+        byte_length=len(data),
+        mtime_ns=int(path_after.st_mtime_ns),
+        file_identity=identity,
+        file_identity_sha256=_canonical_fingerprint(
+            {
+                "device": str(identity[0]),
+                "file_index": str(identity[1]),
+            }
+        ),
+    )
+
+
+def read_stable_file_snapshot_twice(
+    path: Path,
+    *,
+    max_attempts: int = 3,
+) -> StableExactFileSnapshot:
+    """Require two consecutive byte-identical reads of the same exact file."""
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be positive")
+    path = Path(path)
+    last_error: Exception | None = None
+    for _attempt in range(max_attempts):
+        try:
+            first = _read_exact_file_once(path)
+            second = _read_exact_file_once(path)
+        except JournalSourceIdentityChangedError:
+            raise
+        except JournalSourceUnstableError as exc:
+            last_error = exc
+            continue
+        if first.file_identity != second.file_identity:
+            raise JournalSourceIdentityChangedError(
+                "authoritative live journal was replaced between exact reads"
+            )
+        if (
+            first.data == second.data
+            and first.byte_length == second.byte_length
+            and first.mtime_ns == second.mtime_ns
+            and first.file_identity_sha256 == second.file_identity_sha256
+        ):
+            return StableExactFileSnapshot(
+                data=second.data,
+                byte_length=second.byte_length,
+                source_sha256=hashlib.sha256(second.data).hexdigest(),
+                file_identity_sha256=second.file_identity_sha256,
+                stable_read_count=2,
+            )
+        last_error = JournalSourceUnstableError(
+            "authoritative live journal differed between exact reads"
+        )
+    raise JournalSourceUnstableError(
+        "authoritative live journal did not produce two stable exact reads"
+    ) from last_error
+
+
+def _path_fingerprint(path: Path) -> str:
+    normalized = str(path.resolve(strict=True)).replace("\\", "/")
+    if os.name == "nt":
+        normalized = normalized.casefold()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def build_existing_member_journal_evidence(
+    source_root: Path,
+    *,
+    member_number: str | int,
+    source_coverage_proven: bool = False,
+    max_read_attempts: int = 3,
+) -> dict:
+    """Build the unsigned, privacy-safe Portal Sync evidence core.
+
+    This helper intentionally does not claim a Portal request, sign an envelope
+    or post a result. Source coverage defaults to unproven, so an unwired caller
+    cannot accidentally create complete evidence.
+    """
+    if not isinstance(source_coverage_proven, bool):
+        raise ValueError("source_coverage_proven must be a boolean")
+    source_root = Path(source_root)
+    data_directory = (source_root / "Data").resolve(strict=True)
+    journal_path = authoritative_live_journal_path(source_root)
+    if journal_path.parent != data_directory:
+        raise ValueError("authoritative live journal data-path identity drifted")
+    stable = read_stable_file_snapshot_twice(
+        journal_path,
+        max_attempts=max_read_attempts,
+    )
+    scope = parse_member_scoped_journal_snapshot_bytes(
+        stable.data,
+        member_number=member_number,
+        source_coverage_proven=source_coverage_proven,
+    )
+    return {
+        "schema": "dreamz.portal-sync.member-journal-evidence-core.v1",
+        "member_number": scope.member_number,
+        "observed_at": utc_now_iso(),
+        "source": {
+            "kind": "gym_assistant_live_journal",
+            "locator_fingerprint_sha256": _path_fingerprint(journal_path),
+            "data_path_fingerprint_sha256": _path_fingerprint(data_directory),
+            "file_identity_sha256": stable.file_identity_sha256,
+            "byte_length": stable.byte_length,
+            "source_sha256": stable.source_sha256,
+            "stable_read_count": stable.stable_read_count,
+        },
+        "scope": scope.as_evidence_scope(),
+    }
 
 
 def backup_snapshot_entries(data: bytes) -> tuple[str, bytes]:

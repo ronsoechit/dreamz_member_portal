@@ -2,15 +2,20 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import csv
 import hashlib
+import json
 import tempfile
 import unittest
 import os
 import subprocess
 import zipfile
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.error import URLError
 
 from sync_agent import (
+    JournalSourceIdentityChangedError,
+    JournalSourceUnstableError,
+    authoritative_live_journal_path,
+    build_existing_member_journal_evidence,
     build_sync_payload,
     diff_manifest,
     get_invoice_monitor_member_ids,
@@ -21,10 +26,12 @@ from sync_agent import (
     process_fep_payment_command,
     process_fep_payment_updates,
     read_stable_file_snapshot,
+    read_stable_file_snapshot_twice,
     run_fep_payment_writer,
     save_manifest,
     scan_source,
 )
+import sync_agent
 
 
 PHOTO_VERSIONED_KEY = "portal/Data/Pictures/0000100-55c64d0fcd6f9d5f.jpg"
@@ -604,6 +611,188 @@ class SyncAgentTests(unittest.TestCase):
             with patch.object(Path, "read_bytes", mutate_after_read):
                 with self.assertRaisesRegex(ValueError, "changed while"):
                     read_stable_file_snapshot(path)
+
+    def test_authoritative_journal_uses_only_live_data_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            backup_dir = data_dir / "Backup"
+            backup_dir.mkdir(parents=True)
+            (backup_dir / "Journal.jtx").write_bytes(b"backup-only")
+
+            with self.assertRaisesRegex(FileNotFoundError, "live Data/Journal.jtx"):
+                authoritative_live_journal_path(root)
+
+            live = data_dir / "Journal.jtx"
+            live.write_bytes(b"live")
+            self.assertEqual(authoritative_live_journal_path(root), live.resolve())
+
+    def test_authoritative_journal_rejects_symlink_when_platform_supports_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            data_dir.mkdir(parents=True)
+            target = Path(tmp) / "alternate-Journal.jtx"
+            target.write_bytes(b"not-the-bound-live-file")
+            candidate = data_dir / "Journal.jtx"
+            try:
+                candidate.symlink_to(target)
+            except OSError as exc:
+                self.skipTest(f"symlinks are unavailable on this platform: {exc}")
+
+            with self.assertRaisesRegex(ValueError, "reparse point"):
+                authoritative_live_journal_path(root)
+
+    def test_authoritative_journal_rejects_windows_reparse_attribute(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            data_dir.mkdir(parents=True)
+            (data_dir / "Journal.jtx").write_bytes(b"live")
+
+            with patch(
+                "sync_agent._path_is_symlink_or_reparse_point",
+                side_effect=lambda path: Path(path).name.casefold() == "journal.jtx",
+            ):
+                with self.assertRaisesRegex(ValueError, "reparse point"):
+                    authoritative_live_journal_path(root)
+
+    def test_windows_reparse_attribute_is_detected_portably(self):
+        path = Mock()
+        path.is_symlink.return_value = False
+        path.lstat.return_value = Mock(st_file_attributes=0x400)
+
+        self.assertTrue(sync_agent._path_is_symlink_or_reparse_point(path))
+
+    def test_two_identical_exact_live_reads_succeed_with_file_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Journal.jtx"
+            path.write_bytes(b"stable-live-journal")
+
+            snapshot = read_stable_file_snapshot_twice(path)
+
+        self.assertEqual(snapshot.data, b"stable-live-journal")
+        self.assertEqual(snapshot.byte_length, len(snapshot.data))
+        self.assertEqual(snapshot.stable_read_count, 2)
+        self.assertEqual(
+            snapshot.source_sha256,
+            hashlib.sha256(snapshot.data).hexdigest(),
+        )
+        self.assertRegex(snapshot.file_identity_sha256, r"^[0-9a-f]{64}$")
+
+    def test_changing_live_source_retries_and_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Journal.jtx"
+            path.write_bytes(b"first")
+            original_read = sync_agent._read_exact_file_once
+
+            def read_then_change(target):
+                result = original_read(target)
+                target.write_bytes(target.read_bytes() + b"x")
+                return result
+
+            with patch(
+                "sync_agent._read_exact_file_once",
+                side_effect=read_then_change,
+            ):
+                with self.assertRaisesRegex(
+                    JournalSourceUnstableError,
+                    "two stable exact reads",
+                ):
+                    read_stable_file_snapshot_twice(path, max_attempts=2)
+
+    def test_file_replacement_fails_even_when_bytes_are_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Journal.jtx"
+            path.write_bytes(b"same-bytes")
+            original_read = sync_agent._read_exact_file_once
+            call_count = 0
+
+            def read_then_replace(target):
+                nonlocal call_count
+                result = original_read(target)
+                call_count += 1
+                if call_count == 1:
+                    target.unlink()
+                    target.write_bytes(result.data)
+                return result
+
+            with patch(
+                "sync_agent._read_exact_file_once",
+                side_effect=read_then_replace,
+            ):
+                with self.assertRaisesRegex(
+                    JournalSourceIdentityChangedError,
+                    "replaced between exact reads",
+                ):
+                    read_stable_file_snapshot_twice(path)
+
+    def test_evidence_builder_rejects_data_path_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            data_dir.mkdir(parents=True)
+            (data_dir / "Journal.jtx").write_bytes(b"")
+            alternate = Path(tmp) / "alternate" / "Journal.jtx"
+            alternate.parent.mkdir()
+            alternate.write_bytes(b"")
+
+            with patch(
+                "sync_agent.authoritative_live_journal_path",
+                return_value=alternate.resolve(),
+            ):
+                with self.assertRaisesRegex(ValueError, "data-path identity drifted"):
+                    build_existing_member_journal_evidence(
+                        root,
+                        member_number="90001",
+                    )
+
+    def test_evidence_builder_is_sanitized_and_coverage_fail_closed(self):
+        raw_values = [
+            "Member Name",
+            "6500",
+            r"C:\Gym Assistant 2.6\Data\Journal.jtx",
+        ]
+        row = (
+            "c20260215!1558 7001 1771185480 0 990001 90001 77 0 0 0 29|"
+            + "|".join(raw_values)
+        ).encode("latin-1")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            data_dir.mkdir(parents=True)
+            (data_dir / "Journal.jtx").write_bytes(row)
+
+            unproven = build_existing_member_journal_evidence(
+                root,
+                member_number="90001",
+            )
+            fixture_proven = build_existing_member_journal_evidence(
+                root,
+                member_number="90001",
+                source_coverage_proven=True,
+            )
+
+        self.assertFalse(unproven["scope"]["complete"])
+        self.assertEqual(unproven["scope"]["issue_count"], 1)
+        self.assertTrue(fixture_proven["scope"]["complete"])
+        self.assertEqual(fixture_proven["scope"]["member_record_count"], 1)
+        self.assertEqual(fixture_proven["source"]["stable_read_count"], 2)
+        self.assertEqual(
+            set(fixture_proven["source"]),
+            {
+                "kind",
+                "locator_fingerprint_sha256",
+                "data_path_fingerprint_sha256",
+                "file_identity_sha256",
+                "byte_length",
+                "source_sha256",
+                "stable_read_count",
+            },
+        )
+        serialized = json.dumps(fixture_proven, sort_keys=True)
+        for value in raw_values:
+            self.assertNotIn(value, serialized)
 
     def test_build_sync_payload_supports_install_level_backup_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
