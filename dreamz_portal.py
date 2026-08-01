@@ -1,4 +1,5 @@
 import calendar
+import base64
 import hashlib
 import html
 import json
@@ -25,7 +26,7 @@ from flask import (
 
 from flask_sqlalchemy import SQLAlchemy
 from markupsafe import Markup
-from sqlalchemy import inspect, or_
+from sqlalchemy import event, inspect, or_
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from dateutil.relativedelta import relativedelta
 from datetime import datetime, date, time, timedelta   # ← bestaande regel uitbreiden
@@ -69,6 +70,19 @@ from io import BytesIO, StringIO
 from pathlib import Path
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
+
+try:
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+        Ed25519PublicKey,
+    )
+except ImportError:  # pragma: no cover - exercised through the fail-closed gate
+    InvalidSignature = None
+    serialization = None
+    Ed25519PrivateKey = None
+    Ed25519PublicKey = None
 
 
 def normalize_database_uri(database_uri, default_database_path):
@@ -126,6 +140,32 @@ app.config["FEP_PAYMENT_SYNC_TOKEN_RESERVE_8KM7V7D"] = os.getenv(
     "FEP_PAYMENT_SYNC_TOKEN_RESERVE_8KM7V7D"
 )
 app.config["SIGNUP_PORTAL_INTEGRATION_TOKEN"] = os.getenv("SIGNUP_PORTAL_INTEGRATION_TOKEN")
+app.config["EXISTING_MEMBER_JOURNAL_EVIDENCE_ENABLED"] = os.getenv(
+    "EXISTING_MEMBER_JOURNAL_EVIDENCE_ENABLED",
+    "false",
+).lower() in ("1", "true", "yes")
+app.config["EXISTING_MEMBER_JOURNAL_EVIDENCE_SOURCE_COVERAGE_PROVEN"] = os.getenv(
+    "EXISTING_MEMBER_JOURNAL_EVIDENCE_SOURCE_COVERAGE_PROVEN",
+    "false",
+).lower() in ("1", "true", "yes")
+app.config["EXISTING_MEMBER_JOURNAL_EVIDENCE_AGENT_PUBLIC_KEYS_JSON"] = os.getenv(
+    "EXISTING_MEMBER_JOURNAL_EVIDENCE_AGENT_PUBLIC_KEYS_JSON",
+    "",
+)
+app.config["EXISTING_MEMBER_JOURNAL_EVIDENCE_PORTAL_SIGNING_KEY_ID"] = os.getenv(
+    "EXISTING_MEMBER_JOURNAL_EVIDENCE_PORTAL_SIGNING_KEY_ID",
+    "",
+)
+app.config["EXISTING_MEMBER_JOURNAL_EVIDENCE_PORTAL_PRIVATE_KEY"] = os.getenv(
+    "EXISTING_MEMBER_JOURNAL_EVIDENCE_PORTAL_PRIVATE_KEY",
+    "",
+)
+app.config["EXISTING_MEMBER_JOURNAL_EVIDENCE_CLAIM_SECONDS"] = (
+    positive_int_environment_value(
+        "EXISTING_MEMBER_JOURNAL_EVIDENCE_CLAIM_SECONDS",
+        120,
+    )
+)
 app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED"] = os.getenv(
     "PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED",
     "false",
@@ -746,6 +786,103 @@ class PortalInvitation(db.Model):
     sent_at = db.Column(db.DateTime)
 
     email_log = db.relationship("EmailLog")
+
+
+class ExistingMemberJournalEvidenceRequest(db.Model):
+    __table_args__ = (
+        db.UniqueConstraint(
+            "reference",
+            "phase",
+            name="uq_existing_member_journal_evidence_reference_phase",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    request_id = db.Column(db.String(128), unique=True, nullable=False, index=True)
+    request_payload_sha256 = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    request_payload_json = db.Column(db.Text, nullable=False)
+    nonce_sha256 = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    reference = db.Column(db.String(64), nullable=False, index=True)
+    phase = db.Column(db.String(8), nullable=False, index=True)
+    member_number = db.Column(db.String(16), nullable=False, index=True)
+    target_agent = db.Column(db.String(64), nullable=False, index=True)
+    status = db.Column(db.String(32), default="pending", nullable=False, index=True)
+    claimed_by = db.Column(db.String(64), index=True)
+    claim_id_sha256 = db.Column(db.String(64), index=True)
+    claimed_at = db.Column(db.DateTime)
+    claim_expires_at = db.Column(db.DateTime, index=True)
+    result_payload_sha256 = db.Column(db.String(64), index=True)
+    result_envelope_json = db.Column(db.Text)
+    result_received_at = db.Column(db.DateTime)
+    failure_code = db.Column(db.String(64))
+    requested_at = db.Column(db.DateTime, nullable=False, index=True)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+
+class ExistingMemberJournalEvidenceReceipt(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    receipt_id = db.Column(db.String(128), unique=True, nullable=False, index=True)
+    request_id = db.Column(
+        db.String(128),
+        db.ForeignKey("existing_member_journal_evidence_request.request_id"),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+    reference = db.Column(db.String(64), nullable=False, index=True)
+    phase = db.Column(db.String(8), nullable=False, index=True)
+    member_number = db.Column(db.String(16), nullable=False, index=True)
+    request_payload_sha256 = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    agent_result_payload_sha256 = db.Column(db.String(64), nullable=False, index=True)
+    receipt_payload_sha256 = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    receipt_payload_json = db.Column(db.Text, nullable=False)
+    receipt_envelope_json = db.Column(db.Text, nullable=False)
+    key_id = db.Column(db.String(64), nullable=False)
+    signature = db.Column(db.Text, nullable=False)
+    verdict = db.Column(db.String(32), nullable=False, index=True)
+    observed_at = db.Column(db.DateTime, nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+
+    evidence_request = db.relationship(
+        "ExistingMemberJournalEvidenceRequest",
+        backref=db.backref("evidence_receipt", uselist=False),
+    )
+
+
+@event.listens_for(ExistingMemberJournalEvidenceRequest, "before_update")
+def prevent_existing_member_journal_evidence_request_rebinding(
+    _mapper,
+    _connection,
+    target,
+):
+    state = inspect(target)
+    immutable_fields = (
+        "request_id",
+        "request_payload_sha256",
+        "request_payload_json",
+        "nonce_sha256",
+        "reference",
+        "phase",
+        "member_number",
+        "target_agent",
+        "requested_at",
+        "expires_at",
+        "created_at",
+    )
+    if any(state.attrs[field_name].history.has_changes() for field_name in immutable_fields):
+        raise RuntimeError("Journal evidence request bindings are immutable.")
+
+
+@event.listens_for(ExistingMemberJournalEvidenceReceipt, "before_update")
+def prevent_existing_member_journal_evidence_receipt_update(
+    _mapper,
+    _connection,
+    _target,
+):
+    raise RuntimeError("Journal evidence receipts are immutable.")
 
 
 class SyncRun(db.Model):
@@ -13274,6 +13411,1315 @@ Dreamz Fitness
     return subject, body, html_body
 
 
+EXISTING_MEMBER_JOURNAL_EVIDENCE_REQUEST_SCHEMA = (
+    "dreamz.existing-member-journal-evidence.request.v1"
+)
+EXISTING_MEMBER_JOURNAL_EVIDENCE_AGENT_SCHEMA = (
+    "dreamz.portal-sync.member-journal-evidence.v1"
+)
+EXISTING_MEMBER_JOURNAL_EVIDENCE_RECEIPT_SCHEMA = (
+    "dreamz.portal.member-journal-evidence-receipt.v1"
+)
+EXISTING_MEMBER_JOURNAL_EVIDENCE_SIGNATURE_DOMAIN = (
+    b"dreamz.member-journal-evidence.v1\x00"
+)
+EXISTING_MEMBER_JOURNAL_EVIDENCE_SOURCE_KIND = "gym_assistant_live_journal"
+EXISTING_MEMBER_JOURNAL_EVIDENCE_CLASSIFIER_VERSION = (
+    "dreamz.ga.journal.member-lines.v1"
+)
+EXISTING_MEMBER_JOURNAL_EVIDENCE_TARGET_AGENT = "frontdesk_dreamz"
+EXISTING_MEMBER_JOURNAL_EVIDENCE_SOURCE_FLOW = "existing_member_reverification"
+EXISTING_MEMBER_JOURNAL_EVIDENCE_OPERATION = "update_existing_documents"
+EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_PENDING = "pending"
+EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_CLAIMED = "claimed"
+EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_COMPLETED = "completed"
+EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_MANUAL_REVIEW = "manual_review"
+EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_EXPIRED = "expired"
+EXISTING_MEMBER_JOURNAL_EVIDENCE_TERMINAL_STATUSES = frozenset({
+    EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_COMPLETED,
+    EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_MANUAL_REVIEW,
+    EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_EXPIRED,
+})
+EXISTING_MEMBER_JOURNAL_EVIDENCE_PRE_VERDICT = "pre_verified"
+EXISTING_MEMBER_JOURNAL_EVIDENCE_POST_VERDICT = "verified_unchanged"
+EXISTING_MEMBER_JOURNAL_EVIDENCE_MANUAL_VERDICT = "manual_review"
+EXISTING_MEMBER_JOURNAL_EVIDENCE_MAX_REQUEST_SECONDS = 600
+EXISTING_MEMBER_JOURNAL_EVIDENCE_MAX_CLOCK_SKEW_SECONDS = 60
+EXISTING_MEMBER_JOURNAL_EVIDENCE_MAX_SAFE_INTEGER = 9007199254740991
+EXISTING_MEMBER_JOURNAL_EVIDENCE_HASH_FIELDS = (
+    "baseline_sha256",
+    "proposal_sha256",
+    "signed_pdf_sha256",
+    "review_bundle_sha256",
+    "approved_mutation_core_sha256",
+)
+EXISTING_MEMBER_JOURNAL_EVIDENCE_PRE_REQUEST_FIELDS = frozenset({
+    "schema",
+    "request_id",
+    "phase",
+    "nonce",
+    "requested_at",
+    "expires_at",
+    "reference",
+    "source_flow",
+    "member_number",
+    "operation",
+    *EXISTING_MEMBER_JOURNAL_EVIDENCE_HASH_FIELDS,
+})
+EXISTING_MEMBER_JOURNAL_EVIDENCE_POST_REQUEST_FIELDS = frozenset({
+    *EXISTING_MEMBER_JOURNAL_EVIDENCE_PRE_REQUEST_FIELDS,
+    "evidence_bound_job_sha256",
+    "pre_receipt_sha256",
+    "local_readback_sha256",
+    "local_readback_completed_at",
+})
+EXISTING_MEMBER_JOURNAL_EVIDENCE_AGENT_ENVELOPE_FIELDS = frozenset({
+    "payload",
+    "payload_sha256",
+    "key_id",
+    "signature",
+})
+EXISTING_MEMBER_JOURNAL_EVIDENCE_AGENT_PAYLOAD_FIELDS = frozenset({
+    "schema",
+    "request_id",
+    "request_payload_sha256",
+    "phase",
+    "reference",
+    "member_number",
+    "agent_id",
+    "observed_at",
+    "source",
+    "scope",
+})
+EXISTING_MEMBER_JOURNAL_EVIDENCE_SOURCE_FIELDS = frozenset({
+    "kind",
+    "locator_fingerprint_sha256",
+    "data_path_fingerprint_sha256",
+    "file_identity_sha256",
+    "byte_length",
+    "source_sha256",
+    "stable_read_count",
+})
+EXISTING_MEMBER_JOURNAL_EVIDENCE_SCOPE_FIELDS = frozenset({
+    "classifier_version",
+    "complete",
+    "member_record_count",
+    "member_record_multiset_sha256",
+    "issue_count",
+})
+EXISTING_MEMBER_JOURNAL_EVIDENCE_TIMESTAMP_RE = re.compile(
+    r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\Z"
+)
+EXISTING_MEMBER_JOURNAL_EVIDENCE_OPAQUE_RE = re.compile(
+    r"\A[A-Za-z0-9][A-Za-z0-9._~-]{15,127}\Z"
+)
+EXISTING_MEMBER_JOURNAL_EVIDENCE_KEY_ID_RE = re.compile(
+    r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z"
+)
+EXISTING_MEMBER_JOURNAL_EVIDENCE_SHA256_RE = re.compile(r"\A[a-f0-9]{64}\Z")
+
+
+class ExistingMemberJournalEvidenceReject(ValueError):
+    def __init__(self, message, status_code=422, code="invalid_contract"):
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+
+
+def existing_member_journal_evidence_config_bool(name):
+    configured = app.config.get(name, False)
+    if isinstance(configured, str):
+        return configured.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(configured)
+
+
+def existing_member_journal_evidence_utc_now():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def existing_member_journal_evidence_utc_text(value):
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.isoformat(timespec="milliseconds") + "Z"
+
+
+def parse_existing_member_journal_evidence_timestamp(value, field_name):
+    if (
+        not isinstance(value, str)
+        or not EXISTING_MEMBER_JOURNAL_EVIDENCE_TIMESTAMP_RE.fullmatch(value)
+    ):
+        raise ExistingMemberJournalEvidenceReject(
+            f"{field_name} must be a UTC ISO 8601 timestamp ending in Z.",
+            code="invalid_timestamp",
+        )
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError as exc:
+        raise ExistingMemberJournalEvidenceReject(
+            f"{field_name} is not a valid timestamp.",
+            code="invalid_timestamp",
+        ) from exc
+    return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def existing_member_journal_evidence_require_exact_keys(value, expected, label):
+    if not isinstance(value, dict):
+        raise ExistingMemberJournalEvidenceReject(
+            f"{label} must be a JSON object.",
+            code="invalid_contract",
+        )
+    actual = frozenset(value)
+    if actual != expected:
+        raise ExistingMemberJournalEvidenceReject(
+            f"{label} fields do not match the strict contract "
+            f"(missing={len(expected - actual)}, extra={len(actual - expected)}).",
+            code="invalid_contract",
+        )
+
+
+def existing_member_journal_evidence_request_json():
+    if not request.is_json:
+        raise ExistingMemberJournalEvidenceReject(
+            "Content-Type must be application/json.",
+            code="invalid_json",
+        )
+    raw = request.get_data(cache=True)
+    if not raw or len(raw) > 65536:
+        raise ExistingMemberJournalEvidenceReject(
+            "Journal evidence JSON body is empty or too large.",
+            code="invalid_json",
+        )
+
+    def reject_duplicate_keys(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ExistingMemberJournalEvidenceReject(
+                    "Journal evidence JSON contains a duplicate object key.",
+                    code="invalid_json",
+                )
+            value[key] = item
+        return value
+
+    def reject_nonfinite_number(value):
+        raise ExistingMemberJournalEvidenceReject(
+            f"Non-finite JSON number {value} is not allowed.",
+            code="invalid_json",
+        )
+
+    try:
+        return json.loads(
+            raw.decode("utf-8", errors="strict"),
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_nonfinite_number,
+        )
+    except ExistingMemberJournalEvidenceReject:
+        raise
+    except (UnicodeDecodeError, ValueError, TypeError) as exc:
+        raise ExistingMemberJournalEvidenceReject(
+            "Journal evidence body is not strict UTF-8 JSON.",
+            code="invalid_json",
+        ) from exc
+
+
+def existing_member_journal_evidence_string(value, field_name, pattern, max_length=256):
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > max_length
+        or not pattern.fullmatch(value)
+    ):
+        raise ExistingMemberJournalEvidenceReject(
+            f"{field_name} is invalid.",
+            code="invalid_contract",
+        )
+    return value
+
+
+def existing_member_journal_evidence_hash(value, field_name):
+    return existing_member_journal_evidence_string(
+        value,
+        field_name,
+        EXISTING_MEMBER_JOURNAL_EVIDENCE_SHA256_RE,
+        64,
+    )
+
+
+def _existing_member_journal_evidence_validate_jcs_string(value):
+    if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+        raise ExistingMemberJournalEvidenceReject(
+            "Canonical JSON strings may not contain lone UTF-16 surrogates.",
+            code="invalid_canonical_json",
+        )
+
+
+def _existing_member_journal_evidence_jcs_sort_key(value):
+    _existing_member_journal_evidence_validate_jcs_string(value)
+    return value.encode("utf-16-be")
+
+
+def existing_member_journal_evidence_jcs(value):
+    """Return RFC 8785/JCS JSON for this protocol's integer-only data model."""
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, int) and not isinstance(value, bool):
+        if abs(value) > EXISTING_MEMBER_JOURNAL_EVIDENCE_MAX_SAFE_INTEGER:
+            raise ExistingMemberJournalEvidenceReject(
+                "Canonical JSON integer is outside the interoperable range.",
+                code="invalid_canonical_json",
+            )
+        return str(value)
+    if isinstance(value, float):
+        raise ExistingMemberJournalEvidenceReject(
+            "Floating-point values are not allowed in journal evidence.",
+            code="invalid_canonical_json",
+        )
+    if isinstance(value, str):
+        _existing_member_journal_evidence_validate_jcs_string(value)
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    if isinstance(value, list):
+        return "[" + ",".join(existing_member_journal_evidence_jcs(item) for item in value) + "]"
+    if isinstance(value, dict):
+        if not all(isinstance(key, str) for key in value):
+            raise ExistingMemberJournalEvidenceReject(
+                "Canonical JSON object keys must be strings.",
+                code="invalid_canonical_json",
+            )
+        parts = []
+        for key in sorted(value, key=_existing_member_journal_evidence_jcs_sort_key):
+            parts.append(
+                existing_member_journal_evidence_jcs(key)
+                + ":"
+                + existing_member_journal_evidence_jcs(value[key])
+            )
+        return "{" + ",".join(parts) + "}"
+    raise ExistingMemberJournalEvidenceReject(
+        "Unsupported value in canonical journal evidence JSON.",
+        code="invalid_canonical_json",
+    )
+
+
+def existing_member_journal_evidence_sha256(payload):
+    return hashlib.sha256(
+        existing_member_journal_evidence_jcs(payload).encode("utf-8")
+    ).hexdigest()
+
+
+def existing_member_journal_evidence_json(payload):
+    return existing_member_journal_evidence_jcs(payload)
+
+
+def _existing_member_journal_evidence_base64url_decode(value, field_name):
+    if (
+        not isinstance(value, str)
+        or not value
+        or "=" in value
+        or not re.fullmatch(r"[A-Za-z0-9_-]+", value)
+    ):
+        raise ExistingMemberJournalEvidenceReject(
+            f"{field_name} is not unpadded base64url.",
+            code="invalid_signature_encoding",
+        )
+    try:
+        return base64.b64decode(
+            value + ("=" * (-len(value) % 4)),
+            altchars=b"-_",
+            validate=True,
+        )
+    except (ValueError, TypeError) as exc:
+        raise ExistingMemberJournalEvidenceReject(
+            f"{field_name} is not valid base64url.",
+            code="invalid_signature_encoding",
+        ) from exc
+
+
+def _existing_member_journal_evidence_base64url_encode(value):
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _existing_member_journal_evidence_load_public_key(value):
+    if Ed25519PublicKey is None or serialization is None:
+        raise ExistingMemberJournalEvidenceReject(
+            "Ed25519 support is unavailable.",
+            status_code=503,
+            code="crypto_unavailable",
+        )
+    if isinstance(value, Ed25519PublicKey):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        raise ExistingMemberJournalEvidenceReject(
+            "Configured agent public key is invalid.",
+            status_code=503,
+            code="invalid_key_configuration",
+        )
+    encoded = value.strip()
+    try:
+        if encoded.startswith("-----BEGIN"):
+            key = serialization.load_pem_public_key(encoded.encode("ascii"))
+        else:
+            raw = _existing_member_journal_evidence_base64url_decode(
+                encoded,
+                "configured public key",
+            )
+            if len(raw) != 32:
+                raise ValueError("wrong public key length")
+            key = Ed25519PublicKey.from_public_bytes(raw)
+    except ExistingMemberJournalEvidenceReject as exc:
+        raise ExistingMemberJournalEvidenceReject(
+            "Configured agent public key is invalid.",
+            status_code=503,
+            code="invalid_key_configuration",
+        ) from exc
+    except (ValueError, TypeError) as exc:
+        raise ExistingMemberJournalEvidenceReject(
+            "Configured agent public key is invalid.",
+            status_code=503,
+            code="invalid_key_configuration",
+        ) from exc
+    if not isinstance(key, Ed25519PublicKey):
+        raise ExistingMemberJournalEvidenceReject(
+            "Configured agent public key is not Ed25519.",
+            status_code=503,
+            code="invalid_key_configuration",
+        )
+    return key
+
+
+def _existing_member_journal_evidence_load_private_key(value):
+    if Ed25519PrivateKey is None or serialization is None:
+        raise ExistingMemberJournalEvidenceReject(
+            "Ed25519 support is unavailable.",
+            status_code=503,
+            code="crypto_unavailable",
+        )
+    if isinstance(value, Ed25519PrivateKey):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal receipt signing key is not configured.",
+            status_code=503,
+            code="invalid_key_configuration",
+        )
+    encoded = value.strip()
+    try:
+        if encoded.startswith("-----BEGIN"):
+            key = serialization.load_pem_private_key(
+                encoded.encode("ascii"),
+                password=None,
+            )
+        else:
+            raw = _existing_member_journal_evidence_base64url_decode(
+                encoded,
+                "configured private key",
+            )
+            if len(raw) != 32:
+                raise ValueError("wrong private key length")
+            key = Ed25519PrivateKey.from_private_bytes(raw)
+    except ExistingMemberJournalEvidenceReject as exc:
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal receipt signing key is invalid.",
+            status_code=503,
+            code="invalid_key_configuration",
+        ) from exc
+    except (ValueError, TypeError) as exc:
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal receipt signing key is invalid.",
+            status_code=503,
+            code="invalid_key_configuration",
+        ) from exc
+    if not isinstance(key, Ed25519PrivateKey):
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal receipt signing key is not Ed25519.",
+            status_code=503,
+            code="invalid_key_configuration",
+        )
+    return key
+
+
+def existing_member_journal_evidence_agent_public_keys():
+    configured = app.config.get(
+        "EXISTING_MEMBER_JOURNAL_EVIDENCE_AGENT_PUBLIC_KEYS_JSON",
+        "",
+    )
+    if isinstance(configured, str):
+        try:
+            configured = json.loads(configured)
+        except (TypeError, ValueError) as exc:
+            raise ExistingMemberJournalEvidenceReject(
+                "Agent public-key configuration is invalid.",
+                status_code=503,
+                code="invalid_key_configuration",
+            ) from exc
+    if not isinstance(configured, dict) or not 1 <= len(configured) <= 2:
+        raise ExistingMemberJournalEvidenceReject(
+            "One current and at most one previous agent public key must be configured.",
+            status_code=503,
+            code="invalid_key_configuration",
+        )
+    keys = {}
+    seen_public_key_bytes = set()
+    for key_id, value in configured.items():
+        if (
+            not isinstance(key_id, str)
+            or not EXISTING_MEMBER_JOURNAL_EVIDENCE_KEY_ID_RE.fullmatch(key_id)
+        ):
+            raise ExistingMemberJournalEvidenceReject(
+                "Configured agent key ID is invalid.",
+                status_code=503,
+                code="invalid_key_configuration",
+            )
+        key = _existing_member_journal_evidence_load_public_key(value)
+        key_bytes = key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        if key_bytes in seen_public_key_bytes:
+            raise ExistingMemberJournalEvidenceReject(
+                "Agent key rotation may not assign one key to multiple key IDs.",
+                status_code=503,
+                code="invalid_key_configuration",
+            )
+        seen_public_key_bytes.add(key_bytes)
+        keys[key_id] = key
+    return keys
+
+
+def existing_member_journal_evidence_portal_signer():
+    key_id = app.config.get(
+        "EXISTING_MEMBER_JOURNAL_EVIDENCE_PORTAL_SIGNING_KEY_ID",
+        "",
+    )
+    if (
+        not isinstance(key_id, str)
+        or not EXISTING_MEMBER_JOURNAL_EVIDENCE_KEY_ID_RE.fullmatch(key_id)
+    ):
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal receipt signing key ID is not configured.",
+            status_code=503,
+            code="invalid_key_configuration",
+        )
+    key = _existing_member_journal_evidence_load_private_key(
+        app.config.get("EXISTING_MEMBER_JOURNAL_EVIDENCE_PORTAL_PRIVATE_KEY", "")
+    )
+    return key_id, key
+
+
+def require_existing_member_journal_evidence_ready():
+    if not existing_member_journal_evidence_config_bool(
+        "EXISTING_MEMBER_JOURNAL_EVIDENCE_ENABLED"
+    ):
+        raise ExistingMemberJournalEvidenceReject(
+            "Existing-member journal evidence is disabled.",
+            status_code=503,
+            code="feature_disabled",
+        )
+    if not existing_member_journal_evidence_config_bool(
+        "EXISTING_MEMBER_JOURNAL_EVIDENCE_SOURCE_COVERAGE_PROVEN"
+    ):
+        raise ExistingMemberJournalEvidenceReject(
+            "Authoritative journal source coverage is not proven.",
+            status_code=503,
+            code="source_coverage_unproven",
+        )
+    agent_public_keys = existing_member_journal_evidence_agent_public_keys()
+    _portal_key_id, portal_private_key = (
+        existing_member_journal_evidence_portal_signer()
+    )
+    portal_public_bytes = portal_private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    for agent_public_key in agent_public_keys.values():
+        agent_public_bytes = agent_public_key.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        if secrets.compare_digest(portal_public_bytes, agent_public_bytes):
+            raise ExistingMemberJournalEvidenceReject(
+                "Portal receipt and Portal Sync evidence keys must be separate.",
+                status_code=503,
+                code="invalid_key_configuration",
+            )
+
+
+def normalize_existing_member_journal_evidence_request(
+    payload,
+    idempotency_key_header=None,
+    *,
+    now=None,
+):
+    if not isinstance(payload, dict):
+        raise ExistingMemberJournalEvidenceReject(
+            "Expected a JSON object.",
+            code="invalid_contract",
+        )
+    phase = payload.get("phase")
+    if phase not in {"pre", "post"}:
+        raise ExistingMemberJournalEvidenceReject(
+            "phase must be pre or post.",
+            code="invalid_phase",
+        )
+    expected_fields = (
+        EXISTING_MEMBER_JOURNAL_EVIDENCE_PRE_REQUEST_FIELDS
+        if phase == "pre"
+        else EXISTING_MEMBER_JOURNAL_EVIDENCE_POST_REQUEST_FIELDS
+    )
+    existing_member_journal_evidence_require_exact_keys(
+        payload,
+        expected_fields,
+        "journal evidence request",
+    )
+
+    if payload["schema"] != EXISTING_MEMBER_JOURNAL_EVIDENCE_REQUEST_SCHEMA:
+        raise ExistingMemberJournalEvidenceReject(
+            "Unsupported journal evidence request schema.",
+            code="invalid_schema",
+        )
+    request_id = existing_member_journal_evidence_string(
+        payload["request_id"],
+        "request_id",
+        EXISTING_MEMBER_JOURNAL_EVIDENCE_OPAQUE_RE,
+        128,
+    )
+    nonce = existing_member_journal_evidence_string(
+        payload["nonce"],
+        "nonce",
+        EXISTING_MEMBER_JOURNAL_EVIDENCE_OPAQUE_RE,
+        128,
+    )
+    reference = str(payload["reference"] or "")
+    if not re.fullmatch(r"DF-\d{8}-\d{4,6}", reference):
+        raise ExistingMemberJournalEvidenceReject(
+            "reference is invalid.",
+            code="invalid_reference",
+        )
+    member_number = str(payload["member_number"] or "")
+    if (
+        not re.fullmatch(r"\d{1,12}", member_number)
+        or int(member_number) <= 0
+    ):
+        raise ExistingMemberJournalEvidenceReject(
+            "member_number is invalid.",
+            code="invalid_member_number",
+        )
+    if payload["source_flow"] != EXISTING_MEMBER_JOURNAL_EVIDENCE_SOURCE_FLOW:
+        raise ExistingMemberJournalEvidenceReject(
+            "source_flow is invalid.",
+            code="invalid_source_flow",
+        )
+    if payload["operation"] != EXISTING_MEMBER_JOURNAL_EVIDENCE_OPERATION:
+        raise ExistingMemberJournalEvidenceReject(
+            "operation is invalid.",
+            code="invalid_operation",
+        )
+    for field_name in EXISTING_MEMBER_JOURNAL_EVIDENCE_HASH_FIELDS:
+        existing_member_journal_evidence_hash(payload[field_name], field_name)
+
+    requested_at = parse_existing_member_journal_evidence_timestamp(
+        payload["requested_at"],
+        "requested_at",
+    )
+    expires_at = parse_existing_member_journal_evidence_timestamp(
+        payload["expires_at"],
+        "expires_at",
+    )
+    now = now or existing_member_journal_evidence_utc_now()
+    if requested_at > now + timedelta(
+        seconds=EXISTING_MEMBER_JOURNAL_EVIDENCE_MAX_CLOCK_SKEW_SECONDS
+    ):
+        raise ExistingMemberJournalEvidenceReject(
+            "requested_at is too far in the future.",
+            code="invalid_timeline",
+        )
+    lifetime = (expires_at - requested_at).total_seconds()
+    if lifetime <= 0 or lifetime > EXISTING_MEMBER_JOURNAL_EVIDENCE_MAX_REQUEST_SECONDS:
+        raise ExistingMemberJournalEvidenceReject(
+            "Request lifetime must be positive and at most ten minutes.",
+            code="invalid_timeline",
+        )
+    if expires_at <= now:
+        raise ExistingMemberJournalEvidenceReject(
+            "Journal evidence request is expired.",
+            status_code=409,
+            code="request_expired",
+        )
+
+    parsed = {
+        "requested_at": requested_at,
+        "expires_at": expires_at,
+    }
+    if phase == "post":
+        for field_name in (
+            "evidence_bound_job_sha256",
+            "pre_receipt_sha256",
+            "local_readback_sha256",
+        ):
+            existing_member_journal_evidence_hash(payload[field_name], field_name)
+        local_readback_completed_at = parse_existing_member_journal_evidence_timestamp(
+            payload["local_readback_completed_at"],
+            "local_readback_completed_at",
+        )
+        if local_readback_completed_at > requested_at:
+            raise ExistingMemberJournalEvidenceReject(
+                "POST request must be created after local read-back completion.",
+                code="invalid_timeline",
+            )
+        parsed["local_readback_completed_at"] = local_readback_completed_at
+
+    payload_hash = existing_member_journal_evidence_sha256(payload)
+    if (
+        not isinstance(idempotency_key_header, str)
+        or not EXISTING_MEMBER_JOURNAL_EVIDENCE_SHA256_RE.fullmatch(
+            idempotency_key_header
+        )
+        or not secrets.compare_digest(payload_hash, idempotency_key_header)
+    ):
+        raise ExistingMemberJournalEvidenceReject(
+            "Idempotency-Key must equal the canonical request SHA-256.",
+            code="invalid_idempotency_key",
+        )
+    return dict(payload), payload_hash, parsed
+
+
+def existing_member_journal_evidence_request_payload(record):
+    try:
+        payload = json.loads(record.request_payload_json)
+    except (TypeError, ValueError) as exc:
+        raise ExistingMemberJournalEvidenceReject(
+            "Stored journal evidence request is invalid.",
+            status_code=500,
+            code="stored_request_invalid",
+        ) from exc
+    if not secrets.compare_digest(
+        existing_member_journal_evidence_sha256(payload),
+        str(record.request_payload_sha256 or ""),
+    ):
+        raise ExistingMemberJournalEvidenceReject(
+            "Stored journal evidence request hash does not match.",
+            status_code=500,
+            code="stored_request_invalid",
+        )
+    return payload
+
+
+def validate_existing_member_journal_evidence_post_binding(
+    payload,
+    parsed,
+    *,
+    now=None,
+    require_pre_fresh_now=True,
+):
+    if payload.get("phase") != "post":
+        return None, None
+    pre_receipt = ExistingMemberJournalEvidenceReceipt.query.filter_by(
+        receipt_payload_sha256=payload["pre_receipt_sha256"],
+        phase="pre",
+    ).first()
+    if not pre_receipt:
+        raise ExistingMemberJournalEvidenceReject(
+            "POST request does not reference a known PRE receipt.",
+            status_code=409,
+            code="pre_receipt_missing",
+        )
+    pre_request = pre_receipt.evidence_request
+    if (
+        not pre_request
+        or pre_request.status != EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_COMPLETED
+        or pre_receipt.verdict != EXISTING_MEMBER_JOURNAL_EVIDENCE_PRE_VERDICT
+    ):
+        raise ExistingMemberJournalEvidenceReject(
+            "PRE evidence did not complete successfully.",
+            status_code=409,
+            code="pre_receipt_not_valid",
+        )
+    pre_payload = existing_member_journal_evidence_request_payload(pre_request)
+    for field_name in (
+        "reference",
+        "source_flow",
+        "member_number",
+        "operation",
+        *EXISTING_MEMBER_JOURNAL_EVIDENCE_HASH_FIELDS,
+    ):
+        if not secrets.compare_digest(
+            str(payload[field_name]),
+            str(pre_payload[field_name]),
+        ):
+            raise ExistingMemberJournalEvidenceReject(
+                f"POST {field_name} does not match PRE evidence.",
+                status_code=409,
+                code="pre_post_binding_mismatch",
+            )
+    requested_at = parsed["requested_at"]
+    local_readback_completed_at = parsed["local_readback_completed_at"]
+    if requested_at > pre_receipt.expires_at or (
+        require_pre_fresh_now
+        and (now or existing_member_journal_evidence_utc_now())
+        > pre_receipt.expires_at
+    ):
+        raise ExistingMemberJournalEvidenceReject(
+            "PRE receipt expired before POST was created.",
+            status_code=409,
+            code="pre_receipt_expired",
+        )
+    if pre_receipt.observed_at >= local_readback_completed_at:
+        raise ExistingMemberJournalEvidenceReject(
+            "PRE observation is not before local read-back completion.",
+            status_code=409,
+            code="invalid_timeline",
+        )
+    return pre_receipt, pre_request
+
+
+def _existing_member_journal_evidence_nonnegative_int(value, field_name):
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 0
+        or value > EXISTING_MEMBER_JOURNAL_EVIDENCE_MAX_SAFE_INTEGER
+    ):
+        raise ExistingMemberJournalEvidenceReject(
+            f"{field_name} must be a nonnegative interoperable integer.",
+            code="invalid_agent_result",
+        )
+    return value
+
+
+def normalize_portal_sync_journal_evidence_envelope(envelope):
+    existing_member_journal_evidence_require_exact_keys(
+        envelope,
+        EXISTING_MEMBER_JOURNAL_EVIDENCE_AGENT_ENVELOPE_FIELDS,
+        "Portal Sync evidence envelope",
+    )
+    payload = envelope["payload"]
+    existing_member_journal_evidence_require_exact_keys(
+        payload,
+        EXISTING_MEMBER_JOURNAL_EVIDENCE_AGENT_PAYLOAD_FIELDS,
+        "Portal Sync evidence payload",
+    )
+    if payload["schema"] != EXISTING_MEMBER_JOURNAL_EVIDENCE_AGENT_SCHEMA:
+        raise ExistingMemberJournalEvidenceReject(
+            "Unsupported Portal Sync evidence schema.",
+            code="invalid_agent_schema",
+        )
+    existing_member_journal_evidence_string(
+        payload["request_id"],
+        "request_id",
+        EXISTING_MEMBER_JOURNAL_EVIDENCE_OPAQUE_RE,
+        128,
+    )
+    existing_member_journal_evidence_hash(
+        payload["request_payload_sha256"],
+        "request_payload_sha256",
+    )
+    if payload["phase"] not in {"pre", "post"}:
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal Sync phase is invalid.",
+            code="invalid_agent_result",
+        )
+    if not re.fullmatch(r"DF-\d{8}-\d{4,6}", str(payload["reference"] or "")):
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal Sync reference is invalid.",
+            code="invalid_agent_result",
+        )
+    if (
+        not re.fullmatch(r"\d{1,12}", str(payload["member_number"] or ""))
+        or int(payload["member_number"]) <= 0
+    ):
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal Sync member_number is invalid.",
+            code="invalid_agent_result",
+        )
+    if payload["agent_id"] != EXISTING_MEMBER_JOURNAL_EVIDENCE_TARGET_AGENT:
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal Sync agent identity is invalid.",
+            code="wrong_agent",
+        )
+    observed_at = parse_existing_member_journal_evidence_timestamp(
+        payload["observed_at"],
+        "observed_at",
+    )
+
+    source = payload["source"]
+    existing_member_journal_evidence_require_exact_keys(
+        source,
+        EXISTING_MEMBER_JOURNAL_EVIDENCE_SOURCE_FIELDS,
+        "Portal Sync source",
+    )
+    if source["kind"] != EXISTING_MEMBER_JOURNAL_EVIDENCE_SOURCE_KIND:
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal Sync source kind is invalid.",
+            code="invalid_source",
+        )
+    for field_name in (
+        "locator_fingerprint_sha256",
+        "data_path_fingerprint_sha256",
+        "file_identity_sha256",
+        "source_sha256",
+    ):
+        existing_member_journal_evidence_hash(source[field_name], field_name)
+    _existing_member_journal_evidence_nonnegative_int(
+        source["byte_length"],
+        "byte_length",
+    )
+    stable_read_count = _existing_member_journal_evidence_nonnegative_int(
+        source["stable_read_count"],
+        "stable_read_count",
+    )
+    if stable_read_count != 2:
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal Sync must report exactly two stable reads.",
+            code="source_unstable",
+        )
+
+    scope = payload["scope"]
+    existing_member_journal_evidence_require_exact_keys(
+        scope,
+        EXISTING_MEMBER_JOURNAL_EVIDENCE_SCOPE_FIELDS,
+        "Portal Sync scope",
+    )
+    if scope["classifier_version"] != EXISTING_MEMBER_JOURNAL_EVIDENCE_CLASSIFIER_VERSION:
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal Sync classifier version is invalid.",
+            code="classifier_mismatch",
+        )
+    if not isinstance(scope["complete"], bool):
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal Sync complete must be boolean.",
+            code="invalid_agent_result",
+        )
+    _existing_member_journal_evidence_nonnegative_int(
+        scope["member_record_count"],
+        "member_record_count",
+    )
+    existing_member_journal_evidence_hash(
+        scope["member_record_multiset_sha256"],
+        "member_record_multiset_sha256",
+    )
+    _existing_member_journal_evidence_nonnegative_int(
+        scope["issue_count"],
+        "issue_count",
+    )
+
+    payload_sha256 = existing_member_journal_evidence_hash(
+        envelope["payload_sha256"],
+        "payload_sha256",
+    )
+    expected_payload_sha256 = existing_member_journal_evidence_sha256(payload)
+    if not secrets.compare_digest(payload_sha256, expected_payload_sha256):
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal Sync payload hash does not match.",
+            code="agent_result_hash_mismatch",
+        )
+    key_id = existing_member_journal_evidence_string(
+        envelope["key_id"],
+        "key_id",
+        EXISTING_MEMBER_JOURNAL_EVIDENCE_KEY_ID_RE,
+        64,
+    )
+    signature_bytes = _existing_member_journal_evidence_base64url_decode(
+        envelope["signature"],
+        "signature",
+    )
+    if len(signature_bytes) != 64:
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal Sync signature length is invalid.",
+            code="invalid_signature_encoding",
+        )
+    return {
+        "payload": dict(payload),
+        "payload_sha256": payload_sha256,
+        "key_id": key_id,
+        "signature": envelope["signature"],
+    }, observed_at, signature_bytes
+
+
+def verify_portal_sync_evidence_signature(envelope):
+    normalized, observed_at, signature_bytes = (
+        normalize_portal_sync_journal_evidence_envelope(envelope)
+    )
+    public_keys = existing_member_journal_evidence_agent_public_keys()
+    public_key = public_keys.get(normalized["key_id"])
+    if public_key is None:
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal Sync key ID is not accepted.",
+            code="unknown_agent_key",
+        )
+    signed_message = (
+        EXISTING_MEMBER_JOURNAL_EVIDENCE_SIGNATURE_DOMAIN
+        + normalized["payload_sha256"].encode("ascii")
+    )
+    try:
+        public_key.verify(signature_bytes, signed_message)
+    except InvalidSignature as exc:
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal Sync evidence signature is invalid.",
+            code="invalid_agent_signature",
+        ) from exc
+    return normalized, observed_at
+
+
+def sign_existing_member_journal_evidence_receipt(payload):
+    key_id, private_key = existing_member_journal_evidence_portal_signer()
+    payload_sha256 = existing_member_journal_evidence_sha256(payload)
+    signature = private_key.sign(
+        EXISTING_MEMBER_JOURNAL_EVIDENCE_SIGNATURE_DOMAIN
+        + payload_sha256.encode("ascii")
+    )
+    return {
+        "payload": payload,
+        "payload_sha256": payload_sha256,
+        "key_id": key_id,
+        "signature": _existing_member_journal_evidence_base64url_encode(signature),
+    }
+
+
+def existing_member_journal_evidence_receipt_payload(receipt):
+    try:
+        payload = json.loads(receipt.receipt_payload_json)
+        envelope = json.loads(receipt.receipt_envelope_json)
+    except (TypeError, ValueError) as exc:
+        raise ExistingMemberJournalEvidenceReject(
+            "Stored journal evidence receipt is invalid.",
+            status_code=500,
+            code="stored_receipt_invalid",
+        ) from exc
+    payload_sha256 = existing_member_journal_evidence_sha256(payload)
+    if (
+        not secrets.compare_digest(
+            payload_sha256,
+            str(receipt.receipt_payload_sha256 or ""),
+        )
+        or not isinstance(envelope, dict)
+        or frozenset(envelope)
+        != EXISTING_MEMBER_JOURNAL_EVIDENCE_AGENT_ENVELOPE_FIELDS
+        or envelope.get("payload") != payload
+        or not secrets.compare_digest(
+            str(envelope.get("payload_sha256") or ""),
+            payload_sha256,
+        )
+        or not secrets.compare_digest(
+            str(envelope.get("key_id") or ""),
+            str(receipt.key_id or ""),
+        )
+        or not secrets.compare_digest(
+            str(envelope.get("signature") or ""),
+            str(receipt.signature or ""),
+        )
+    ):
+        raise ExistingMemberJournalEvidenceReject(
+            "Stored journal evidence receipt hash does not match.",
+            status_code=500,
+            code="stored_receipt_invalid",
+        )
+    return payload, envelope
+
+
+def finalize_existing_member_journal_evidence(record, envelope, *, now=None):
+    normalized_envelope, observed_at = verify_portal_sync_evidence_signature(envelope)
+    request_payload = existing_member_journal_evidence_request_payload(record)
+    result_payload = normalized_envelope["payload"]
+    now = now or existing_member_journal_evidence_utc_now()
+
+    bindings = {
+        "request_id": record.request_id,
+        "request_payload_sha256": record.request_payload_sha256,
+        "phase": record.phase,
+        "reference": record.reference,
+        "member_number": record.member_number,
+        "agent_id": record.target_agent,
+    }
+    for field_name, expected in bindings.items():
+        if not secrets.compare_digest(
+            str(result_payload[field_name]),
+            str(expected),
+        ):
+            raise ExistingMemberJournalEvidenceReject(
+                f"Portal Sync {field_name} does not match the claimed request.",
+                code="agent_request_binding_mismatch",
+            )
+    if (
+        observed_at < record.requested_at
+        or observed_at > record.expires_at
+        or observed_at > now + timedelta(
+            seconds=EXISTING_MEMBER_JOURNAL_EVIDENCE_MAX_CLOCK_SKEW_SECONDS
+        )
+    ):
+        raise ExistingMemberJournalEvidenceReject(
+            "Portal Sync observation is outside the request lifetime.",
+            code="invalid_timeline",
+        )
+
+    source = dict(result_payload["source"])
+    scope = dict(result_payload["scope"])
+    scope_is_complete = bool(
+        scope["complete"]
+        and scope["issue_count"] == 0
+        and source["stable_read_count"] == 2
+    )
+    verdict = (
+        EXISTING_MEMBER_JOURNAL_EVIDENCE_PRE_VERDICT
+        if record.phase == "pre" and scope_is_complete
+        else EXISTING_MEMBER_JOURNAL_EVIDENCE_MANUAL_VERDICT
+    )
+    comparison = None
+    if record.phase == "post":
+        pre_receipt, _pre_request = validate_existing_member_journal_evidence_post_binding(
+            request_payload,
+            {
+                "requested_at": record.requested_at,
+                "expires_at": record.expires_at,
+                "local_readback_completed_at": parse_existing_member_journal_evidence_timestamp(
+                    request_payload["local_readback_completed_at"],
+                    "local_readback_completed_at",
+                ),
+            },
+            now=now,
+            require_pre_fresh_now=False,
+        )
+        pre_receipt_payload, _pre_receipt_envelope = (
+            existing_member_journal_evidence_receipt_payload(pre_receipt)
+        )
+        local_readback_completed_at = parse_existing_member_journal_evidence_timestamp(
+            request_payload["local_readback_completed_at"],
+            "local_readback_completed_at",
+        )
+        pre_source = pre_receipt_payload["source"]
+        pre_scope = pre_receipt_payload["scope"]
+        comparison = {
+            "source_locator_match": secrets.compare_digest(
+                source["locator_fingerprint_sha256"],
+                pre_source["locator_fingerprint_sha256"],
+            ),
+            "data_path_match": secrets.compare_digest(
+                source["data_path_fingerprint_sha256"],
+                pre_source["data_path_fingerprint_sha256"],
+            ),
+            "file_identity_match": secrets.compare_digest(
+                source["file_identity_sha256"],
+                pre_source["file_identity_sha256"],
+            ),
+            "classifier_match": secrets.compare_digest(
+                scope["classifier_version"],
+                pre_scope["classifier_version"],
+            ),
+            "member_record_count_match": (
+                scope["member_record_count"] == pre_scope["member_record_count"]
+            ),
+            "member_record_multiset_match": secrets.compare_digest(
+                scope["member_record_multiset_sha256"],
+                pre_scope["member_record_multiset_sha256"],
+            ),
+            "verified_unchanged": False,
+        }
+        comparison["verified_unchanged"] = bool(
+            scope_is_complete
+            and pre_scope["complete"] is True
+            and pre_scope["issue_count"] == 0
+            and observed_at >= local_readback_completed_at
+            and observed_at > pre_receipt.observed_at
+            and all(
+                comparison[field_name]
+                for field_name in (
+                    "source_locator_match",
+                    "data_path_match",
+                    "file_identity_match",
+                    "classifier_match",
+                    "member_record_count_match",
+                    "member_record_multiset_match",
+                )
+            )
+        )
+        verdict = (
+            EXISTING_MEMBER_JOURNAL_EVIDENCE_POST_VERDICT
+            if comparison["verified_unchanged"]
+            else EXISTING_MEMBER_JOURNAL_EVIDENCE_MANUAL_VERDICT
+        )
+
+    receipt_payload = {
+        "schema": EXISTING_MEMBER_JOURNAL_EVIDENCE_RECEIPT_SCHEMA,
+        "receipt_id": "jer_" + secrets.token_urlsafe(24),
+        "request_id": record.request_id,
+        "request_payload_sha256": record.request_payload_sha256,
+        "agent_result_payload_sha256": normalized_envelope["payload_sha256"],
+        "phase": record.phase,
+        "verdict": verdict,
+        "reference": request_payload["reference"],
+        "source_flow": request_payload["source_flow"],
+        "member_number": request_payload["member_number"],
+        "operation": request_payload["operation"],
+        "baseline_sha256": request_payload["baseline_sha256"],
+        "proposal_sha256": request_payload["proposal_sha256"],
+        "signed_pdf_sha256": request_payload["signed_pdf_sha256"],
+        "review_bundle_sha256": request_payload["review_bundle_sha256"],
+        "approved_mutation_core_sha256": request_payload[
+            "approved_mutation_core_sha256"
+        ],
+        "issued_at": existing_member_journal_evidence_utc_text(now),
+        "expires_at": request_payload["expires_at"],
+        "source": source,
+        "scope": scope,
+    }
+    if record.phase == "post":
+        receipt_payload.update({
+            "evidence_bound_job_sha256": request_payload[
+                "evidence_bound_job_sha256"
+            ],
+            "pre_receipt_sha256": request_payload["pre_receipt_sha256"],
+            "local_readback_sha256": request_payload["local_readback_sha256"],
+            "local_readback_completed_at": request_payload[
+                "local_readback_completed_at"
+            ],
+            "comparison": comparison,
+        })
+    receipt_envelope = sign_existing_member_journal_evidence_receipt(receipt_payload)
+    receipt = ExistingMemberJournalEvidenceReceipt(
+        receipt_id=receipt_payload["receipt_id"],
+        request_id=record.request_id,
+        reference=record.reference,
+        phase=record.phase,
+        member_number=record.member_number,
+        request_payload_sha256=record.request_payload_sha256,
+        agent_result_payload_sha256=normalized_envelope["payload_sha256"],
+        receipt_payload_sha256=receipt_envelope["payload_sha256"],
+        receipt_payload_json=existing_member_journal_evidence_json(receipt_payload),
+        receipt_envelope_json=existing_member_journal_evidence_json(receipt_envelope),
+        key_id=receipt_envelope["key_id"],
+        signature=receipt_envelope["signature"],
+        verdict=verdict,
+        observed_at=observed_at,
+        expires_at=record.expires_at,
+        created_at=now,
+    )
+    db.session.add(receipt)
+    record.result_payload_sha256 = normalized_envelope["payload_sha256"]
+    record.result_envelope_json = existing_member_journal_evidence_json(
+        normalized_envelope
+    )
+    record.result_received_at = now
+    record.status = (
+        EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_COMPLETED
+        if verdict in {
+            EXISTING_MEMBER_JOURNAL_EVIDENCE_PRE_VERDICT,
+            EXISTING_MEMBER_JOURNAL_EVIDENCE_POST_VERDICT,
+        }
+        else EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_MANUAL_REVIEW
+    )
+    record.failure_code = (
+        None
+        if record.status == EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_COMPLETED
+        else "evidence_not_verified"
+    )
+    record.claimed_by = None
+    record.claim_id_sha256 = None
+    record.claimed_at = None
+    record.claim_expires_at = None
+    record.updated_at = now
+    return receipt
+
+
+def existing_member_journal_evidence_public(record, duplicate=False):
+    now = existing_member_journal_evidence_utc_now()
+    response = {
+        "ok": True,
+        "duplicate": bool(duplicate),
+        "request_id": record.request_id,
+        "request_payload_sha256": record.request_payload_sha256,
+        "idempotency_key": record.request_payload_sha256,
+        "reference": record.reference,
+        "member_number": record.member_number,
+        "phase": record.phase,
+        "status": record.status,
+        "expires_at": existing_member_journal_evidence_utc_text(record.expires_at),
+        "expired": bool(record.expires_at and record.expires_at <= now),
+        "receipt": None,
+    }
+    receipt = record.evidence_receipt
+    if receipt is not None:
+        _payload, envelope = existing_member_journal_evidence_receipt_payload(receipt)
+        response["receipt"] = {
+            "receipt_sha256": receipt.receipt_payload_sha256,
+            "verdict": receipt.verdict,
+            "envelope": envelope,
+        }
+    if record.status == EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_MANUAL_REVIEW:
+        response["requires_manual_review"] = True
+        response["failure_code"] = record.failure_code or "manual_review"
+    return response
+
+
+def existing_member_journal_evidence_claim_seconds():
+    try:
+        configured = int(
+            app.config.get("EXISTING_MEMBER_JOURNAL_EVIDENCE_CLAIM_SECONDS", 120)
+        )
+    except (TypeError, ValueError):
+        configured = 120
+    return max(30, min(configured, 300))
+
+
+def release_expired_existing_member_journal_evidence_claims(now=None):
+    now = now or existing_member_journal_evidence_utc_now()
+    expired_requests = (
+        ExistingMemberJournalEvidenceRequest.query
+        .filter(
+            ExistingMemberJournalEvidenceRequest.status.in_({
+                EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_PENDING,
+                EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_CLAIMED,
+            }),
+            ExistingMemberJournalEvidenceRequest.expires_at <= now,
+        )
+        .all()
+    )
+    for record in expired_requests:
+        record.status = EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_EXPIRED
+        record.failure_code = "request_expired"
+        record.claimed_by = None
+        record.claim_id_sha256 = None
+        record.claimed_at = None
+        record.claim_expires_at = None
+        record.updated_at = now
+
+    released_claims = (
+        ExistingMemberJournalEvidenceRequest.query
+        .filter(
+            ExistingMemberJournalEvidenceRequest.status
+            == EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_CLAIMED,
+            ExistingMemberJournalEvidenceRequest.claim_expires_at.isnot(None),
+            ExistingMemberJournalEvidenceRequest.claim_expires_at <= now,
+            ExistingMemberJournalEvidenceRequest.expires_at > now,
+        )
+        .all()
+    )
+    for record in released_claims:
+        record.status = EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_PENDING
+        record.claimed_by = None
+        record.claim_id_sha256 = None
+        record.claimed_at = None
+        record.claim_expires_at = None
+        record.updated_at = now
+    return len(expired_requests), len(released_claims)
+
+
+def mark_existing_member_journal_evidence_manual_review(record, code, *, now=None):
+    now = now or existing_member_journal_evidence_utc_now()
+    normalized_code = str(code or "manual_review")
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", normalized_code):
+        normalized_code = "manual_review"
+    record.status = EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_MANUAL_REVIEW
+    record.failure_code = normalized_code
+    record.claimed_by = None
+    record.claim_id_sha256 = None
+    record.claimed_at = None
+    record.claim_expires_at = None
+    record.updated_at = now
+
+
 PORTAL_INVITATION_REQUEST_TYPE_NEW_MEMBER = "new_member"
 PORTAL_INVITATION_REQUEST_TYPE_EXISTING_MEMBER_REVERIFICATION = (
     "existing_member_reverification"
@@ -14700,6 +16146,159 @@ def api_signup_portal_invitation_status(reference):
     return jsonify(portal_invitation_public(record))
 
 
+@app.post("/api/integrations/signup/existing-member-journal-evidence")
+def api_signup_existing_member_journal_evidence():
+    require_signup_portal_integration_access()
+    ensure_runtime_schema()
+    try:
+        require_existing_member_journal_evidence_ready()
+        normalized, payload_hash, parsed = (
+            normalize_existing_member_journal_evidence_request(
+                existing_member_journal_evidence_request_json(),
+                request.headers.get("Idempotency-Key"),
+            )
+        )
+        validate_existing_member_journal_evidence_post_binding(
+            normalized,
+            parsed,
+        )
+    except ExistingMemberJournalEvidenceReject as exc:
+        return jsonify({
+            "ok": False,
+            "status": "rejected",
+            "code": exc.code,
+            "error": str(exc),
+        }), exc.status_code
+
+    nonce_sha256 = hashlib.sha256(normalized["nonce"].encode("utf-8")).hexdigest()
+    existing = (
+        ExistingMemberJournalEvidenceRequest.query
+        .filter(or_(
+            ExistingMemberJournalEvidenceRequest.request_id
+            == normalized["request_id"],
+            ExistingMemberJournalEvidenceRequest.request_payload_sha256
+            == payload_hash,
+            ExistingMemberJournalEvidenceRequest.nonce_sha256
+            == nonce_sha256,
+            (
+                (ExistingMemberJournalEvidenceRequest.reference == normalized["reference"])
+                & (ExistingMemberJournalEvidenceRequest.phase == normalized["phase"])
+            ),
+        ))
+        .first()
+    )
+    if existing:
+        if secrets.compare_digest(existing.request_payload_sha256, payload_hash):
+            return jsonify(
+                existing_member_journal_evidence_public(existing, duplicate=True)
+            ), 200
+        mark_existing_member_journal_evidence_manual_review(
+            existing,
+            "idempotency_conflict",
+        )
+        db.session.commit()
+        conflict = existing_member_journal_evidence_public(existing, duplicate=True)
+        conflict.update({
+            "ok": False,
+            "status": "conflict",
+            "requires_manual_review": True,
+            "failure_code": "idempotency_conflict",
+        })
+        return jsonify(conflict), 409
+
+    record = ExistingMemberJournalEvidenceRequest(
+        request_id=normalized["request_id"],
+        request_payload_sha256=payload_hash,
+        request_payload_json=existing_member_journal_evidence_json(normalized),
+        nonce_sha256=nonce_sha256,
+        reference=normalized["reference"],
+        phase=normalized["phase"],
+        member_number=normalized["member_number"],
+        target_agent=EXISTING_MEMBER_JOURNAL_EVIDENCE_TARGET_AGENT,
+        status=EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_PENDING,
+        requested_at=parsed["requested_at"],
+        expires_at=parsed["expires_at"],
+        created_at=existing_member_journal_evidence_utc_now(),
+        updated_at=existing_member_journal_evidence_utc_now(),
+    )
+    db.session.add(record)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        existing = (
+            ExistingMemberJournalEvidenceRequest.query
+            .filter(or_(
+                ExistingMemberJournalEvidenceRequest.request_id
+                == normalized["request_id"],
+                ExistingMemberJournalEvidenceRequest.request_payload_sha256
+                == payload_hash,
+                ExistingMemberJournalEvidenceRequest.nonce_sha256
+                == nonce_sha256,
+                (
+                    (ExistingMemberJournalEvidenceRequest.reference == normalized["reference"])
+                    & (ExistingMemberJournalEvidenceRequest.phase == normalized["phase"])
+                ),
+            ))
+            .first()
+        )
+        if existing and secrets.compare_digest(
+            existing.request_payload_sha256,
+            payload_hash,
+        ):
+            return jsonify(
+                existing_member_journal_evidence_public(existing, duplicate=True)
+            ), 200
+        if existing:
+            mark_existing_member_journal_evidence_manual_review(
+                existing,
+                "idempotency_conflict",
+            )
+            db.session.commit()
+        return jsonify({
+            "ok": False,
+            "status": "conflict",
+            "requires_manual_review": True,
+            "failure_code": "idempotency_conflict",
+        }), 409
+    return jsonify(existing_member_journal_evidence_public(record)), 202
+
+
+@app.get(
+    "/api/integrations/signup/existing-member-journal-evidence/<request_id>"
+)
+def api_signup_existing_member_journal_evidence_status(request_id):
+    require_signup_portal_integration_access()
+    ensure_runtime_schema()
+    try:
+        require_existing_member_journal_evidence_ready()
+    except ExistingMemberJournalEvidenceReject as exc:
+        return jsonify({
+            "ok": False,
+            "status": "rejected",
+            "code": exc.code,
+            "error": str(exc),
+        }), exc.status_code
+    if not EXISTING_MEMBER_JOURNAL_EVIDENCE_OPAQUE_RE.fullmatch(str(request_id or "")):
+        abort(404)
+    record = ExistingMemberJournalEvidenceRequest.query.filter_by(
+        request_id=request_id
+    ).first()
+    if not record:
+        abort(404)
+    if (
+        record.status
+        in {
+            EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_PENDING,
+            EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_CLAIMED,
+        }
+        and record.expires_at <= existing_member_journal_evidence_utc_now()
+    ):
+        release_expired_existing_member_journal_evidence_claims()
+        db.session.commit()
+    return jsonify(existing_member_journal_evidence_public(record))
+
+
 def fep_member_snapshot_row(member):
     return {
         "member_id": str(member.member_id or ""),
@@ -15163,6 +16762,263 @@ def api_sync_member_ids():
             key=int,
         ),
     }
+
+
+def existing_member_journal_evidence_sync_agent_id():
+    raw_agent_id = (
+        request.args.get("agent_id")
+        or request.headers.get("X-Sync-Agent")
+        or ""
+    )
+    if raw_agent_id != EXISTING_MEMBER_JOURNAL_EVIDENCE_TARGET_AGENT:
+        abort(403, "This evidence queue is bound to the frontdesk Portal Sync agent.")
+    return raw_agent_id
+
+
+@app.get("/api/sync/existing-member-journal-evidence/requests")
+def api_sync_existing_member_journal_evidence_requests():
+    require_sync_access()
+    agent_id = existing_member_journal_evidence_sync_agent_id()
+    ensure_runtime_schema()
+    try:
+        require_existing_member_journal_evidence_ready()
+    except ExistingMemberJournalEvidenceReject as exc:
+        return jsonify({
+            "ok": False,
+            "status": "rejected",
+            "code": exc.code,
+            "error": str(exc),
+        }), exc.status_code
+    try:
+        limit = int(request.args.get("limit", "1"))
+    except (TypeError, ValueError):
+        abort(400, "limit must be an integer.")
+    if not 1 <= limit <= 10:
+        abort(400, "limit must be between 1 and 10.")
+
+    now = existing_member_journal_evidence_utc_now()
+    release_expired_existing_member_journal_evidence_claims(now)
+    query = (
+        ExistingMemberJournalEvidenceRequest.query
+        .filter(
+            ExistingMemberJournalEvidenceRequest.target_agent == agent_id,
+            ExistingMemberJournalEvidenceRequest.status
+            == EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_PENDING,
+            ExistingMemberJournalEvidenceRequest.requested_at <= now,
+            ExistingMemberJournalEvidenceRequest.expires_at > now,
+        )
+        .order_by(
+            ExistingMemberJournalEvidenceRequest.created_at.asc(),
+            ExistingMemberJournalEvidenceRequest.id.asc(),
+        )
+    )
+    if db.session.get_bind().dialect.name == "postgresql":
+        query = query.with_for_update(skip_locked=True)
+    records = query.limit(limit).all()
+    claims = []
+    claim_expires_at = now + timedelta(
+        seconds=existing_member_journal_evidence_claim_seconds()
+    )
+    for record in records:
+        claim_id = "jec_" + secrets.token_urlsafe(32)
+        record.status = EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_CLAIMED
+        record.claimed_by = agent_id
+        record.claim_id_sha256 = hashlib.sha256(
+            claim_id.encode("utf-8")
+        ).hexdigest()
+        record.claimed_at = now
+        record.claim_expires_at = min(claim_expires_at, record.expires_at)
+        record.updated_at = now
+        claims.append({
+            "request_id": record.request_id,
+            "request_payload_sha256": record.request_payload_sha256,
+            "request": existing_member_journal_evidence_request_payload(record),
+            "claim_id": claim_id,
+            "claim_expires_at": existing_member_journal_evidence_utc_text(
+                record.claim_expires_at
+            ),
+        })
+    db.session.commit()
+    return jsonify({
+        "ok": True,
+        "agent_id": agent_id,
+        "requests": claims,
+    })
+
+
+@app.post(
+    "/api/sync/existing-member-journal-evidence/requests/<request_id>/result"
+)
+def api_sync_existing_member_journal_evidence_result(request_id):
+    require_sync_access()
+    agent_id = existing_member_journal_evidence_sync_agent_id()
+    ensure_runtime_schema()
+    try:
+        require_existing_member_journal_evidence_ready()
+    except ExistingMemberJournalEvidenceReject as exc:
+        return jsonify({
+            "ok": False,
+            "status": "rejected",
+            "code": exc.code,
+            "error": str(exc),
+        }), exc.status_code
+    if not EXISTING_MEMBER_JOURNAL_EVIDENCE_OPAQUE_RE.fullmatch(str(request_id or "")):
+        abort(404)
+    query = ExistingMemberJournalEvidenceRequest.query.filter_by(
+        request_id=request_id
+    )
+    if db.session.get_bind().dialect.name == "postgresql":
+        query = query.with_for_update()
+    record = query.first()
+    if not record:
+        abort(404)
+
+    receipt = record.evidence_receipt
+    now = existing_member_journal_evidence_utc_now()
+    if receipt is None:
+        claim_id = request.headers.get("X-Evidence-Claim-Id", "")
+        claim_id_valid = bool(
+            isinstance(claim_id, str)
+            and EXISTING_MEMBER_JOURNAL_EVIDENCE_OPAQUE_RE.fullmatch(claim_id)
+            and record.claim_id_sha256
+            and secrets.compare_digest(
+                hashlib.sha256(claim_id.encode("utf-8")).hexdigest(),
+                record.claim_id_sha256,
+            )
+        )
+        if record.expires_at <= now:
+            record.status = EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_EXPIRED
+            record.failure_code = "request_expired"
+            record.claimed_by = None
+            record.claim_id_sha256 = None
+            record.claimed_at = None
+            record.claim_expires_at = None
+            record.updated_at = now
+            db.session.commit()
+            return jsonify({
+                "ok": False,
+                "status": "expired",
+                "code": "request_expired",
+            }), 409
+        if (
+            record.status != EXISTING_MEMBER_JOURNAL_EVIDENCE_STATUS_CLAIMED
+            or record.claimed_by != agent_id
+            or record.claim_expires_at is None
+            or record.claim_expires_at <= now
+            or not claim_id_valid
+        ):
+            return jsonify({
+                "ok": False,
+                "status": "conflict",
+                "code": "claim_not_owned_or_expired",
+            }), 409
+
+    try:
+        raw_envelope = existing_member_journal_evidence_request_json()
+    except ExistingMemberJournalEvidenceReject as exc:
+        if receipt is None:
+            mark_existing_member_journal_evidence_manual_review(record, exc.code)
+            db.session.commit()
+        return jsonify({
+            "ok": False,
+            "status": "rejected",
+            "code": exc.code,
+            "error": str(exc),
+        }), exc.status_code
+    try:
+        normalized_envelope, _observed_at = (
+            verify_portal_sync_evidence_signature(raw_envelope)
+        )
+    except ExistingMemberJournalEvidenceReject as exc:
+        if exc.status_code != 503 and receipt is None:
+            mark_existing_member_journal_evidence_manual_review(record, exc.code)
+            db.session.commit()
+        return jsonify({
+            "ok": False,
+            "status": "rejected",
+            "code": exc.code,
+            "error": str(exc),
+        }), exc.status_code
+
+    canonical_envelope = existing_member_journal_evidence_json(
+        normalized_envelope
+    )
+    if receipt is not None:
+        if secrets.compare_digest(
+            str(record.result_envelope_json or ""),
+            canonical_envelope,
+        ):
+            return jsonify(
+                existing_member_journal_evidence_public(record, duplicate=True)
+            ), 200
+        mark_existing_member_journal_evidence_manual_review(
+            record,
+            "result_idempotency_conflict",
+        )
+        db.session.commit()
+        conflict = existing_member_journal_evidence_public(record, duplicate=True)
+        conflict.update({
+            "ok": False,
+            "status": "conflict",
+            "requires_manual_review": True,
+            "failure_code": "result_idempotency_conflict",
+        })
+        return jsonify(conflict), 409
+
+    try:
+        finalize_existing_member_journal_evidence(
+            record,
+            normalized_envelope,
+            now=now,
+        )
+        db.session.commit()
+    except ExistingMemberJournalEvidenceReject as exc:
+        db.session.rollback()
+        record = ExistingMemberJournalEvidenceRequest.query.filter_by(
+            request_id=request_id
+        ).first()
+        if exc.status_code != 503 and record:
+            mark_existing_member_journal_evidence_manual_review(record, exc.code)
+            db.session.commit()
+        return jsonify({
+            "ok": False,
+            "status": "rejected",
+            "code": exc.code,
+            "error": str(exc),
+        }), exc.status_code
+    except IntegrityError:
+        db.session.rollback()
+        record = ExistingMemberJournalEvidenceRequest.query.filter_by(
+            request_id=request_id
+        ).first()
+        if (
+            record
+            and record.evidence_receipt
+            and secrets.compare_digest(
+                str(record.result_envelope_json or ""),
+                canonical_envelope,
+            )
+        ):
+            return jsonify(
+                existing_member_journal_evidence_public(record, duplicate=True)
+            ), 200
+        if record:
+            mark_existing_member_journal_evidence_manual_review(
+                record,
+                "result_idempotency_conflict",
+            )
+            db.session.commit()
+        return jsonify({
+            "ok": False,
+            "status": "conflict",
+            "requires_manual_review": True,
+            "failure_code": "result_idempotency_conflict",
+        }), 409
+
+    record = ExistingMemberJournalEvidenceRequest.query.filter_by(
+        request_id=request_id
+    ).one()
+    return jsonify(existing_member_journal_evidence_public(record)), 201
 
 
 def sync_request_agent_id():
