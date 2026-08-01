@@ -1,42 +1,48 @@
-# Existing-member reverification → Member Portal
+# Existing-member reverification to Member Portal
 
 ## Release status
 
-- Prepared: `2026-07-26T17:07:26-04:00`
-- Status: local release candidate; **not deployed**
-- Portal base commit: `84734ce7c53871e3a1db4d5544e4305614078a34`
-- Local release branch: `codex/existing-member-portal-handoff`
-- Plan-binding hardening commit: `b71f45a8589f0442ef24aaab0ea1a8d930e827d5`
+- Prepared: 2026-07-31
+- Status: clean local release candidate; **not deployed**
+- Exact live Portal base: `790aee4a7b216a0268266817af1f390331fe316a`
+- Exact live Portal base tree: `80754d8f8b9651f0953ff3341dd4be3917911fd1`
+- Candidate branch: `codex/existing-member-pilot-livebase-20260731`
 - Production mail sent: no
 - Production data changed: no
-- Gym Assistant data changed: no
+- Gym Assistant or frontdesk touched: no
 
-## Scope
+The candidate is reconciled directly on the current live Portal revision. It
+does not copy the older dirty development file and therefore retains the live
+KMAR, login, sync and other later Portal behavior.
 
-This release adds the server-to-server handoff from a completed, signed and
-email-verified existing-member reverification in the Signup app to the existing
-Member Portal account model.
+## Protected handoff
 
-The handoff never creates a second member record. It targets the Portal member
-whose `member_id` is the existing Gym Assistant member number.
+The Signup app may request a Portal invitation only after the signed and
+email-verified existing-member update has completed and the same Gym Assistant
+member has passed read-back verification.
 
-The canonical request consists of exactly these six scalar strings:
+The canonical request binds these six scalar strings:
 
-1. `request_type`
+1. `request_type` (`existing_member_reverification`)
 2. `reference`
 3. `member_number`
 4. `expected_email`
 5. `language`
 6. `signup_plan`
 
-The Signup app recursively sorts and compactly serializes the canonical object,
-then sends its lowercase SHA-256 digest both as `idempotency_key` and as the
-`Idempotency-Key` header. The Portal recalculates and verifies the same digest
-before storing or reconciling the request.
+Signup sends the lowercase SHA-256 digest of the sorted compact JSON object as
+both `idempotency_key` and the `Idempotency-Key` header. Portal recalculates the
+digest and echoes `request_type`, `member_number` and `idempotency_key` in its
+authenticated response so Signup can reject a response for another request.
+
+Portal targets only the already-synced member with the exact Gym Assistant
+member number. It never creates a second Portal member. A changed or missing
+email waits for a later Gym Assistant sync. A duplicate email, ineligible plan,
+plan mismatch or integrity mismatch fails closed.
 
 ## Fail-closed pilot controls
 
-All existing-member reverification invitations are denied by default:
+The feature is disabled by default:
 
 ```dotenv
 PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED=false
@@ -44,140 +50,61 @@ PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS=
 PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS=
 ```
 
-The feature flag and **both** exact allowlists must match before the Portal can
-send an activation/login email. Empty or one-sided allowlists deny every pilot
-request.
+Enabling the flag is insufficient. Each allowlist must contain exactly one
+non-empty value, and both values must match the same request. Empty, one-sided,
+duplicate or multi-value configuration remains in
+`waiting_for_pilot_allowlist`.
 
-Safe nonterminal statuses are:
+The existing-member invitation is SMTP-only. If
+`EMAIL_DELIVERY_MODE` is not exactly `smtp`, it remains in
+`waiting_for_smtp_configuration`, creates no email-log row and does not claim a
+send attempt. After a send claim, only the exact delivery result `sent` may
+become terminal `sent`; failures or ambiguous results require manual review.
 
-- `waiting_for_feature_enablement`
-- `waiting_for_pilot_allowlist`
-- `waiting_for_gym_assistant_email`
+## Compatibility retained
 
-An absent or changed Gym Assistant email therefore waits for a later sync. A
-duplicate email, invalid request, ineligible membership or integrity mismatch
-fails closed to manual review.
-
-For existing-member reverification, the current Gym Assistant plan is also
-mapped back to the canonical Signup plan (`month`, `six`, `twelve` or
-`under18`). A different current plan fails closed to manual review before any
-Portal email can be sent.
-
-## User handoff
-
-After the signed reverification is durably saved, the Signup completion screen
-offers a localized `Member Portal` button pointing only to the normal `/login`
-page. No bearer token, password or automatic login is passed through the
-browser.
-
-The Portal retains its existing login behavior:
-
-- password login for an existing configured account;
-- email-code login when no password exists;
-- mandatory password setup after the first email-code login.
+- Current and legacy normalized KMAR Gym Assistant plan names remain mapped to
+  `kmar_2026` exactly as in the live baseline.
+- Legacy/new-member Portal invitations keep their existing log-mode behavior;
+  SMTP-only enforcement applies only to existing-member reverification.
+- Normal Portal password and email-code login remain unchanged.
+- No database schema change is introduced by this hardening delta.
 
 ## Verification evidence
 
-### Signup app
-
-- Full `npm test`: all 17 suites passed.
-- `npm run build`: passed.
-- `node scripts/test-existing-member-reverification.mjs`: passed.
-- `node scripts/test-existing-member-reverification-email-gate.mjs`: passed.
-- `node scripts/test-portal-invitation.mjs`: passed.
-- `node scripts/test-submission-idempotency.mjs`: passed.
-- Cross-language canonical SHA-256 fixture:
-  `e45be34864baca92e63f9f4999cb832c5d286e147c6a23ffc324d163b5a938b2`
-  in both Node.js and Python.
-
-### Member Portal
-
-- Invitation module: 23 tests passed.
-- Real login-path checks: 3 tests passed.
-- Python compile check: passed.
-- Full regression suite: `Ran 429 tests in 1057.340s` —
-  `OK (skipped=1)`.
-
-Three failures found during the first full run were reproduced unchanged on the
-untouched base commit. Their test fixtures were repaired without changing
-production code:
-
-- two document-serving tests now create their own temporary PDF;
-- the pregnancy class-safety test now creates its own bookable BODYCOMBAT
-  occurrence instead of relying on the current seeded weekly timetable.
-
-## Reviewed source hashes
-
-### Portal release
-
-| File | SHA-256 |
-| --- | --- |
-| `.env.example` | `CAE32227E4F9D4EC0A595BE2DFA2385BF79AE556E97506ADE1DBB68A3B3AB6BB` |
-| `DEPLOYMENT.md` | `256ACA30D91DA39F335AD769E080D7750EA7FDADC65A3D4660D070033C8488B1` |
-| `dreamz_portal.py` | `C92580342745CED900162F006C113C1537440099C363E994EC9896DA8A564D19` |
-| `tests/test_portal_invitations.py` | `9EA838C1B9573CAB64B92AB7AA11E144FCE619F87239F00A6404FBCD691D6CFA` |
-| `tests/test_portal_routes.py` | `5F3825D61C908943C00B978990F56DDC803E2A8AFFC4ECA4162C6B43CBA04287` |
-
-### Signup working snapshot
-
-The Signup repository contains earlier in-progress Dreamz work and is therefore
-not represented as a clean base commit in this Portal release. These hashes bind
-the exact locally tested handoff snapshot:
-
-| File | SHA-256 |
-| --- | --- |
-| `server.mjs` | `1537D39B4D6A955D8DDB5410954F51DD60942074232E4E2C3E43539825EF24C3` |
-| `app.js` | `FEB0FDE9872B5A090DB073C31B4648935ADBFC4E08D5036C24F4AB86F77202D7` |
-| `scripts/test-existing-member-reverification.mjs` | `BD222EAF8BC6171D244152B3B1A11CC78DA94213C556EF36C2B0C604934FE34A` |
-| `scripts/test-existing-member-reverification-email-gate.mjs` | `A3B9DD1EC64895856ED72E6FFE0DF57AAEE9E2E601E2D41A3C3C6165916014B0` |
-| `scripts/test-portal-invitation.mjs` | `89C8863B5D9D84E5CA8A2D2875320B62B9AC7065A4792534F0529AE7062EB801` |
-| `scripts/test-submission-idempotency.mjs` | `76099D64FAF05F95E2797D8225FAA0FD24881290DA3E8159A8CB2A8C04EB3E3D` |
-| `package.json` | `E34DE30EFC9745B1B8E0E1C0537BE1E8D7071F4D7A81F9CDF14AD70F70455603` |
-| `package-lock.json` | `FF0F5ACC593947E88EC887D85FE40AEAA08AD56D1EC1837B84B0C94B5637D48F` |
+- Existing-member/Portal invitation tests: 32 passed.
+- Portal login, route and sync regression subset: 253 passed.
+- Full Portal regression suite: 682 passed, 1 skipped, in 1326.409 seconds.
+- The focused final hardening tests were rerun after the review fixes.
+- Python compile, feature-off startup and diff checks: passed.
+- Independent code/security review: no remaining blocker.
 
 ## Controlled rollout order
 
-1. Record the currently deployed Portal and Signup revisions and configuration.
-2. Take and verify the required production database/configuration backup.
-3. Deploy the Portal release with the feature flag off and both allowlists empty.
-4. Run health, login and legacy new-member invitation smoke tests.
-5. Deploy the exact reviewed Signup snapshot and verify that an existing-member
-   request remains in `waiting_for_feature_enablement`.
-6. While the feature flag remains off, add exactly one reviewed pilot member
-   number and its exact verified email to the two Portal allowlists.
-7. Enable the feature flag during the reviewed pilot window.
-8. Run only the Ron pilot and verify:
-   - no duplicate Portal member;
-   - exact Gym Assistant member-number binding;
-   - exactly one localized activation/login email;
-   - normal email-code/password login;
-   - no Gym Assistant write from this handoff.
-9. Disable the feature flag again until the pilot evidence is reviewed.
+1. Commit and hash the exact reviewed Portal and Signup candidates.
+2. Back up the live Portal database and Signup `/data` volume; record current
+   configuration and rollback revisions.
+3. Deploy Portal first with the feature flag off and both allowlists empty.
+4. Run health, normal login, member sync, normal invitation and KMAR smoke tests.
+5. Deploy Signup with its feature flag off and both allowlists empty.
+6. Run normal signup, Delfins, KMAR, pending-contract and admin smoke tests.
+7. Configure exactly the reviewed `<pilot-member-number>` and its separately
+   verified Gym Assistant email in both services, then enable only that one
+   pilot during a reviewed window.
+8. Complete the update, signed-form review, update-only Gym Assistant write,
+   exact read-back, Portal invitation and normal login test.
+9. Disable the pilot again and review the audit evidence before adding anyone
+   else.
 
 ## Rollback
 
-Immediate kill switch:
+- Immediate kill switch:
+  `PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED=false` with both allowlists
+  empty.
+- Restore the Portal deployment for commit
+  `790aee4a7b216a0268266817af1f390331fe316a` if a Portal smoke test fails.
+- Restore the Signup deployment for commit
+  `227d5039a77da5df8311e8706d6307ebeea3528a` if a Signup smoke test fails.
+- Keep invitation and audit records; do not delete or replay them manually.
 
-```dotenv
-PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED=false
-```
-
-Then:
-
-1. restore the previous Portal deployment or redeploy base commit
-   `84734ce7c53871e3a1db4d5544e4305614078a34`;
-2. restore the previously recorded Signup deployment if its release introduced
-   any smoke-test regression;
-3. keep invitation records for audit; do not delete or replay them manually;
-4. verify legacy login, sync and new-member invitation behavior.
-
-## Remaining live gates
-
-No production pilot may start until the Dreamz remote-operations runbook permits
-the change and the following are known and reviewed:
-
-- currently deployed immutable revisions;
-- verified backup and rollback target;
-- production integration token alignment;
-- exact Ron member number and verified Gym Assistant email;
-- health/login/new-member smoke-test results with the feature still disabled.
+No production deployment or pilot is authorized by this document alone.

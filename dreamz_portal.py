@@ -130,22 +130,22 @@ app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED"] = os.getenv(
     "PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED",
     "false",
 ).lower() in ("1", "true", "yes")
-app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS"] = {
+app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS"] = tuple(
     member_id.strip()
     for member_id in os.getenv(
         "PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS",
         "",
     ).split(",")
-    if member_id.strip().isdigit() and int(member_id.strip()) > 0
-}
-app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS"] = {
+    if member_id.strip()
+)
+app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS"] = tuple(
     email.strip().lower()
     for email in os.getenv(
         "PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS",
         "",
     ).split(",")
     if email.strip()
-}
+)
 app.config["FEP_API_TOKEN"] = os.getenv("FEP_API_TOKEN")
 app.config["STAFF_ADMIN_USERNAME"] = os.getenv("STAFF_ADMIN_USERNAME", "ron")
 app.config["STAFF_ADMIN_PASSWORD"] = os.getenv("STAFF_ADMIN_PASSWORD", "dreamz-admin-dev")
@@ -13293,6 +13293,7 @@ PORTAL_INVITATION_TERMINAL_STATUSES = {"sent", "manual_review"}
 PORTAL_INVITATION_RECONCILABLE_STATUSES = {
     "waiting_for_member",
     "waiting_for_gym_assistant_email",
+    "waiting_for_smtp_configuration",
     "waiting_for_feature_enablement",
     "waiting_for_pilot_allowlist",
     "ready",
@@ -13355,23 +13356,34 @@ def existing_member_reverification_enabled():
     return bool(configured)
 
 
+def existing_member_reverification_smtp_enabled():
+    """Require a real SMTP attempt before the protected pilot can become sent."""
+    return app.config.get("EMAIL_DELIVERY_MODE") == "smtp"
+
+
 def existing_member_reverification_pilot_allowed(record):
+    member_values = portal_invitation_config_values(
+        "PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS"
+    )
+    email_values = portal_invitation_config_values(
+        "PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS"
+    )
     member_ids = {
         str(member_id).strip()
-        for member_id in portal_invitation_config_values(
-            "PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS"
-        )
+        for member_id in member_values
         if str(member_id).strip()
     }
     allowed_email_hashes = {
         portal_invitation_email_hash(email)
-        for email in portal_invitation_config_values(
-            "PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS"
-        )
+        for email in email_values
         if valid_portal_email(email)
     }
     return (
-        str(record.member_id or "").strip() in member_ids
+        len(member_values) == 1
+        and len(email_values) == 1
+        and len(member_ids) == 1
+        and len(allowed_email_hashes) == 1
+        and str(record.member_id or "").strip() in member_ids
         and record.expected_email_hash in allowed_email_hashes
     )
 
@@ -13385,9 +13397,10 @@ def portal_invitation_member_plan_matches(signup_plan, plan_type):
 
 
 def portal_invitation_public(record, duplicate=False):
-    return {
+    request_type = record.request_type or PORTAL_INVITATION_REQUEST_TYPE_NEW_MEMBER
+    response = {
         "reference": record.source_reference,
-        "request_type": record.request_type or PORTAL_INVITATION_REQUEST_TYPE_NEW_MEMBER,
+        "request_type": request_type,
         "status": record.status,
         "ready": record.ready_at is not None,
         "sent": record.sent_at is not None,
@@ -13396,6 +13409,10 @@ def portal_invitation_public(record, duplicate=False):
         "created_at": record.created_at.isoformat() if record.created_at else None,
         "updated_at": record.updated_at.isoformat() if record.updated_at else None,
     }
+    if request_type == PORTAL_INVITATION_REQUEST_TYPE_EXISTING_MEMBER_REVERIFICATION:
+        response["member_number"] = str(record.member_id or "").strip()
+        response["idempotency_key"] = record.request_payload_hash
+    return response
 
 
 def normalize_portal_invitation_payload(payload, idempotency_key_header=None):
@@ -13533,6 +13550,8 @@ def reconcile_portal_invitation(record):
             return wait_for_portal_invitation(record, "waiting_for_feature_enablement")
         if not existing_member_reverification_pilot_allowed(record):
             return wait_for_portal_invitation(record, "waiting_for_pilot_allowlist")
+        if not existing_member_reverification_smtp_enabled():
+            return wait_for_portal_invitation(record, "waiting_for_smtp_configuration")
 
     member = Member.query.filter_by(member_id=record.member_id).first()
     if not member:
@@ -13600,7 +13619,7 @@ def reconcile_portal_invitation(record):
         return record
 
     try:
-        deliver_email([member_email], subject, body, html_body=html_body)
+        delivery_result = deliver_email([member_email], subject, body, html_body=html_body)
     except Exception:
         latest_log = (
             EmailLog.query
@@ -13611,6 +13630,12 @@ def reconcile_portal_invitation(record):
         if latest_log:
             record.email_log_id = latest_log.id
         return mark_portal_invitation_for_review(record, "email_delivery_failed_or_uncertain")
+
+    if (
+        request_type == PORTAL_INVITATION_REQUEST_TYPE_EXISTING_MEMBER_REVERIFICATION
+        and delivery_result != "sent"
+    ):
+        return mark_portal_invitation_for_review(record, "email_delivery_not_confirmed")
 
     latest_log = (
         EmailLog.query
@@ -14574,12 +14599,10 @@ def api_signup_portal_invitation():
             stored_request_type != normalized["request_type"]
             or record.request_payload_hash not in accepted_payload_hashes
         ):
-            return jsonify({
-                "status": "conflict",
-                "reference": record.source_reference,
-                "request_type": stored_request_type,
-                "requires_manual_review": True,
-            }), 409
+            conflict = portal_invitation_public(record, duplicate=True)
+            conflict["status"] = "conflict"
+            conflict["requires_manual_review"] = True
+            return jsonify(conflict), 409
         reconcile_portal_invitation(record)
         status_code = 200 if record.status in PORTAL_INVITATION_TERMINAL_STATUSES else 202
         return jsonify(portal_invitation_public(record, duplicate=True)), status_code
@@ -14606,12 +14629,10 @@ def api_signup_portal_invitation():
             stored_request_type != normalized["request_type"]
             or record.request_payload_hash not in accepted_payload_hashes
         ):
-            return jsonify({
-                "status": "conflict",
-                "reference": record.source_reference,
-                "request_type": stored_request_type,
-                "requires_manual_review": True,
-            }), 409
+            conflict = portal_invitation_public(record, duplicate=True)
+            conflict["status"] = "conflict"
+            conflict["requires_manual_review"] = True
+            return jsonify(conflict), 409
 
     reconcile_portal_invitation(record)
     status_code = 200 if record.status in PORTAL_INVITATION_TERMINAL_STATUSES else 202

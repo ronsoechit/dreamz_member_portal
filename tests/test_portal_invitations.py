@@ -42,8 +42,11 @@ class PortalInvitationTests(unittest.TestCase):
         db.drop_all()
         db.create_all()
         self.client = app.test_client()
+        self.smtp_ssl_patcher = patch("dreamz_portal.smtplib.SMTP_SSL")
+        self.smtp_ssl = self.smtp_ssl_patcher.start()
 
     def tearDown(self):
+        self.smtp_ssl_patcher.stop()
         db.session.remove()
         db.drop_all()
         self.ctx.pop()
@@ -115,6 +118,7 @@ class PortalInvitationTests(unittest.TestCase):
         app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED"] = True
         app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS"] = {member_id}
         app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS"] = {email}
+        app.config["EMAIL_DELIVERY_MODE"] = "smtp"
 
     @staticmethod
     def add_existing_member(
@@ -145,33 +149,75 @@ class PortalInvitationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(PortalInvitation.query.count(), 0)
 
-    def test_existing_member_flow_is_disabled_by_default_and_response_has_no_pii(self):
+    def test_existing_member_flow_is_disabled_by_default_and_echo_is_bound(self):
         self.add_existing_member()
-        response = self.post_existing_member()
+        payload = self.existing_member_payload()
+        response = self.post_existing_member(payload=payload)
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json["request_type"], "existing_member_reverification")
+        self.assertEqual(response.json["member_number"], payload["member_number"])
+        self.assertEqual(response.json["idempotency_key"], payload["idempotency_key"])
         self.assertEqual(response.json["status"], "waiting_for_feature_enablement")
-        self.assertNotIn("member_number", response.json)
         self.assertNotIn("expected_email", response.json)
-        self.assertNotIn("idempotency_key", response.json)
         self.assertEqual(EmailLog.query.count(), 0)
         record = PortalInvitation.query.one()
         self.assertEqual(record.request_type, "existing_member_reverification")
 
-    def test_existing_member_pilot_requires_both_member_and_email_allowlists(self):
+    def test_existing_member_pilot_requires_exactly_one_member_and_email(self):
         self.add_existing_member()
         app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED"] = True
         app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS"] = {"42001"}
         app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS"] = set()
 
-        waiting = self.post_existing_member()
-        self.assertEqual(waiting.status_code, 202)
-        self.assertEqual(waiting.json["status"], "waiting_for_pilot_allowlist")
+        missing_email = self.post_existing_member()
+        self.assertEqual(missing_email.status_code, 202)
+        self.assertEqual(missing_email.json["status"], "waiting_for_pilot_allowlist")
+        self.assertEqual(EmailLog.query.count(), 0)
+
+        app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS"] = {
+            "existing.member@example.com",
+            "second.member@example.com",
+        }
+        multiple_emails = self.client.get(
+            "/api/integrations/signup/portal-invitations/DF-20260726-900001",
+            headers=self.invitation_headers(),
+        )
+        self.assertEqual(multiple_emails.status_code, 200)
+        self.assertEqual(multiple_emails.json["status"], "waiting_for_pilot_allowlist")
         self.assertEqual(EmailLog.query.count(), 0)
 
         app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS"] = {
             "EXISTING.MEMBER@example.com"
         }
+        app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS"] = {
+            "42001",
+            "42002",
+        }
+        multiple_members = self.client.get(
+            "/api/integrations/signup/portal-invitations/DF-20260726-900001",
+            headers=self.invitation_headers(),
+        )
+        self.assertEqual(multiple_members.status_code, 200)
+        self.assertEqual(multiple_members.json["status"], "waiting_for_pilot_allowlist")
+        self.assertEqual(EmailLog.query.count(), 0)
+
+        app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS"] = [
+            "42001",
+            "42001",
+        ]
+        duplicate_member_values = self.client.get(
+            "/api/integrations/signup/portal-invitations/DF-20260726-900001",
+            headers=self.invitation_headers(),
+        )
+        self.assertEqual(duplicate_member_values.status_code, 200)
+        self.assertEqual(
+            duplicate_member_values.json["status"],
+            "waiting_for_pilot_allowlist",
+        )
+        self.assertEqual(EmailLog.query.count(), 0)
+
+        app.config["PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS"] = {"42001"}
+        app.config["EMAIL_DELIVERY_MODE"] = "smtp"
         released = self.client.get(
             "/api/integrations/signup/portal-invitations/DF-20260726-900001",
             headers=self.invitation_headers(),
@@ -180,23 +226,72 @@ class PortalInvitationTests(unittest.TestCase):
         self.assertEqual(released.json["status"], "sent")
         self.assertEqual(EmailLog.query.count(), 1)
 
+    def test_existing_member_log_delivery_never_becomes_sent(self):
+        self.enable_existing_member_pilot()
+        app.config["EMAIL_DELIVERY_MODE"] = "log"
+        self.add_existing_member()
+
+        response = self.post_existing_member()
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json["status"], "waiting_for_smtp_configuration")
+        record = PortalInvitation.query.one()
+        self.assertEqual(record.status, "waiting_for_smtp_configuration")
+        self.assertEqual(record.attempts, 0)
+        self.assertIsNone(record.sent_at)
+        self.assertEqual(EmailLog.query.count(), 0)
+
+    def test_existing_member_smtp_mode_must_be_exact(self):
+        self.enable_existing_member_pilot()
+        app.config["EMAIL_DELIVERY_MODE"] = "smtp "
+        self.add_existing_member()
+
+        response = self.post_existing_member()
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json["status"], "waiting_for_smtp_configuration")
+        record = PortalInvitation.query.one()
+        self.assertEqual(record.attempts, 0)
+        self.assertIsNone(record.sent_at)
+        self.assertEqual(EmailLog.query.count(), 0)
+
+    def test_existing_member_requires_exact_sent_delivery_result(self):
+        self.enable_existing_member_pilot()
+        self.add_existing_member()
+
+        with patch("dreamz_portal.deliver_email", return_value="logged") as delivery:
+            response = self.post_existing_member()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["status"], "manual_review")
+        record = PortalInvitation.query.one()
+        self.assertEqual(record.last_error, "email_delivery_not_confirmed")
+        self.assertEqual(record.attempts, 1)
+        self.assertIsNone(record.sent_at)
+        self.assertEqual(delivery.call_count, 1)
+
     def test_existing_member_with_unchanged_synced_email_sends_exactly_once(self):
         self.enable_existing_member_pilot()
         self.add_existing_member()
 
-        sent = self.post_existing_member()
+        payload = self.existing_member_payload()
+        sent = self.post_existing_member(payload=payload)
         self.assertEqual(sent.status_code, 200)
         self.assertEqual(sent.json["status"], "sent")
         self.assertFalse(sent.json["duplicate"])
+        self.assertEqual(sent.json["request_type"], payload["request_type"])
+        self.assertEqual(sent.json["member_number"], payload["member_number"])
+        self.assertEqual(sent.json["idempotency_key"], payload["idempotency_key"])
         record = PortalInvitation.query.one()
         self.assertEqual(record.attempts, 1)
         self.assertIsNotNone(record.sent_at)
         self.assertEqual(EmailLog.query.count(), 1)
 
-        duplicate = self.post_existing_member()
+        duplicate = self.post_existing_member(payload=payload)
         self.assertEqual(duplicate.status_code, 200)
         self.assertTrue(duplicate.json["duplicate"])
         self.assertEqual(duplicate.json["status"], "sent")
+        self.assertEqual(duplicate.json["idempotency_key"], payload["idempotency_key"])
         db.session.refresh(record)
         self.assertEqual(record.attempts, 1)
         self.assertEqual(EmailLog.query.count(), 1)
@@ -310,7 +405,12 @@ class PortalInvitationTests(unittest.TestCase):
             conflict.json["request_type"],
             "existing_member_reverification",
         )
-        self.assertNotIn("member_number", conflict.json)
+        self.assertEqual(conflict.json["member_number"], valid_payload["member_number"])
+        self.assertEqual(
+            conflict.json["idempotency_key"],
+            valid_payload["idempotency_key"],
+        )
+        self.assertTrue(conflict.json["requires_manual_review"])
         self.assertEqual(PortalInvitation.query.count(), 1)
 
     def test_request_type_is_validated_and_bound_to_reference(self):

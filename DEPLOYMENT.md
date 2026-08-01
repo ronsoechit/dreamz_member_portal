@@ -109,13 +109,22 @@ unique email address.
 The existing-member reverification handoff is a separate closed pilot. Deploy it
 with `PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED=false`; this is also the
 runtime default. Enabling the flag alone cannot release an activation email.
-The exact member number must be present in
-`PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_MEMBER_IDS` **and** the exact
-verified email address must be present in
-`PORTAL_EXISTING_MEMBER_REVERIFICATION_PILOT_EMAILS`. Empty or one-sided
-allowlists deny every pilot request. Add only the single controlled pilot
-identity during a reviewed rollout, and never commit real member numbers or
-email addresses to this file.
+Each pilot allowlist must contain exactly one value, and the exact Gym Assistant
+member number **and** the exact verified email address must match the request.
+Empty, one-sided or multi-value allowlists fail closed in
+`waiting_for_pilot_allowlist`. The protected flow is also SMTP-only: without
+exact `EMAIL_DELIVERY_MODE=smtp` it remains in
+`waiting_for_smtp_configuration`, and only an exact successful delivery result
+may become `sent`. Add only the single controlled pilot identity during a
+reviewed rollout, and never commit real member numbers or email addresses to
+this file.
+
+Existing-member requests must send `request_type=existing_member_reverification`
+and the SHA-256 digest of the canonical request both in `idempotency_key` and the
+`Idempotency-Key` header. The Portal binds the reference, request type, member
+number, verified email and mapped plan, targets only the already-synced member,
+and echoes `request_type`, `member_number` and `idempotency_key` to the protected
+caller. It never creates a second Portal member.
 
 ### Sync monitoring
 
