@@ -76,6 +76,10 @@ _JOURNAL_HEADER_RE = re.compile(
     rb"(?:[ \t]+([0-9]+)){9}\|(.+)$",
     flags=re.DOTALL,
 )
+_JOURNAL_HEADER_CORE_RE = re.compile(
+    rb"^(c\d{8}!\d{4})[ \t]+([0-9A-Fa-f]+)"
+    rb"(?:[ \t]+([0-9]+)){9}$",
+)
 _CATALOG_LINE_BREAK_RE = re.compile(r"\r\n|[\n\r\v\f\x1c-\x1e\x85]")
 
 KNOWN_REASON_CODES = frozenset(
@@ -428,10 +432,14 @@ def _iter_cr_lf_lines(data: bytes):
 
 
 def _valid_journal_header(line: bytes) -> tuple[str, int] | None:
-    match = _JOURNAL_HEADER_RE.fullmatch(line)
-    if not match:
+    if b"|" not in line:
         return None
     header, _payload = line.split(b"|", 1)
+    if _payload:
+        if _JOURNAL_HEADER_RE.fullmatch(line) is None:
+            return None
+    elif _JOURNAL_HEADER_CORE_RE.fullmatch(header) is None:
+        return None
     tokens = header.split()
     if len(tokens) != 11 or any(not token for token in tokens):
         return None

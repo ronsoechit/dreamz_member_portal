@@ -588,6 +588,196 @@ class InvoiceBackupProbeTests(unittest.TestCase):
         )
         self.assertNotIn(private_canary, json.dumps(result))
 
+    def test_allowlisted_nonmembership_row_with_exact_empty_payload_is_ignored(self):
+        empty_nonmembership = (
+            "c20260215!1600 7006 1771185720 0 990006 90001 43 0 0 0 29|"
+        )
+        write_backup(
+            self.backup,
+            journal="\n".join([empty_nonmembership, TARGET_RENEWAL]),
+        )
+
+        result = self.run_probe()
+
+        self.assertEqual(result["status"], "passed")
+        self.assertTrue(result["integrity_proven"])
+        self.assertEqual(result["reason_codes"], [])
+        self.assertEqual(
+            result["analysis"]["target_membership_parse_issue_count"], 0
+        )
+        self.assertEqual(result["analysis"]["target_membership_event_count"], 1)
+
+    def test_safe_empty_nonmembership_does_not_hide_later_target_failure(self):
+        empty_nonmembership = (
+            "c20260215!1600 7006 1771185720 0 990006 90001 43 0 0 0 29|"
+        )
+        malformed_target = (
+            "c20260215!1601 7007 1771185780 0 990007 90001 3 0 0 0 29|"
+        )
+        write_backup(
+            self.backup,
+            journal="\n".join([empty_nonmembership, malformed_target]),
+        )
+
+        result = self.run_probe()
+
+        self.assertEqual(
+            result["reason_codes"], ["target_membership_parse_issue"]
+        )
+        self.assertEqual(
+            result["analysis"]["target_membership_parse_issue_count"], 1
+        )
+
+    def test_allowlisted_membership_row_with_empty_payload_still_blocks(self):
+        for raw_event_type in (1, 3, 32769, 32771):
+            with self.subTest(raw_event_type=raw_event_type):
+                malformed = (
+                    "c20260215!1600 7006 1771185720 0 990006 90001 "
+                    f"{raw_event_type} 0 0 0 29|"
+                )
+                write_backup(
+                    self.backup,
+                    journal="\n".join([TARGET_RENEWAL, malformed]),
+                )
+
+                result = self.run_probe()
+
+                self.assertEqual(
+                    result["reason_codes"], ["target_membership_parse_issue"]
+                )
+                self.assertEqual(
+                    result["analysis"]["target_membership_parse_issue_count"],
+                    1,
+                )
+
+    def test_allowlisted_nonmembership_row_without_pipe_still_blocks(self):
+        malformed = (
+            "c20260215!1600 7006 1771185720 0 990006 90001 43 0 0 0 29"
+        )
+        write_backup(self.backup, journal="\n".join([TARGET_RENEWAL, malformed]))
+
+        result = self.run_probe()
+
+        self.assertEqual(
+            result["reason_codes"], ["target_membership_parse_issue"]
+        )
+        self.assertEqual(
+            result["analysis"]["target_membership_parse_issue_count"], 1
+        )
+
+    def test_invalid_allowlisted_header_with_empty_payload_still_blocks(self):
+        malformed_rows = (
+            "c20260230!1600 7006 1771185720 0 990006 90001 43 0 0 0 29|",
+            "c20260215-1600 7006 1771185720 0 990006 90001 43 0 0 0 29|",
+            "c20260215!1600 NOTHEX 1771185720 0 990006 90001 43 0 0 0 29|",
+            "c20260215!1600 100000000 1771185720 0 990006 90001 43 0 0 0 29|",
+            "c20260215!1600 7006 4294967296 0 990006 90001 43 0 0 0 29|",
+            "c20260215!1600 7006 NOTDECIMAL 0 990006 90001 43 0 0 0 29|",
+            "c20260215!1600 7006 1771185720 0 990006 90001 65536 0 0 0 29|",
+            " c20260215!1600 7006 1771185720 0 990006 90001 43 0 0 0 29|",
+            "c20260215!1600\v7006 1771185720 0 990006 90001 43 0 0 0 29|",
+            "c20260215!1600\f7006 1771185720 0 990006 90001 43 0 0 0 29|",
+            "c20260215!1600 7006 1771185720 0 990006 90001 43 0 0 0|",
+            "c20260215!1600 7006 1771185720 0 990006 90001 43 0 0 0 29 30|",
+        )
+        for malformed in malformed_rows:
+            with self.subTest(malformed=malformed):
+                write_backup(
+                    self.backup,
+                    journal="\n".join([TARGET_RENEWAL, malformed]),
+                )
+
+                result = self.run_probe()
+
+                self.assertEqual(
+                    result["reason_codes"], ["target_membership_parse_issue"]
+                )
+                self.assertEqual(
+                    result["analysis"]["target_membership_parse_issue_count"],
+                    1,
+                )
+
+    def test_empty_payload_member_scope_remains_fail_closed(self):
+        malformed_rows = (
+            "c20260215!1600 7006 1771185720 0 990006 0 43 0 0 0 29|",
+            "c20260215!1600 7006 1771185720 0 990006 NOTMEMBER 43 0 0 0 29|",
+            "c20260215!1600 7006 1771185720 0 990006 4294967296 43 0 0 0 29|",
+        )
+        for malformed in malformed_rows:
+            with self.subTest(malformed=malformed):
+                write_backup(
+                    self.backup,
+                    journal="\n".join([TARGET_RENEWAL, malformed]),
+                )
+
+                result = self.run_probe()
+
+                self.assertEqual(
+                    result["reason_codes"], ["target_membership_parse_issue"]
+                )
+
+    def test_nonallowlisted_nonmembership_with_empty_payload_remains_ignored(self):
+        nonallowlisted = (
+            "c20260215!1600 7006 1771185720 0 990006 99999 43 0 0 0 29|"
+        )
+        write_backup(
+            self.backup,
+            journal="\n".join([nonallowlisted, TARGET_RENEWAL]),
+        )
+
+        result = self.run_probe()
+
+        self.assertEqual(result["status"], "passed")
+        self.assertTrue(result["integrity_proven"])
+        self.assertEqual(result["reason_codes"], [])
+        self.assertEqual(result["analysis"]["target_membership_event_count"], 1)
+
+    def test_nonmembership_whitespace_payload_keeps_nonempty_semantics(self):
+        nonmembership = (
+            b"c20260215!1600 7006 1771185720 0 990006 90001 43 0 0 0 29| "
+        )
+
+        self.assertIsNotNone(probe._JOURNAL_HEADER_RE.fullmatch(nonmembership))
+        self.assertEqual(
+            probe._valid_journal_header(nonmembership),
+            ("90001", 43),
+        )
+
+    def test_empty_nonmembership_cli_output_is_one_line_and_private(self):
+        private_fragment = (
+            "c20260215!1600 7006 1771185720 0 990006 90001 43 0 0 0 29|"
+        )
+        write_backup(
+            self.backup,
+            journal="\n".join([private_fragment, TARGET_RENEWAL]),
+        )
+        stdout = StringIO()
+        stderr = StringIO()
+        argv = [
+            "--backup-path",
+            str(self.backup),
+            "--expected-length",
+            str(self.backup.stat().st_size),
+            "--expected-sha256",
+            sha256(self.backup.read_bytes()).hexdigest(),
+            "--allowlist-path",
+            str(self.allowlist),
+            "--expected-allowlist-count",
+            "2",
+            "--expected-allowlist-set-sha256",
+            canonical_allowlist_hash("90001", "90002"),
+        ]
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            exit_code = probe.main(argv)
+
+        output = stdout.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(len(output.splitlines()), 1)
+        self.assertNotIn("90001", output)
+        self.assertNotIn(private_fragment, output)
+
     def test_allowlisted_row_with_nonnumeric_event_type_blocks(self):
         malformed = (
             "c20260215!1600 7006 1771185720 0 990006 90001 NOT-A-TYPE 0 0 0 29"
