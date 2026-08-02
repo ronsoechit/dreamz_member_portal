@@ -19,7 +19,7 @@ import ga_invoice_backup_probe as probe
 from ga_journal import VOIDED_EVENT_MASK, parse_membership_journal_line
 
 
-DIAGNOSTIC_SCHEMA = "dreamz.ga.invoice-backup-parse-diagnostic.v1"
+DIAGNOSTIC_SCHEMA = "dreamz.ga.invoice-backup-parse-diagnostic.v2"
 CLASSIFICATION_KEYS = (
     "record_over_limit",
     "hidden_header_separator",
@@ -32,6 +32,55 @@ CLASSIFICATION_KEYS = (
     "ambiguous_member_zero",
     "ambiguous_member_missing_or_invalid",
     "ambiguous_header_invalid",
+)
+INVALID_SCOPE_KEYS = (
+    "member_unproven_header_shape",
+    "member_zero",
+    "member_allowlisted",
+    "member_positive_nonallowlisted",
+    "member_missing",
+    "member_nondecimal",
+    "member_out_of_uint32",
+)
+INVALID_FAILURE_KEYS = (
+    "pipe_missing",
+    "payload_empty",
+    "header_token_count_not_11",
+    "timestamp_lexical_invalid",
+    "timestamp_calendar_invalid",
+    "sequence_nonhex",
+    "sequence_uint32_overflow",
+    "numeric_header_token_nondecimal",
+    "numeric_header_uint32_overflow",
+    "event_type_uint16_overflow",
+    "ascii_edge_whitespace_only",
+    "noncanonical_header_separator",
+    "residual_unclassified",
+)
+INVALID_EVENT_SCOPE_KEYS = (
+    "event_unproven_header_shape",
+    "membership_1_or_3",
+    "voided_membership_1_or_3",
+    "nonmembership",
+    "event_missing",
+    "event_nondecimal",
+    "event_negative",
+    "event_uint16_overflow",
+)
+INVALID_TARGET_PAYLOAD_KEYS = (
+    "payload_field_count_not_11",
+    "payload_nondecimal",
+    "period_invalid",
+    "component_reconciliation_failed",
+    "payload_structurally_valid",
+)
+STRICT_ZERO_EVENT_KEYS = (
+    "membership_1_or_3",
+    "voided_membership_1_or_3",
+    "nonmembership",
+)
+_CANONICAL_HEADER_ONLY_RE = re.compile(
+    rb"c\d{8}!\d{4}[ \t]+[0-9A-Fa-f]+(?:[ \t]+[0-9]+){9}"
 )
 
 
@@ -93,6 +142,144 @@ def _loose_member_number(line: bytes) -> int | None:
     return member_number
 
 
+def _bounded_ascii_uint(
+    token: bytes,
+    maximum: int,
+    *,
+    base: int,
+) -> tuple[int | None, str]:
+    if not token.isascii():
+        return None, "lexical"
+    pattern = rb"[0-9]+" if base == 10 else rb"[0-9A-Fa-f]+"
+    if not re.fullmatch(pattern, token):
+        return None, "lexical"
+    significant = token.lstrip(b"0") or b"0"
+    limit = (
+        str(maximum).encode("ascii")
+        if base == 10
+        else format(maximum, "X").encode("ascii")
+    )
+    comparable = significant if base == 10 else significant.upper()
+    if len(comparable) > len(limit) or (
+        len(comparable) == len(limit) and comparable > limit
+    ):
+        return None, "overflow"
+    return int(comparable, base), "ok"
+
+
+def _invalid_member_scope(
+    raw_line: bytes,
+    allowlist: frozenset[str],
+) -> str:
+    header, separator, _payload = raw_line.partition(b"|")
+    tokens = header.split()
+    if not separator or len(tokens) != 11:
+        return "member_unproven_header_shape"
+    if len(tokens) <= 5:
+        return "member_missing"
+    token = tokens[5]
+    value, state = _bounded_ascii_uint(token, 0xFFFFFFFF, base=10)
+    if state == "lexical":
+        return "member_nondecimal"
+    if state == "overflow":
+        return "member_out_of_uint32"
+    assert value is not None
+    if value == 0:
+        return "member_zero"
+    if str(value) in allowlist:
+        return "member_allowlisted"
+    return "member_positive_nonallowlisted"
+
+
+def _invalid_header_first_failure(raw_line: bytes) -> str:
+    header, separator, payload = raw_line.partition(b"|")
+    if not separator:
+        return "pipe_missing"
+    if not payload:
+        return "payload_empty"
+    tokens = header.split()
+    if len(tokens) != 11:
+        return "header_token_count_not_11"
+    if not re.fullmatch(rb"c\d{8}!\d{4}", tokens[0]):
+        return "timestamp_lexical_invalid"
+    try:
+        datetime.strptime(tokens[0].decode("ascii"), "c%Y%m%d!%H%M")
+    except (UnicodeDecodeError, ValueError):
+        return "timestamp_calendar_invalid"
+    sequence, sequence_state = _bounded_ascii_uint(
+        tokens[1], 0xFFFFFFFF, base=16
+    )
+    if sequence_state == "lexical":
+        return "sequence_nonhex"
+    if sequence_state == "overflow":
+        return "sequence_uint32_overflow"
+    numeric_states = [
+        _bounded_ascii_uint(token, 0xFFFFFFFF, base=10)[1]
+        for token in tokens[2:]
+    ]
+    if "lexical" in numeric_states:
+        return "numeric_header_token_nondecimal"
+    if "overflow" in numeric_states:
+        return "numeric_header_uint32_overflow"
+    _event_value, event_state = _bounded_ascii_uint(tokens[6], 0xFFFF, base=10)
+    if event_state == "overflow":
+        return "event_type_uint16_overflow"
+    if header != header.strip(b" \t"):
+        if _CANONICAL_HEADER_ONLY_RE.fullmatch(header.strip(b" \t")):
+            return "ascii_edge_whitespace_only"
+        return "noncanonical_header_separator"
+    if not _CANONICAL_HEADER_ONLY_RE.fullmatch(header):
+        return "noncanonical_header_separator"
+    return "residual_unclassified"
+
+
+def _invalid_event_scope(raw_line: bytes) -> str:
+    header, separator, _payload = raw_line.partition(b"|")
+    tokens = header.split()
+    if not separator or len(tokens) != 11:
+        return "event_unproven_header_shape"
+    if len(tokens) <= 6:
+        return "event_missing"
+    token = tokens[6]
+    if token.startswith(b"-") and token[1:].isdigit():
+        return "event_negative"
+    raw_event_type, state = _bounded_ascii_uint(token, 0xFFFF, base=10)
+    if state == "lexical":
+        return "event_nondecimal"
+    if state == "overflow":
+        return "event_uint16_overflow"
+    assert raw_event_type is not None
+    event_type = raw_event_type & ~VOIDED_EVENT_MASK
+    if event_type in {1, 3}:
+        return (
+            "voided_membership_1_or_3"
+            if raw_event_type & VOIDED_EVENT_MASK
+            else "membership_1_or_3"
+        )
+    return "nonmembership"
+
+
+def _invalid_target_payload_structure(raw_line: bytes) -> str:
+    _header, separator, payload = raw_line.partition(b"|")
+    if not separator:
+        return "payload_field_count_not_11"
+    parts = payload.split()
+    if len(parts) != 11:
+        return "payload_field_count_not_11"
+    try:
+        values = [int(value) for value in parts]
+    except ValueError:
+        return "payload_nondecimal"
+    try:
+        datetime.strptime(str(values[2]), "%Y%m%d")
+        datetime.strptime(str(values[3]), "%Y%m%d")
+    except ValueError:
+        return "period_invalid"
+    if values[7] != values[4] + values[5] + values[6] + values[10]:
+        return "component_reconciliation_failed"
+    return "payload_structurally_valid"
+
+
 def _has_hidden_header(raw_line: bytes) -> bool:
     unicode_lines = raw_line.decode("latin-1", errors="strict").splitlines()
     return any(
@@ -141,6 +328,27 @@ def diagnose_journal_structure(
     target_parse_success_count = 0
     target_parse_failure_count = 0
     ambiguous_scope_record_count = 0
+    invalid_header_record_count = 0
+    target_invalid_header_record_count = 0
+    ambiguous_invalid_header_record_count = 0
+    invalid_scope_counts: Counter[str] = Counter(
+        {key: 0 for key in INVALID_SCOPE_KEYS}
+    )
+    invalid_failure_counts = {
+        scope: Counter({key: 0 for key in INVALID_FAILURE_KEYS})
+        for scope in INVALID_SCOPE_KEYS
+    }
+    invalid_event_scope_counts = {
+        scope: Counter({key: 0 for key in INVALID_EVENT_SCOPE_KEYS})
+        for scope in INVALID_SCOPE_KEYS
+    }
+    invalid_allowlisted_membership_payload_counts: Counter[str] = Counter(
+        {key: 0 for key in INVALID_TARGET_PAYLOAD_KEYS}
+    )
+    strict_zero_event_counts: Counter[str] = Counter(
+        {key: 0 for key in STRICT_ZERO_EVENT_KEYS}
+    )
+    strict_zero_record_count = 0
 
     for _record_number, raw_line in probe._iter_cr_lf_lines(journal_bytes):
         if len(raw_line) > probe.MAX_JOURNAL_RECORD_BYTES:
@@ -157,30 +365,61 @@ def diagnose_journal_structure(
         strict_header = _strict_header_allowing_zero(raw_line)
         if strict_header is None:
             loose_member = _loose_member_number(raw_line)
+            include_invalid_detail = False
             if loose_member is not None and loose_member > 0:
                 if str(loose_member) in allowlist:
                     classifications["target_header_invalid"] += 1
                     target_parse_failure_count += 1
-                continue
-            if loose_member is None:
+                    target_invalid_header_record_count += 1
+                    include_invalid_detail = True
+                else:
+                    continue
+            elif loose_member is None:
                 header_tokens = raw_line.split(b"|", 1)[0].split()
                 key = (
                     "ambiguous_member_missing_or_invalid"
                     if len(header_tokens) == 11
                     else "ambiguous_header_invalid"
                 )
+                classifications[key] += 1
+                ambiguous_scope_record_count += 1
+                ambiguous_invalid_header_record_count += 1
+                include_invalid_detail = True
             else:
                 # A zero member on an otherwise invalid row is not enough to
                 # prove a legitimate global/system record.
                 key = "ambiguous_header_invalid"
-            classifications[key] += 1
-            ambiguous_scope_record_count += 1
+                classifications[key] += 1
+                ambiguous_scope_record_count += 1
+                ambiguous_invalid_header_record_count += 1
+                include_invalid_detail = True
+
+            if include_invalid_detail:
+                invalid_header_record_count += 1
+                invalid_scope = _invalid_member_scope(raw_line, allowlist)
+                invalid_failure = _invalid_header_first_failure(raw_line)
+                invalid_event_scope = _invalid_event_scope(raw_line)
+                invalid_scope_counts[invalid_scope] += 1
+                invalid_failure_counts[invalid_scope][invalid_failure] += 1
+                invalid_event_scope_counts[invalid_scope][invalid_event_scope] += 1
+                if (
+                    invalid_scope == "member_allowlisted"
+                    and invalid_event_scope
+                    in {"membership_1_or_3", "voided_membership_1_or_3"}
+                ):
+                    payload_scope = _invalid_target_payload_structure(raw_line)
+                    invalid_allowlisted_membership_payload_counts[payload_scope] += 1
             continue
 
         member_number, raw_event_type = strict_header
         if member_number == 0:
             classifications["ambiguous_member_zero"] += 1
             ambiguous_scope_record_count += 1
+            strict_zero_record_count += 1
+            zero_event_scope = _invalid_event_scope(raw_line)
+            if zero_event_scope not in STRICT_ZERO_EVENT_KEYS:
+                raise ValueError("strict zero header produced invalid event scope")
+            strict_zero_event_counts[zero_event_scope] += 1
             continue
         member_id = str(member_number)
         if member_id not in allowlist:
@@ -197,6 +436,51 @@ def diagnose_journal_structure(
             classifications[failure] += 1
             target_parse_failure_count += 1
 
+    invalid_scope_total = sum(invalid_scope_counts.values())
+    invalid_failure_total = sum(
+        sum(counts.values()) for counts in invalid_failure_counts.values()
+    )
+    invalid_event_total = sum(
+        sum(counts.values()) for counts in invalid_event_scope_counts.values()
+    )
+    residual_unclassified_count = sum(
+        counts["residual_unclassified"] for counts in invalid_failure_counts.values()
+    )
+    invalid_origin_total = (
+        target_invalid_header_record_count + ambiguous_invalid_header_record_count
+    )
+    invalid_allowlisted_membership_event_count = (
+        invalid_event_scope_counts["member_allowlisted"]["membership_1_or_3"]
+        + invalid_event_scope_counts["member_allowlisted"][
+            "voided_membership_1_or_3"
+        ]
+    )
+    invalid_allowlisted_membership_payload_total = sum(
+        invalid_allowlisted_membership_payload_counts.values()
+    )
+    classified_invalid_header_count = (
+        invalid_header_record_count - residual_unclassified_count
+    )
+    invalid_scope_counts_output = {
+        key: int(invalid_scope_counts[key]) for key in INVALID_SCOPE_KEYS
+    }
+    invalid_failure_counts_output = {
+        scope: {
+            key: int(invalid_failure_counts[scope][key])
+            for key in INVALID_FAILURE_KEYS
+        }
+        for scope in INVALID_SCOPE_KEYS
+    }
+    invalid_event_scope_counts_output = {
+        scope: {
+            key: int(invalid_event_scope_counts[scope][key])
+            for key in INVALID_EVENT_SCOPE_KEYS
+        }
+        for scope in INVALID_SCOPE_KEYS
+    }
+    strict_zero_event_counts_output = {
+        key: int(strict_zero_event_counts[key]) for key in STRICT_ZERO_EVENT_KEYS
+    }
     safe_summary = {
         "confirmed_target_header_count": confirmed_target_header_count,
         "target_membership_candidate_count": target_membership_candidate_count,
@@ -206,6 +490,56 @@ def diagnose_journal_structure(
         "classification_counts": {
             key: int(classifications[key]) for key in CLASSIFICATION_KEYS
         },
+        "strict_zero_record_count": strict_zero_record_count,
+        "strict_zero_event_scope_counts": strict_zero_event_counts_output,
+        "strict_zero_counts_sum_matches_total": (
+            sum(strict_zero_event_counts.values()) == strict_zero_record_count
+        ),
+        "invalid_header_record_count": invalid_header_record_count,
+        "target_invalid_header_record_count": target_invalid_header_record_count,
+        "ambiguous_invalid_header_record_count": (
+            ambiguous_invalid_header_record_count
+        ),
+        "classified_invalid_header_count": classified_invalid_header_count,
+        "residual_unclassified_count": residual_unclassified_count,
+        "invalid_header_scope_counts": invalid_scope_counts_output,
+        "invalid_header_failure_counts": invalid_failure_counts_output,
+        "invalid_header_event_scope_counts": invalid_event_scope_counts_output,
+        "invalid_allowlisted_membership_payload_counts": {
+            key: int(invalid_allowlisted_membership_payload_counts[key])
+            for key in INVALID_TARGET_PAYLOAD_KEYS
+        },
+        "scope_counts_sum_matches_invalid_total": (
+            invalid_scope_total == invalid_header_record_count
+        ),
+        "reason_counts_sum_matches_invalid_total": (
+            invalid_failure_total == invalid_header_record_count
+        ),
+        "event_counts_sum_matches_invalid_total": (
+            invalid_event_total == invalid_header_record_count
+        ),
+        "origin_counts_sum_matches_invalid_total": (
+            invalid_origin_total == invalid_header_record_count
+        ),
+        "invalid_allowlisted_membership_event_count": (
+            invalid_allowlisted_membership_event_count
+        ),
+        "invalid_allowlisted_membership_payload_total": (
+            invalid_allowlisted_membership_payload_total
+        ),
+        "payload_counts_sum_matches_allowlisted_membership_events": (
+            invalid_allowlisted_membership_payload_total
+            == invalid_allowlisted_membership_event_count
+        ),
+        "classification_complete": (
+            invalid_scope_total == invalid_header_record_count
+            and invalid_failure_total == invalid_header_record_count
+            and invalid_event_total == invalid_header_record_count
+            and invalid_origin_total == invalid_header_record_count
+            and invalid_allowlisted_membership_payload_total
+            == invalid_allowlisted_membership_event_count
+            and residual_unclassified_count == 0
+        ),
     }
     return {
         **safe_summary,
