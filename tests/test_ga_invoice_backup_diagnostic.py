@@ -136,6 +136,109 @@ class InvoiceBackupDiagnosticTests(unittest.TestCase):
         )
         self.assertTrue(result["classification_complete"])
 
+    def test_focus_framing_core_and_scope_are_jointly_reconciled(self):
+        header = ACTIVE_RENEWAL.split("|", 1)[0]
+        nonmembership_header = header.replace(" 90001 3 ", " 90001 43 ")
+        target_nonmembership_empty = nonmembership_header + "|"
+        target_membership_empty = header + "|"
+        target_bad_calendar_empty = nonmembership_header.replace(
+            "c20260201!1214", "c20261301!1214"
+        ) + "|"
+        target_nonmembership_pipe_missing = nonmembership_header
+        non_record_fragment = "metadata"
+
+        result = self.diagnose(
+            target_nonmembership_empty,
+            target_membership_empty,
+            target_bad_calendar_empty,
+            target_nonmembership_pipe_missing,
+            non_record_fragment,
+        )
+
+        self.assertEqual(
+            result["focus_framing_record_counts"],
+            {"payload_empty": 3, "pipe_missing": 2},
+        )
+        payload_core = result["focus_core_counts"]["payload_empty"]
+        self.assertEqual(payload_core["strict_valid"], 2)
+        self.assertEqual(payload_core["timestamp_calendar_invalid"], 1)
+        pipe_core = result["focus_core_counts"]["pipe_missing"]
+        self.assertEqual(pipe_core["strict_valid"], 1)
+        self.assertEqual(pipe_core["header_token_count_not_11"], 1)
+        payload_scope = result["focus_strict_core_scope_counts"][
+            "payload_empty"
+        ]["allowlisted"]
+        self.assertEqual(payload_scope["nonmembership"], 1)
+        self.assertEqual(payload_scope["membership_1_or_3"], 1)
+        pipe_scope = result["focus_strict_core_scope_counts"]["pipe_missing"][
+            "allowlisted"
+        ]
+        self.assertEqual(pipe_scope["nonmembership"], 1)
+        self.assertEqual(
+            result["pipe_missing_token_bucket_counts"],
+            {
+                "fewer_than_6": 1,
+                "6_to_10": 0,
+                "exactly_11": 1,
+                "more_than_11": 0,
+            },
+        )
+        self.assertEqual(
+            result["pipe_missing_prefix_counts"],
+            {
+                "canonical_timestamp_prefix": 1,
+                "other_c_prefix": 0,
+                "non_journal_prefix": 1,
+            },
+        )
+        self.assertTrue(result["focus_accounting_complete"])
+        self.assertTrue(result["classification_complete"])
+        self.assertNotIn(TARGET_ID, json.dumps(result, sort_keys=True))
+
+    def test_focus_core_distinguishes_canonical_and_noncanonical_zero(self):
+        header = ACTIVE_RENEWAL.split("|", 1)[0].replace(
+            " 90001 3 ", " 0 43 "
+        )
+        canonical_zero = header + "|"
+        noncanonical_zero = header.replace(" 0 43 ", " 00 43 ") + "|"
+
+        result = self.diagnose(canonical_zero, noncanonical_zero)
+        scopes = result["focus_strict_core_scope_counts"]["payload_empty"]
+
+        self.assertEqual(scopes["zero_canonical"]["nonmembership"], 1)
+        self.assertEqual(scopes["zero_noncanonical"]["nonmembership"], 1)
+        self.assertTrue(result["focus_accounting_complete"])
+        self.assertTrue(result["classification_complete"])
+
+    def test_focus_accounting_includes_nonallowlisted_rejected_headers(self):
+        header = ACTIVE_RENEWAL.split("|", 1)[0].replace(
+            " 90001 3 ", " 81234 43 "
+        )
+
+        result = self.diagnose(header + "|", header)
+
+        self.assertEqual(result["invalid_header_record_count"], 0)
+        self.assertEqual(result["strict_header_rejected_record_count"], 2)
+        self.assertEqual(
+            result["focus_framing_record_counts"],
+            {"payload_empty": 1, "pipe_missing": 1},
+        )
+        scopes = result["focus_strict_core_scope_counts"]
+        self.assertEqual(
+            scopes["payload_empty"]["positive_nonallowlisted"][
+                "nonmembership"
+            ],
+            1,
+        )
+        self.assertEqual(
+            scopes["pipe_missing"]["positive_nonallowlisted"][
+                "nonmembership"
+            ],
+            1,
+        )
+        self.assertTrue(result["focus_accounting_complete"])
+        self.assertTrue(result["classification_complete"])
+
     def test_noncanonical_separator_and_edge_whitespace_are_distinguished(self):
         separator = ACTIVE_RENEWAL.replace("!1214 4930", "!1214\v4930")
         edge = " " + ACTIVE_RENEWAL
@@ -381,7 +484,7 @@ class InvoiceBackupDiagnosticTests(unittest.TestCase):
         self.assertFalse(result["diagnostic_conclusive"])
         self.assertFalse(result["authorizes_invoice_processing"])
         self.assertEqual(
-            result["schema"], "dreamz.ga.invoice-backup-parse-diagnostic.v2"
+            result["schema"], "dreamz.ga.invoice-backup-parse-diagnostic.v3"
         )
 
 

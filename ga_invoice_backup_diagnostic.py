@@ -19,7 +19,7 @@ import ga_invoice_backup_probe as probe
 from ga_journal import VOIDED_EVENT_MASK, parse_membership_journal_line
 
 
-DIAGNOSTIC_SCHEMA = "dreamz.ga.invoice-backup-parse-diagnostic.v2"
+DIAGNOSTIC_SCHEMA = "dreamz.ga.invoice-backup-parse-diagnostic.v3"
 CLASSIFICATION_KEYS = (
     "record_over_limit",
     "hidden_header_separator",
@@ -78,6 +78,45 @@ STRICT_ZERO_EVENT_KEYS = (
     "membership_1_or_3",
     "voided_membership_1_or_3",
     "nonmembership",
+)
+FOCUS_FRAMING_KEYS = (
+    "payload_empty",
+    "pipe_missing",
+)
+CORE_HEADER_KEYS = (
+    "strict_valid",
+    "header_token_count_not_11",
+    "timestamp_lexical_invalid",
+    "timestamp_calendar_invalid",
+    "sequence_nonhex",
+    "sequence_uint32_overflow",
+    "numeric_header_token_nondecimal",
+    "numeric_header_uint32_overflow",
+    "event_type_uint16_overflow",
+    "ascii_edge_whitespace_only",
+    "noncanonical_header_separator",
+)
+CORE_MEMBER_SCOPE_KEYS = (
+    "zero_canonical",
+    "zero_noncanonical",
+    "allowlisted",
+    "positive_nonallowlisted",
+)
+CORE_EVENT_SCOPE_KEYS = (
+    "membership_1_or_3",
+    "voided_membership_1_or_3",
+    "nonmembership",
+)
+PIPE_MISSING_TOKEN_BUCKET_KEYS = (
+    "fewer_than_6",
+    "6_to_10",
+    "exactly_11",
+    "more_than_11",
+)
+PIPE_MISSING_PREFIX_KEYS = (
+    "canonical_timestamp_prefix",
+    "other_c_prefix",
+    "non_journal_prefix",
 )
 _CANONICAL_HEADER_ONLY_RE = re.compile(
     rb"c\d{8}!\d{4}[ \t]+[0-9A-Fa-f]+(?:[ \t]+[0-9]+){9}"
@@ -259,6 +298,89 @@ def _invalid_event_scope(raw_line: bytes) -> str:
     return "nonmembership"
 
 
+def _classify_core_header(
+    header: bytes,
+) -> tuple[str, int | None, int | None, bytes | None]:
+    """Validate the complete header core without trusting framing or payload."""
+    tokens = header.split()
+    if len(tokens) != 11:
+        return "header_token_count_not_11", None, None, None
+    if not re.fullmatch(rb"c\d{8}!\d{4}", tokens[0]):
+        return "timestamp_lexical_invalid", None, None, None
+    try:
+        datetime.strptime(tokens[0].decode("ascii"), "c%Y%m%d!%H%M")
+    except (UnicodeDecodeError, ValueError):
+        return "timestamp_calendar_invalid", None, None, None
+    _sequence, sequence_state = _bounded_ascii_uint(
+        tokens[1], 0xFFFFFFFF, base=16
+    )
+    if sequence_state == "lexical":
+        return "sequence_nonhex", None, None, None
+    if sequence_state == "overflow":
+        return "sequence_uint32_overflow", None, None, None
+    numeric_values: list[int] = []
+    for token in tokens[2:]:
+        value, state = _bounded_ascii_uint(token, 0xFFFFFFFF, base=10)
+        if state == "lexical":
+            return "numeric_header_token_nondecimal", None, None, None
+        if state == "overflow":
+            return "numeric_header_uint32_overflow", None, None, None
+        assert value is not None
+        numeric_values.append(value)
+    raw_event_type = numeric_values[4]
+    if raw_event_type > 0xFFFF:
+        return "event_type_uint16_overflow", None, None, None
+    if header != header.strip(b" \t"):
+        if _CANONICAL_HEADER_ONLY_RE.fullmatch(header.strip(b" \t")):
+            return "ascii_edge_whitespace_only", None, None, None
+        return "noncanonical_header_separator", None, None, None
+    if not _CANONICAL_HEADER_ONLY_RE.fullmatch(header):
+        return "noncanonical_header_separator", None, None, None
+    return "strict_valid", numeric_values[3], raw_event_type, tokens[5]
+
+
+def _strict_core_member_scope(
+    member_number: int,
+    raw_member_token: bytes,
+    allowlist: frozenset[str],
+) -> str:
+    if member_number == 0:
+        return "zero_canonical" if raw_member_token == b"0" else "zero_noncanonical"
+    if str(member_number) in allowlist:
+        return "allowlisted"
+    return "positive_nonallowlisted"
+
+
+def _strict_core_event_scope(raw_event_type: int) -> str:
+    event_type = raw_event_type & ~VOIDED_EVENT_MASK
+    if event_type in {1, 3}:
+        return (
+            "voided_membership_1_or_3"
+            if raw_event_type & VOIDED_EVENT_MASK
+            else "membership_1_or_3"
+        )
+    return "nonmembership"
+
+
+def _pipe_missing_token_bucket(header: bytes) -> str:
+    count = len(header.split())
+    if count < 6:
+        return "fewer_than_6"
+    if count < 11:
+        return "6_to_10"
+    if count == 11:
+        return "exactly_11"
+    return "more_than_11"
+
+
+def _pipe_missing_prefix_scope(header: bytes) -> str:
+    if re.match(rb"^c\d{8}!\d{4}(?:[ \t]|$)", header):
+        return "canonical_timestamp_prefix"
+    if header.startswith(b"c"):
+        return "other_c_prefix"
+    return "non_journal_prefix"
+
+
 def _invalid_target_payload_structure(raw_line: bytes) -> str:
     _header, separator, payload = raw_line.partition(b"|")
     if not separator:
@@ -349,6 +471,28 @@ def diagnose_journal_structure(
         {key: 0 for key in STRICT_ZERO_EVENT_KEYS}
     )
     strict_zero_record_count = 0
+    focus_framing_record_counts: Counter[str] = Counter(
+        {key: 0 for key in FOCUS_FRAMING_KEYS}
+    )
+    focus_core_counts = {
+        framing: Counter({key: 0 for key in CORE_HEADER_KEYS})
+        for framing in FOCUS_FRAMING_KEYS
+    }
+    focus_strict_scope_counts = {
+        framing: {
+            member_scope: Counter({key: 0 for key in CORE_EVENT_SCOPE_KEYS})
+            for member_scope in CORE_MEMBER_SCOPE_KEYS
+        }
+        for framing in FOCUS_FRAMING_KEYS
+    }
+    pipe_missing_token_bucket_counts: Counter[str] = Counter(
+        {key: 0 for key in PIPE_MISSING_TOKEN_BUCKET_KEYS}
+    )
+    pipe_missing_prefix_counts: Counter[str] = Counter(
+        {key: 0 for key in PIPE_MISSING_PREFIX_KEYS}
+    )
+    strict_header_rejected_record_count = 0
+    focus_other_rejected_header_count = 0
 
     for _record_number, raw_line in probe._iter_cr_lf_lines(journal_bytes):
         if len(raw_line) > probe.MAX_JOURNAL_RECORD_BYTES:
@@ -364,6 +508,43 @@ def diagnose_journal_structure(
 
         strict_header = _strict_header_allowing_zero(raw_line)
         if strict_header is None:
+            strict_header_rejected_record_count += 1
+            global_failure = _invalid_header_first_failure(raw_line)
+            if global_failure in FOCUS_FRAMING_KEYS:
+                framing = global_failure
+                focus_framing_record_counts[framing] += 1
+                header = raw_line.partition(b"|")[0]
+                (
+                    core_status,
+                    core_member_number,
+                    core_raw_event_type,
+                    core_member_token,
+                ) = _classify_core_header(header)
+                focus_core_counts[framing][core_status] += 1
+                if core_status == "strict_valid":
+                    assert core_member_number is not None
+                    assert core_raw_event_type is not None
+                    assert core_member_token is not None
+                    core_member_scope = _strict_core_member_scope(
+                        core_member_number,
+                        core_member_token,
+                        allowlist,
+                    )
+                    core_event_scope = _strict_core_event_scope(
+                        core_raw_event_type
+                    )
+                    focus_strict_scope_counts[framing][core_member_scope][
+                        core_event_scope
+                    ] += 1
+                if framing == "pipe_missing":
+                    pipe_missing_token_bucket_counts[
+                        _pipe_missing_token_bucket(header)
+                    ] += 1
+                    pipe_missing_prefix_counts[
+                        _pipe_missing_prefix_scope(header)
+                    ] += 1
+            else:
+                focus_other_rejected_header_count += 1
             loose_member = _loose_member_number(raw_line)
             include_invalid_detail = False
             if loose_member is not None and loose_member > 0:
@@ -481,6 +662,63 @@ def diagnose_journal_structure(
     strict_zero_event_counts_output = {
         key: int(strict_zero_event_counts[key]) for key in STRICT_ZERO_EVENT_KEYS
     }
+    focus_framing_record_counts_output = {
+        key: int(focus_framing_record_counts[key]) for key in FOCUS_FRAMING_KEYS
+    }
+    focus_core_counts_output = {
+        framing: {
+            key: int(focus_core_counts[framing][key]) for key in CORE_HEADER_KEYS
+        }
+        for framing in FOCUS_FRAMING_KEYS
+    }
+    focus_strict_scope_counts_output = {
+        framing: {
+            member_scope: {
+                event_scope: int(
+                    focus_strict_scope_counts[framing][member_scope][event_scope]
+                )
+                for event_scope in CORE_EVENT_SCOPE_KEYS
+            }
+            for member_scope in CORE_MEMBER_SCOPE_KEYS
+        }
+        for framing in FOCUS_FRAMING_KEYS
+    }
+    focus_core_counts_match_framing = {
+        framing: (
+            sum(focus_core_counts[framing].values())
+            == focus_framing_record_counts[framing]
+        )
+        for framing in FOCUS_FRAMING_KEYS
+    }
+    focus_strict_scope_counts_match_core = {
+        framing: (
+            sum(
+                sum(event_counts.values())
+                for event_counts in focus_strict_scope_counts[framing].values()
+            )
+            == focus_core_counts[framing]["strict_valid"]
+        )
+        for framing in FOCUS_FRAMING_KEYS
+    }
+    pipe_missing_token_bucket_counts_output = {
+        key: int(pipe_missing_token_bucket_counts[key])
+        for key in PIPE_MISSING_TOKEN_BUCKET_KEYS
+    }
+    pipe_missing_prefix_counts_output = {
+        key: int(pipe_missing_prefix_counts[key])
+        for key in PIPE_MISSING_PREFIX_KEYS
+    }
+    focus_framing_total = sum(focus_framing_record_counts.values())
+    focus_accounting_complete = (
+        focus_framing_total + focus_other_rejected_header_count
+        == strict_header_rejected_record_count
+        and all(focus_core_counts_match_framing.values())
+        and all(focus_strict_scope_counts_match_core.values())
+        and sum(pipe_missing_token_bucket_counts.values())
+        == focus_framing_record_counts["pipe_missing"]
+        and sum(pipe_missing_prefix_counts.values())
+        == focus_framing_record_counts["pipe_missing"]
+    )
     safe_summary = {
         "confirmed_target_header_count": confirmed_target_header_count,
         "target_membership_candidate_count": target_membership_candidate_count,
@@ -509,6 +747,34 @@ def diagnose_journal_structure(
             key: int(invalid_allowlisted_membership_payload_counts[key])
             for key in INVALID_TARGET_PAYLOAD_KEYS
         },
+        "focus_framing_record_counts": focus_framing_record_counts_output,
+        "strict_header_rejected_record_count": (
+            strict_header_rejected_record_count
+        ),
+        "focus_other_rejected_header_count": focus_other_rejected_header_count,
+        "focus_core_counts": focus_core_counts_output,
+        "focus_strict_core_scope_counts": focus_strict_scope_counts_output,
+        "focus_core_counts_match_framing": focus_core_counts_match_framing,
+        "focus_strict_scope_counts_match_core": (
+            focus_strict_scope_counts_match_core
+        ),
+        "pipe_missing_token_bucket_counts": (
+            pipe_missing_token_bucket_counts_output
+        ),
+        "pipe_missing_prefix_counts": pipe_missing_prefix_counts_output,
+        "pipe_missing_token_counts_match_total": (
+            sum(pipe_missing_token_bucket_counts.values())
+            == focus_framing_record_counts["pipe_missing"]
+        ),
+        "pipe_missing_prefix_counts_match_total": (
+            sum(pipe_missing_prefix_counts.values())
+            == focus_framing_record_counts["pipe_missing"]
+        ),
+        "focus_counts_plus_other_match_rejected_total": (
+            focus_framing_total + focus_other_rejected_header_count
+            == strict_header_rejected_record_count
+        ),
+        "focus_accounting_complete": focus_accounting_complete,
         "scope_counts_sum_matches_invalid_total": (
             invalid_scope_total == invalid_header_record_count
         ),
@@ -539,6 +805,7 @@ def diagnose_journal_structure(
             and invalid_allowlisted_membership_payload_total
             == invalid_allowlisted_membership_event_count
             and residual_unclassified_count == 0
+            and focus_accounting_complete
         ),
     }
     return {
