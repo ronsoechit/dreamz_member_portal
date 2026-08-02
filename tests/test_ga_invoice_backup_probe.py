@@ -1083,6 +1083,24 @@ class InvoiceBackupProbeTests(unittest.TestCase):
                     result["reason_codes"], ["target_membership_parse_issue"]
                 )
 
+    def test_every_non_crlf_splitlines_separator_blocks_inside_target_payload(self):
+        target = TARGET_RENEWAL.encode("ascii")
+        header, payload = target.split(b"|", 1)
+        for separator in (b"\x0b", b"\x0c", b"\x1c", b"\x1d", b"\x1e", b"\x85"):
+            with self.subTest(separator=separator.hex()):
+                malformed = header + b"|" + payload.replace(b" ", separator, 1)
+                write_backup(self.backup, journal=malformed)
+
+                result = self.run_probe()
+
+                self.assertEqual(
+                    result["reason_codes"], ["target_membership_parse_issue"]
+                )
+                self.assertEqual(
+                    result["analysis"]["target_membership_parse_issue_count"],
+                    1,
+                )
+
     def test_malformed_other_member_does_not_block_target_scope(self):
         malformed_other = (
             "bad-timestamp 7005 1771185660 0 990005 99999 3 0 0 0 29"

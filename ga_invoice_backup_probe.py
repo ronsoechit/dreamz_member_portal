@@ -81,6 +81,9 @@ _JOURNAL_HEADER_CORE_RE = re.compile(
     rb"(?:[ \t]+([0-9]+)){9}$",
 )
 _CATALOG_LINE_BREAK_RE = re.compile(r"\r\n|[\n\r\v\f\x1c-\x1e\x85]")
+_NON_CRLF_SPLITLINE_BYTES = frozenset(
+    {0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85}
+)
 
 KNOWN_REASON_CODES = frozenset(
     {
@@ -474,6 +477,11 @@ def _attributable_member_number(line: bytes) -> str | None:
     return str(member_number)
 
 
+def _contains_non_crlf_line_separator(raw_line: bytes) -> bool:
+    """Reject Latin-1 separators that ``str.splitlines`` treats as records."""
+    return any(value in _NON_CRLF_SPLITLINE_BYTES for value in raw_line)
+
+
 def _parse_allowlisted_membership_events(
     journal_bytes: bytes,
     allowlist: frozenset[str],
@@ -492,16 +500,10 @@ def _parse_allowlisted_membership_events(
             return events, 1
         if not raw_line.strip(b" \t"):
             continue
-        # The shared parser uses Latin-1 ``str.splitlines()`` followed by
-        # Unicode ``str.strip()``.  Mirror those exact semantics here: a
-        # Unicode-only line separator plus any Unicode whitespace must not be
-        # able to hide a second journal header inside one authoritative CR/LF
-        # record.
-        unicode_lines = raw_line.decode("latin-1", errors="strict").splitlines()
-        if any(
-            re.match(r"^c\d{8}!\d{4}(?:\s|$)", hidden_line.strip())
-            for hidden_line in unicode_lines[1:]
-        ):
+        # The shared parser uses Latin-1 ``str.splitlines()``.  An authoritative
+        # CR/LF record containing any additional splitlines separator would be
+        # framed differently there, even when no second header follows it.
+        if _contains_non_crlf_line_separator(raw_line):
             return events, 1
         header = _valid_journal_header(raw_line)
         if header is None:

@@ -29,6 +29,11 @@ class InvoiceBackupDiagnosticTests(unittest.TestCase):
             "\r\n".join(rows).encode("latin-1"), frozenset({TARGET_ID})
         )
 
+    def diagnose_bytes(self, *rows: bytes) -> dict:
+        return diagnose_journal_structure(
+            b"\r\n".join(rows), frozenset({TARGET_ID})
+        )
+
     def test_zero_member_is_counted_without_hiding_later_target_event(self):
         zero_member = ACTIVE_RENEWAL.replace(" 90001 3 ", " 0 3 ")
 
@@ -64,6 +69,383 @@ class InvoiceBackupDiagnosticTests(unittest.TestCase):
             },
         )
         self.assertTrue(result["strict_zero_counts_sum_matches_total"])
+
+    def test_system_zero_policy_matrix_is_exact_and_fail_closed(self):
+        zero_nonmembership = ACTIVE_RENEWAL.replace(" 90001 3 ", " 0 43 ")
+        zero_noncanonical = zero_nonmembership.replace(" 0 43 ", " 00 43 ")
+        zero_membership = ACTIVE_RENEWAL.replace(" 90001 3 ", " 0 3 ")
+        zero_voided = ACTIVE_RENEWAL.replace(" 90001 3 ", " 0 32771 ")
+        header_only = zero_nonmembership.split("|", 1)[0]
+        payload_empty = header_only + "|"
+
+        result = self.diagnose(
+            zero_nonmembership,
+            zero_noncanonical,
+            zero_membership,
+            zero_voided,
+            header_only,
+            payload_empty,
+        )
+
+        matrix = result["system_zero_scope_counts"]
+        self.assertEqual(
+            matrix["pipe_nonempty"]["canonical_zero"],
+            {
+                "membership_1_or_3": 1,
+                "voided_membership_1_or_3": 1,
+                "nonmembership": 1,
+            },
+        )
+        self.assertEqual(
+            matrix["pipe_nonempty"]["noncanonical_zero"]["nonmembership"],
+            1,
+        )
+        self.assertEqual(
+            matrix["pipe_missing_exact_core"]["canonical_zero"][
+                "nonmembership"
+            ],
+            1,
+        )
+        self.assertEqual(
+            matrix["payload_empty"]["canonical_zero"]["nonmembership"],
+            1,
+        )
+        self.assertEqual(result["system_zero_matrix_total"], 6)
+        self.assertEqual(result["system_zero_observed_total"], 6)
+        self.assertTrue(result["system_zero_matrix_matches_observed_total"])
+        self.assertEqual(result["proposed_system_skip_pipe_nonempty_count"], 1)
+        self.assertEqual(result["proposed_system_skip_header_only_count"], 1)
+        self.assertEqual(result["proposed_system_skip_total"], 2)
+        self.assertEqual(result["forbidden_system_zero_total"], 4)
+        self.assertTrue(result["system_zero_policy_caps_ok"])
+        self.assertTrue(result["classification_complete"])
+
+    def test_all_zero_membership_variants_and_noncanonical_header_stay_forbidden(self):
+        rows = []
+        for raw_event in (1, 3, 32769, 32771):
+            rows.append(
+                ACTIVE_RENEWAL.replace(
+                    " 90001 3 ", f" 0 {raw_event} "
+                )
+            )
+        noncanonical_header_only = (
+            ACTIVE_RENEWAL.replace(" 90001 3 ", " 00 43 ")
+            .split("|", 1)[0]
+        )
+        rows.append(noncanonical_header_only)
+
+        result = self.diagnose(*rows)
+
+        self.assertEqual(result["proposed_system_skip_total"], 0)
+        self.assertEqual(result["forbidden_system_zero_total"], 5)
+        matrix = result["system_zero_scope_counts"]
+        self.assertEqual(
+            matrix["pipe_nonempty"]["canonical_zero"]["membership_1_or_3"],
+            2,
+        )
+        self.assertEqual(
+            matrix["pipe_nonempty"]["canonical_zero"][
+                "voided_membership_1_or_3"
+            ],
+            2,
+        )
+        self.assertEqual(
+            matrix["pipe_missing_exact_core"]["noncanonical_zero"][
+                "nonmembership"
+            ],
+            1,
+        )
+        self.assertTrue(result["classification_complete"])
+
+    def test_system_zero_header_only_cap_is_fail_closed(self):
+        header_only = (
+            ACTIVE_RENEWAL.replace(" 90001 3 ", " 0 43 ")
+            .split("|", 1)[0]
+        )
+
+        at_cap = self.diagnose(*([header_only] * 64))
+        result = self.diagnose(*([header_only] * 65))
+
+        self.assertEqual(at_cap["proposed_system_skip_header_only_count"], 64)
+        self.assertTrue(at_cap["system_zero_policy_caps_ok"])
+        self.assertTrue(at_cap["classification_complete"])
+        self.assertEqual(
+            at_cap["post_policy_simulation"][
+                "effective_system_zero_skip_count"
+            ],
+            64,
+        )
+        self.assertTrue(at_cap["post_policy_simulation"]["global_scope_clear"])
+        self.assertEqual(result["proposed_system_skip_header_only_count"], 65)
+        self.assertFalse(result["system_zero_policy_caps_ok"])
+        self.assertFalse(result["classification_complete"])
+        self.assertEqual(
+            result["post_policy_simulation"][
+                "effective_system_zero_skip_count"
+            ],
+            0,
+        )
+        self.assertEqual(
+            result["post_policy_simulation"]["ambiguous_issue_count"], 65
+        )
+        self.assertFalse(result["post_policy_simulation"]["target_scope_clear"])
+        self.assertFalse(result["post_policy_simulation"]["global_scope_clear"])
+
+    def test_system_zero_pipe_nonempty_cap_is_fail_closed(self):
+        row = ACTIVE_RENEWAL.replace(" 90001 3 ", " 0 43 ")
+
+        at_cap = self.diagnose(*([row] * 20_000))
+        above_cap = self.diagnose(*([row] * 20_001))
+
+        self.assertTrue(at_cap["system_zero_policy_caps_ok"])
+        self.assertEqual(
+            at_cap["post_policy_simulation"][
+                "effective_system_zero_skip_count"
+            ],
+            20_000,
+        )
+        self.assertTrue(at_cap["post_policy_simulation"]["global_scope_clear"])
+        self.assertFalse(above_cap["system_zero_policy_caps_ok"])
+        self.assertEqual(
+            above_cap["post_policy_simulation"][
+                "effective_system_zero_skip_count"
+            ],
+            0,
+        )
+        self.assertEqual(
+            above_cap["post_policy_simulation"]["ambiguous_issue_count"],
+            20_001,
+        )
+        self.assertFalse(
+            above_cap["post_policy_simulation"]["target_scope_clear"]
+        )
+        self.assertFalse(
+            above_cap["post_policy_simulation"]["global_scope_clear"]
+        )
+
+    def test_short_fragments_use_only_fixed_aggregate_buckets(self):
+        canary = b"PRIVATE-METADATA-CANARY"
+
+        result = self.diagnose_bytes(canary, b"\x1a", b"\x00\x00")
+        rendered = json.dumps(result, sort_keys=True)
+
+        self.assertEqual(result["short_fragment_count"], 3)
+        self.assertEqual(
+            result["short_fragment_token_counts"],
+            {"zero_tokens": 0, "one_token": 3, "two_to_five_tokens": 0},
+        )
+        self.assertEqual(result["short_fragment_length_counts"]["1_to_15"], 2)
+        self.assertEqual(result["short_fragment_length_counts"]["16_to_31"], 1)
+        self.assertEqual(
+            result["short_fragment_byteclass_counts"],
+            {
+                "printable_ascii": 1,
+                "ascii_with_tab": 0,
+                "ascii_control": 2,
+                "nonascii_or_binary": 0,
+            },
+        )
+        self.assertEqual(
+            result["short_fragment_character_counts"],
+            {
+                "alpha_only": 0,
+                "digit_only": 0,
+                "punctuation_or_control_only": 2,
+                "alphanumeric": 0,
+                "mixed": 1,
+            },
+        )
+        self.assertEqual(
+            result["short_fragment_marker_counts"],
+            {
+                "dos_eof_only": 1,
+                "bom_only": 0,
+                "nul_only": 1,
+                "unrecognized": 1,
+            },
+        )
+        self.assertEqual(result["short_fragment_header_prefix_present_count"], 0)
+        self.assertTrue(result["short_fragment_axes_reconcile"])
+        self.assertFalse(result["short_fragments_authorized_to_skip"])
+        self.assertTrue(result["remainder_accounting_complete"])
+        self.assertNotIn("PRIVATE-METADATA-CANARY", rendered)
+
+    def test_short_fragment_risk_signals_are_counted_but_never_authorized(self):
+        result = self.diagnose_bytes(
+            b"xxc20260201!1214",
+            b"alpha\x85omega",
+        )
+
+        self.assertEqual(result["short_fragment_count"], 1)
+        self.assertEqual(
+            result["short_fragment_header_prefix_present_count"], 1
+        )
+        self.assertEqual(result["non_crlf_separator_record_count"], 1)
+        self.assertEqual(
+            result["classification_counts"]["hidden_header_separator"], 1
+        )
+        self.assertTrue(result["short_fragment_axes_reconcile"])
+        self.assertFalse(result["short_fragments_authorized_to_skip"])
+        self.assertTrue(result["classification_complete"])
+
+    def test_non_crlf_separators_never_enter_system_zero_policy_matrix(self):
+        base = ACTIVE_RENEWAL.replace(" 90001 3 ", " 0 43 ").encode(
+            "ascii"
+        )
+        for separator in (b"\x0b", b"\x0c", b"\x1c", b"\x1d", b"\x1e", b"\x85"):
+            with self.subTest(separator=separator.hex()):
+                header, payload = base.split(b"|", 1)
+                row = header + b"|" + payload.replace(b" ", separator, 1)
+
+                result = self.diagnose_bytes(row)
+
+                self.assertEqual(result["proposed_system_skip_total"], 0)
+                self.assertEqual(result["system_zero_matrix_total"], 0)
+                self.assertEqual(result["non_crlf_separator_record_count"], 1)
+                self.assertEqual(result["ambiguous_scope_record_count"], 1)
+
+    def test_other_reject_is_classified_on_every_fixed_axis(self):
+        noncanonical = " " + ACTIVE_RENEWAL
+
+        result = self.diagnose(noncanonical)
+
+        self.assertEqual(result["focus_other_rejected_header_count"], 1)
+        self.assertEqual(
+            result["other_rejected_failure_counts"][
+                "ascii_edge_whitespace_only"
+            ],
+            1,
+        )
+        self.assertEqual(
+            result["other_rejected_core_counts"][
+                "ascii_edge_whitespace_only"
+            ],
+            1,
+        )
+        self.assertEqual(
+            result["other_rejected_member_scope_counts"]["member_allowlisted"],
+            1,
+        )
+        self.assertEqual(
+            result["other_rejected_event_scope_counts"]["membership_1_or_3"],
+            1,
+        )
+        self.assertEqual(
+            result["other_rejected_framing_counts"]["pipe_nonempty"], 1
+        )
+        self.assertTrue(result["other_rejected_axes_reconcile"])
+        self.assertEqual(result["other_rejected_joint_total"], 1)
+        self.assertTrue(result["other_rejected_joint_marginals_match"])
+        self.assertEqual(
+            result["other_rejected_joint_counts"],
+            [
+                {
+                    "failure": "ascii_edge_whitespace_only",
+                    "core": "ascii_edge_whitespace_only",
+                    "member_scope": "member_allowlisted",
+                    "event_scope": "membership_1_or_3",
+                    "framing": "pipe_nonempty",
+                    "count": 1,
+                }
+            ],
+        )
+        self.assertTrue(result["remainder_accounting_complete"])
+        self.assertTrue(result["classification_complete"])
+
+    def test_other_joint_counts_preserve_cross_axis_correlations(self):
+        allowlisted_edge = " " + ACTIVE_RENEWAL
+        nonallowlisted_bad_calendar = ACTIVE_RENEWAL.replace(
+            "c20260201!1214", "c20261301!1214"
+        ).replace(" 90001 3 ", " 81234 43 ")
+
+        result = self.diagnose(
+            allowlisted_edge,
+            nonallowlisted_bad_calendar,
+        )
+
+        self.assertEqual(result["focus_other_rejected_header_count"], 2)
+        self.assertEqual(result["other_rejected_joint_total"], 2)
+        self.assertEqual(len(result["other_rejected_joint_counts"]), 2)
+        self.assertTrue(result["other_rejected_joint_marginals_match"])
+        self.assertTrue(result["other_rejected_axes_reconcile"])
+        pairs = {
+            (
+                item["failure"],
+                item["member_scope"],
+                item["event_scope"],
+            )
+            for item in result["other_rejected_joint_counts"]
+        }
+        self.assertEqual(
+            pairs,
+            {
+                (
+                    "ascii_edge_whitespace_only",
+                    "member_allowlisted",
+                    "membership_1_or_3",
+                ),
+                (
+                    "timestamp_calendar_invalid",
+                    "member_positive_nonallowlisted",
+                    "nonmembership",
+                ),
+            },
+        )
+
+    def test_exact_live_v4_distribution_reconciles_post_policy(self):
+        zero_full = ACTIVE_RENEWAL.replace(" 90001 3 ", " 0 43 ")
+        zero_header_only = zero_full.split("|", 1)[0]
+        allowlisted_nonmembership = ACTIVE_RENEWAL.replace(
+            " 90001 3 ", " 90001 43 "
+        )
+        allowlisted_empty = allowlisted_nonmembership.split("|", 1)[0] + "|"
+        nonallowlisted_nonmembership = allowlisted_nonmembership.replace(
+            " 90001 43 ", " 81234 43 "
+        )
+        nonallowlisted_empty = (
+            nonallowlisted_nonmembership.split("|", 1)[0] + "|"
+        )
+        nonallowlisted_header_only = nonallowlisted_nonmembership.split("|", 1)[0]
+        other = " " + nonallowlisted_nonmembership
+        rows = (
+            [zero_full] * 12_331
+            + [zero_header_only] * 18
+            + [allowlisted_empty] * 25
+            + [nonallowlisted_empty] * 2_215
+            + [nonallowlisted_header_only] * 30
+            + ["metadata-a", "metadata-b", "metadata-c"]
+            + [other]
+            + [allowlisted_nonmembership] * 329
+            + [ACTIVE_RENEWAL] * 190
+        )
+
+        result = self.diagnose(*rows)
+        simulation = result["post_policy_simulation"]
+
+        self.assertEqual(result["strict_header_rejected_record_count"], 2_292)
+        self.assertEqual(result["system_zero_matrix_total"], 12_349)
+        self.assertEqual(result["proposed_system_skip_total"], 12_349)
+        self.assertEqual(result["forbidden_system_zero_total"], 0)
+        self.assertEqual(result["short_fragment_count"], 3)
+        self.assertEqual(result["focus_other_rejected_header_count"], 1)
+        self.assertEqual(result["remainder_record_count"], 4)
+        self.assertEqual(result["confirmed_target_header_count"], 519)
+        self.assertEqual(result["target_membership_candidate_count"], 190)
+        self.assertEqual(result["target_parse_success_count"], 190)
+        self.assertEqual(result["target_parse_failure_count"], 25)
+        self.assertEqual(
+            simulation["existing_empty_nonmembership_exception_count"],
+            2_240,
+        )
+        self.assertEqual(simulation["target_membership_event_count"], 190)
+        self.assertEqual(simulation["target_issue_count"], 0)
+        self.assertEqual(simulation["ambiguous_issue_count"], 3)
+        self.assertEqual(simulation["total_unresolved_issue_count"], 3)
+        self.assertTrue(simulation["target_scope_clear"])
+        self.assertFalse(simulation["global_scope_clear"])
+        self.assertTrue(simulation["accounting_complete"])
+        self.assertFalse(simulation["authorizes_invoice_processing"])
+        self.assertTrue(result["classification_complete"])
 
     def test_invalid_headers_receive_fixed_reconciling_breakdown(self):
         header = ACTIVE_RENEWAL.split("|", 1)[0]
@@ -239,26 +621,30 @@ class InvoiceBackupDiagnosticTests(unittest.TestCase):
         self.assertTrue(result["focus_accounting_complete"])
         self.assertTrue(result["classification_complete"])
 
-    def test_noncanonical_separator_and_edge_whitespace_are_distinguished(self):
+    def test_non_crlf_separator_and_edge_whitespace_are_distinguished(self):
         separator = ACTIVE_RENEWAL.replace("!1214 4930", "!1214\v4930")
         edge = " " + ACTIVE_RENEWAL
 
         result = self.diagnose(separator, edge)
         failures = result["invalid_header_failure_counts"]["member_allowlisted"]
 
-        self.assertEqual(failures["noncanonical_header_separator"], 1)
+        self.assertEqual(
+            result["classification_counts"]["hidden_header_separator"], 1
+        )
         self.assertEqual(failures["ascii_edge_whitespace_only"], 1)
         self.assertEqual(result["residual_unclassified_count"], 0)
         self.assertTrue(result["classification_complete"])
 
-    def test_combined_edge_and_separator_defects_are_not_labeled_edge_only(self):
+    def test_combined_edge_and_separator_defects_block_at_framing_boundary(self):
         combined = " " + ACTIVE_RENEWAL.replace("!1214 4930", "!1214\v4930")
 
         result = self.diagnose(combined)
         failures = result["invalid_header_failure_counts"]["member_allowlisted"]
 
         self.assertEqual(failures["ascii_edge_whitespace_only"], 0)
-        self.assertEqual(failures["noncanonical_header_separator"], 1)
+        self.assertEqual(
+            result["classification_counts"]["hidden_header_separator"], 1
+        )
         self.assertTrue(result["classification_complete"])
 
     def test_very_long_numeric_tokens_use_fixed_overflow_categories(self):
@@ -343,9 +729,6 @@ class InvoiceBackupDiagnosticTests(unittest.TestCase):
             "numeric_header_uint32_overflow": row_with(2, "4294967296"),
             "event_type_uint16_overflow": row_with(6, "65536"),
             "ascii_edge_whitespace_only": " " + ACTIVE_RENEWAL,
-            "noncanonical_header_separator": ACTIVE_RENEWAL.replace(
-                "!1214 4930", "!1214\v4930"
-            ),
         }
 
         for expected, row in cases.items():
@@ -484,7 +867,7 @@ class InvoiceBackupDiagnosticTests(unittest.TestCase):
         self.assertFalse(result["diagnostic_conclusive"])
         self.assertFalse(result["authorizes_invoice_processing"])
         self.assertEqual(
-            result["schema"], "dreamz.ga.invoice-backup-parse-diagnostic.v3"
+            result["schema"], "dreamz.ga.invoice-backup-parse-diagnostic.v4"
         )
 
 

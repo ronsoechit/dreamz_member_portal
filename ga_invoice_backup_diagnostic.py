@@ -19,7 +19,7 @@ import ga_invoice_backup_probe as probe
 from ga_journal import VOIDED_EVENT_MASK, parse_membership_journal_line
 
 
-DIAGNOSTIC_SCHEMA = "dreamz.ga.invoice-backup-parse-diagnostic.v3"
+DIAGNOSTIC_SCHEMA = "dreamz.ga.invoice-backup-parse-diagnostic.v4"
 CLASSIFICATION_KEYS = (
     "record_over_limit",
     "hidden_header_separator",
@@ -118,6 +118,53 @@ PIPE_MISSING_PREFIX_KEYS = (
     "other_c_prefix",
     "non_journal_prefix",
 )
+SYSTEM_ZERO_FRAMING_KEYS = (
+    "pipe_nonempty",
+    "payload_empty",
+    "pipe_missing_exact_core",
+)
+SYSTEM_ZERO_TOKEN_KEYS = (
+    "canonical_zero",
+    "noncanonical_zero",
+)
+SHORT_FRAGMENT_TOKEN_KEYS = (
+    "zero_tokens",
+    "one_token",
+    "two_to_five_tokens",
+)
+SHORT_FRAGMENT_LENGTH_KEYS = (
+    "1_to_15",
+    "16_to_31",
+    "32_to_63",
+    "64_to_127",
+    "128_or_more",
+)
+SHORT_FRAGMENT_BYTECLASS_KEYS = (
+    "printable_ascii",
+    "ascii_with_tab",
+    "ascii_control",
+    "nonascii_or_binary",
+)
+SHORT_FRAGMENT_CHARACTER_KEYS = (
+    "alpha_only",
+    "digit_only",
+    "punctuation_or_control_only",
+    "alphanumeric",
+    "mixed",
+)
+SHORT_FRAGMENT_MARKER_KEYS = (
+    "dos_eof_only",
+    "bom_only",
+    "nul_only",
+    "unrecognized",
+)
+OTHER_FRAMING_KEYS = (
+    "pipe_nonempty",
+    "payload_empty",
+    "pipe_missing",
+)
+SYSTEM_ZERO_PIPE_NONEMPTY_CAP = 20_000
+SYSTEM_ZERO_HEADER_ONLY_CAP = 64
 _CANONICAL_HEADER_ONLY_RE = re.compile(
     rb"c\d{8}!\d{4}[ \t]+[0-9A-Fa-f]+(?:[ \t]+[0-9]+){9}"
 )
@@ -381,6 +428,82 @@ def _pipe_missing_prefix_scope(header: bytes) -> str:
     return "non_journal_prefix"
 
 
+def _system_zero_token_scope(raw_member_token: bytes) -> str:
+    return (
+        "canonical_zero"
+        if raw_member_token == b"0"
+        else "noncanonical_zero"
+    )
+
+
+def _short_fragment_token_scope(raw_line: bytes) -> str:
+    token_count = len(raw_line.split())
+    if token_count == 0:
+        return "zero_tokens"
+    if token_count == 1:
+        return "one_token"
+    return "two_to_five_tokens"
+
+
+def _short_fragment_length_scope(raw_line: bytes) -> str:
+    length = len(raw_line)
+    if length <= 15:
+        return "1_to_15"
+    if length <= 31:
+        return "16_to_31"
+    if length <= 63:
+        return "32_to_63"
+    if length <= 127:
+        return "64_to_127"
+    return "128_or_more"
+
+
+def _short_fragment_byteclass(raw_line: bytes) -> str:
+    if all(0x20 <= value <= 0x7E for value in raw_line):
+        return "printable_ascii"
+    if all(value == 0x09 or 0x20 <= value <= 0x7E for value in raw_line):
+        return "ascii_with_tab"
+    if all(value < 0x80 for value in raw_line):
+        return "ascii_control"
+    return "nonascii_or_binary"
+
+
+def _short_fragment_character_scope(raw_line: bytes) -> str:
+    ascii_letters = sum(
+        (0x41 <= value <= 0x5A) or (0x61 <= value <= 0x7A)
+        for value in raw_line
+    )
+    ascii_digits = sum(0x30 <= value <= 0x39 for value in raw_line)
+    other = len(raw_line) - ascii_letters - ascii_digits
+    if ascii_letters and not ascii_digits and not other:
+        return "alpha_only"
+    if ascii_digits and not ascii_letters and not other:
+        return "digit_only"
+    if other and not ascii_letters and not ascii_digits:
+        return "punctuation_or_control_only"
+    if ascii_letters and ascii_digits and not other:
+        return "alphanumeric"
+    return "mixed"
+
+
+def _short_fragment_marker_scope(raw_line: bytes) -> str:
+    # These are diagnostic labels only.  None authorizes a production skip.
+    if raw_line == b"\x1a":
+        return "dos_eof_only"
+    if raw_line in {b"\xef\xbb\xbf", b"\xff\xfe", b"\xfe\xff"}:
+        return "bom_only"
+    if raw_line and not raw_line.strip(b"\x00"):
+        return "nul_only"
+    return "unrecognized"
+
+
+def _other_framing_scope(raw_line: bytes) -> str:
+    _header, separator, payload = raw_line.partition(b"|")
+    if not separator:
+        return "pipe_missing"
+    return "pipe_nonempty" if payload else "payload_empty"
+
+
 def _invalid_target_payload_structure(raw_line: bytes) -> str:
     _header, separator, payload = raw_line.partition(b"|")
     if not separator:
@@ -403,11 +526,9 @@ def _invalid_target_payload_structure(raw_line: bytes) -> str:
 
 
 def _has_hidden_header(raw_line: bytes) -> bool:
-    unicode_lines = raw_line.decode("latin-1", errors="strict").splitlines()
-    return any(
-        re.match(r"^c\d{8}!\d{4}(?:\s|$)", hidden_line.strip())
-        for hidden_line in unicode_lines[1:]
-    )
+    # Keep diagnostic framing identical to the production preflight and the
+    # shared Latin-1 ``str.splitlines`` journal parser.
+    return probe._contains_non_crlf_line_separator(raw_line)
 
 
 def _classify_target_payload(raw_line: bytes, member_id: str) -> str | None:
@@ -491,6 +612,47 @@ def diagnose_journal_structure(
     pipe_missing_prefix_counts: Counter[str] = Counter(
         {key: 0 for key in PIPE_MISSING_PREFIX_KEYS}
     )
+    system_zero_scope_counts = {
+        framing: {
+            token_scope: Counter({key: 0 for key in CORE_EVENT_SCOPE_KEYS})
+            for token_scope in SYSTEM_ZERO_TOKEN_KEYS
+        }
+        for framing in SYSTEM_ZERO_FRAMING_KEYS
+    }
+    short_fragment_token_counts: Counter[str] = Counter(
+        {key: 0 for key in SHORT_FRAGMENT_TOKEN_KEYS}
+    )
+    short_fragment_length_counts: Counter[str] = Counter(
+        {key: 0 for key in SHORT_FRAGMENT_LENGTH_KEYS}
+    )
+    short_fragment_byteclass_counts: Counter[str] = Counter(
+        {key: 0 for key in SHORT_FRAGMENT_BYTECLASS_KEYS}
+    )
+    short_fragment_character_counts: Counter[str] = Counter(
+        {key: 0 for key in SHORT_FRAGMENT_CHARACTER_KEYS}
+    )
+    short_fragment_marker_counts: Counter[str] = Counter(
+        {key: 0 for key in SHORT_FRAGMENT_MARKER_KEYS}
+    )
+    short_fragment_header_prefix_present_count = 0
+    non_crlf_separator_record_count = 0
+    short_fragment_count = 0
+    other_failure_counts: Counter[str] = Counter(
+        {key: 0 for key in INVALID_FAILURE_KEYS}
+    )
+    other_core_counts: Counter[str] = Counter(
+        {key: 0 for key in CORE_HEADER_KEYS}
+    )
+    other_member_scope_counts: Counter[str] = Counter(
+        {key: 0 for key in INVALID_SCOPE_KEYS}
+    )
+    other_event_scope_counts: Counter[str] = Counter(
+        {key: 0 for key in INVALID_EVENT_SCOPE_KEYS}
+    )
+    other_framing_counts: Counter[str] = Counter(
+        {key: 0 for key in OTHER_FRAMING_KEYS}
+    )
+    other_joint_counts: Counter[tuple[str, str, str, str, str]] = Counter()
     strict_header_rejected_record_count = 0
     focus_other_rejected_header_count = 0
 
@@ -504,6 +666,7 @@ def diagnose_journal_structure(
         if _has_hidden_header(raw_line):
             classifications["hidden_header_separator"] += 1
             ambiguous_scope_record_count += 1
+            non_crlf_separator_record_count += 1
             continue
 
         strict_header = _strict_header_allowing_zero(raw_line)
@@ -536,6 +699,18 @@ def diagnose_journal_structure(
                     focus_strict_scope_counts[framing][core_member_scope][
                         core_event_scope
                     ] += 1
+                    if core_member_number == 0:
+                        zero_framing = (
+                            "payload_empty"
+                            if framing == "payload_empty"
+                            else "pipe_missing_exact_core"
+                        )
+                        zero_token_scope = _system_zero_token_scope(
+                            core_member_token
+                        )
+                        system_zero_scope_counts[zero_framing][
+                            zero_token_scope
+                        ][core_event_scope] += 1
                 if framing == "pipe_missing":
                     pipe_missing_token_bucket_counts[
                         _pipe_missing_token_bucket(header)
@@ -543,8 +718,53 @@ def diagnose_journal_structure(
                     pipe_missing_prefix_counts[
                         _pipe_missing_prefix_scope(header)
                     ] += 1
+                    if (
+                        core_status == "header_token_count_not_11"
+                        and _pipe_missing_token_bucket(header) == "fewer_than_6"
+                        and _pipe_missing_prefix_scope(header)
+                        == "non_journal_prefix"
+                    ):
+                        short_fragment_count += 1
+                        short_fragment_token_counts[
+                            _short_fragment_token_scope(raw_line)
+                        ] += 1
+                        short_fragment_length_counts[
+                            _short_fragment_length_scope(raw_line)
+                        ] += 1
+                        short_fragment_byteclass_counts[
+                            _short_fragment_byteclass(raw_line)
+                        ] += 1
+                        short_fragment_character_counts[
+                            _short_fragment_character_scope(raw_line)
+                        ] += 1
+                        short_fragment_marker_counts[
+                            _short_fragment_marker_scope(raw_line)
+                        ] += 1
+                        if re.search(rb"c\d{8}!\d{4}", raw_line):
+                            short_fragment_header_prefix_present_count += 1
             else:
                 focus_other_rejected_header_count += 1
+                header = raw_line.partition(b"|")[0]
+                other_core_status, _member, _event, _token = (
+                    _classify_core_header(header)
+                )
+                other_member_scope = _invalid_member_scope(raw_line, allowlist)
+                other_event_scope = _invalid_event_scope(raw_line)
+                other_framing_scope = _other_framing_scope(raw_line)
+                other_failure_counts[global_failure] += 1
+                other_core_counts[other_core_status] += 1
+                other_member_scope_counts[other_member_scope] += 1
+                other_event_scope_counts[other_event_scope] += 1
+                other_framing_counts[other_framing_scope] += 1
+                other_joint_counts[
+                    (
+                        global_failure,
+                        other_core_status,
+                        other_member_scope,
+                        other_event_scope,
+                        other_framing_scope,
+                    )
+                ] += 1
             loose_member = _loose_member_number(raw_line)
             include_invalid_detail = False
             if loose_member is not None and loose_member > 0:
@@ -601,6 +821,15 @@ def diagnose_journal_structure(
             if zero_event_scope not in STRICT_ZERO_EVENT_KEYS:
                 raise ValueError("strict zero header produced invalid event scope")
             strict_zero_event_counts[zero_event_scope] += 1
+            core_status, _member, _event, raw_member_token = (
+                _classify_core_header(raw_line.partition(b"|")[0])
+            )
+            if core_status != "strict_valid" or raw_member_token is None:
+                raise ValueError("strict zero row did not retain strict core")
+            zero_token_scope = _system_zero_token_scope(raw_member_token)
+            system_zero_scope_counts["pipe_nonempty"][zero_token_scope][
+                zero_event_scope
+            ] += 1
             continue
         member_id = str(member_number)
         if member_id not in allowlist:
@@ -719,6 +948,262 @@ def diagnose_journal_structure(
         and sum(pipe_missing_prefix_counts.values())
         == focus_framing_record_counts["pipe_missing"]
     )
+    system_zero_scope_counts_output = {
+        framing: {
+            token_scope: {
+                event_scope: int(
+                    system_zero_scope_counts[framing][token_scope][event_scope]
+                )
+                for event_scope in CORE_EVENT_SCOPE_KEYS
+            }
+            for token_scope in SYSTEM_ZERO_TOKEN_KEYS
+        }
+        for framing in SYSTEM_ZERO_FRAMING_KEYS
+    }
+    system_zero_matrix_total = sum(
+        sum(sum(event_counts.values()) for event_counts in token_counts.values())
+        for token_counts in system_zero_scope_counts.values()
+    )
+    focused_zero_total = sum(
+        sum(
+            focus_strict_scope_counts[framing][member_scope].values()
+        )
+        for framing in FOCUS_FRAMING_KEYS
+        for member_scope in ("zero_canonical", "zero_noncanonical")
+    )
+    system_zero_observed_total = strict_zero_record_count + focused_zero_total
+    proposed_system_skip_pipe_nonempty = system_zero_scope_counts[
+        "pipe_nonempty"
+    ]["canonical_zero"]["nonmembership"]
+    proposed_system_skip_header_only = system_zero_scope_counts[
+        "pipe_missing_exact_core"
+    ]["canonical_zero"]["nonmembership"]
+    proposed_system_skip_total = (
+        proposed_system_skip_pipe_nonempty
+        + proposed_system_skip_header_only
+    )
+    forbidden_system_zero_total = (
+        system_zero_matrix_total - proposed_system_skip_total
+    )
+    system_zero_policy_caps_ok = (
+        proposed_system_skip_pipe_nonempty <= SYSTEM_ZERO_PIPE_NONEMPTY_CAP
+        and proposed_system_skip_header_only <= SYSTEM_ZERO_HEADER_ONLY_CAP
+    )
+    short_fragment_token_counts_output = {
+        key: int(short_fragment_token_counts[key])
+        for key in SHORT_FRAGMENT_TOKEN_KEYS
+    }
+    short_fragment_length_counts_output = {
+        key: int(short_fragment_length_counts[key])
+        for key in SHORT_FRAGMENT_LENGTH_KEYS
+    }
+    short_fragment_byteclass_counts_output = {
+        key: int(short_fragment_byteclass_counts[key])
+        for key in SHORT_FRAGMENT_BYTECLASS_KEYS
+    }
+    short_fragment_character_counts_output = {
+        key: int(short_fragment_character_counts[key])
+        for key in SHORT_FRAGMENT_CHARACTER_KEYS
+    }
+    short_fragment_marker_counts_output = {
+        key: int(short_fragment_marker_counts[key])
+        for key in SHORT_FRAGMENT_MARKER_KEYS
+    }
+    short_fragment_axes_reconcile = all(
+        sum(counts.values()) == short_fragment_count
+        for counts in (
+            short_fragment_token_counts,
+            short_fragment_length_counts,
+            short_fragment_byteclass_counts,
+            short_fragment_character_counts,
+            short_fragment_marker_counts,
+        )
+    )
+    other_failure_counts_output = {
+        key: int(other_failure_counts[key]) for key in INVALID_FAILURE_KEYS
+    }
+    other_core_counts_output = {
+        key: int(other_core_counts[key]) for key in CORE_HEADER_KEYS
+    }
+    other_member_scope_counts_output = {
+        key: int(other_member_scope_counts[key]) for key in INVALID_SCOPE_KEYS
+    }
+    other_event_scope_counts_output = {
+        key: int(other_event_scope_counts[key])
+        for key in INVALID_EVENT_SCOPE_KEYS
+    }
+    other_framing_counts_output = {
+        key: int(other_framing_counts[key]) for key in OTHER_FRAMING_KEYS
+    }
+    other_joint_counts_output = [
+        {
+            "failure": failure,
+            "core": core,
+            "member_scope": member_scope,
+            "event_scope": event_scope,
+            "framing": framing,
+            "count": int(count),
+        }
+        for (
+            failure,
+            core,
+            member_scope,
+            event_scope,
+            framing,
+        ), count in sorted(other_joint_counts.items())
+    ]
+    other_joint_total = sum(other_joint_counts.values())
+    joint_failure_counts: Counter[str] = Counter()
+    joint_core_counts: Counter[str] = Counter()
+    joint_member_counts: Counter[str] = Counter()
+    joint_event_counts: Counter[str] = Counter()
+    joint_framing_counts: Counter[str] = Counter()
+    for joint_key, count in other_joint_counts.items():
+        failure, core, member_scope, event_scope, framing = joint_key
+        joint_failure_counts[failure] += count
+        joint_core_counts[core] += count
+        joint_member_counts[member_scope] += count
+        joint_event_counts[event_scope] += count
+        joint_framing_counts[framing] += count
+    other_joint_marginals_match = (
+        all(
+            joint_failure_counts[key] == other_failure_counts[key]
+            for key in INVALID_FAILURE_KEYS
+        )
+        and all(
+            joint_core_counts[key] == other_core_counts[key]
+            for key in CORE_HEADER_KEYS
+        )
+        and all(
+            joint_member_counts[key] == other_member_scope_counts[key]
+            for key in INVALID_SCOPE_KEYS
+        )
+        and all(
+            joint_event_counts[key] == other_event_scope_counts[key]
+            for key in INVALID_EVENT_SCOPE_KEYS
+        )
+        and all(
+            joint_framing_counts[key] == other_framing_counts[key]
+            for key in OTHER_FRAMING_KEYS
+        )
+    )
+    other_axes_reconcile = all(
+        sum(counts.values()) == focus_other_rejected_header_count
+        for counts in (
+            other_failure_counts,
+            other_core_counts,
+            other_member_scope_counts,
+            other_event_scope_counts,
+            other_framing_counts,
+        )
+    ) and (
+        other_joint_total == focus_other_rejected_header_count
+        and other_joint_marginals_match
+    )
+    focus_non_strict_core_total = sum(
+        count
+        for framing_counts in focus_core_counts.values()
+        for key, count in framing_counts.items()
+        if key != "strict_valid"
+    )
+    focus_non_short_remainder_count = (
+        focus_non_strict_core_total - short_fragment_count
+    )
+    remainder_record_count = (
+        short_fragment_count
+        + focus_non_short_remainder_count
+        + focus_other_rejected_header_count
+    )
+    remainder_accounting_complete = (
+        focus_non_short_remainder_count >= 0
+        and remainder_record_count
+        == focus_non_strict_core_total + focus_other_rejected_header_count
+        and short_fragment_axes_reconcile
+        and other_axes_reconcile
+    )
+    existing_empty_allowlisted_nonmembership_count = (
+        focus_strict_scope_counts["payload_empty"]["allowlisted"][
+            "nonmembership"
+        ]
+    )
+    existing_empty_nonallowlisted_nonmembership_count = (
+        focus_strict_scope_counts["payload_empty"][
+            "positive_nonallowlisted"
+        ]["nonmembership"]
+    )
+    existing_empty_nonmembership_exception_count = (
+        existing_empty_allowlisted_nonmembership_count
+        + existing_empty_nonallowlisted_nonmembership_count
+    )
+    zero_policy_prerequisites_ok = (
+        system_zero_matrix_total == system_zero_observed_total
+        and system_zero_policy_caps_ok
+    )
+    effective_system_zero_skip_count = (
+        proposed_system_skip_total if zero_policy_prerequisites_ok else 0
+    )
+    empty_exception_prerequisites_ok = focus_accounting_complete
+    effective_empty_allowlisted_exception_count = (
+        existing_empty_allowlisted_nonmembership_count
+        if empty_exception_prerequisites_ok
+        else 0
+    )
+    simulated_target_issue_count = (
+        target_parse_failure_count
+        - effective_empty_allowlisted_exception_count
+    )
+    simulated_ambiguous_issue_count = (
+        ambiguous_scope_record_count - effective_system_zero_skip_count
+    )
+    simulated_total_unresolved_issue_count = (
+        simulated_target_issue_count + simulated_ambiguous_issue_count
+    )
+    policy_simulation_accounting_complete = (
+        zero_policy_prerequisites_ok
+        and empty_exception_prerequisites_ok
+        and effective_empty_allowlisted_exception_count
+        <= target_parse_failure_count
+        and effective_system_zero_skip_count <= ambiguous_scope_record_count
+        and simulated_target_issue_count >= 0
+        and simulated_ambiguous_issue_count >= 0
+        and remainder_accounting_complete
+    )
+    post_policy_simulation = {
+        "existing_empty_nonmembership_exception_count": (
+            existing_empty_nonmembership_exception_count
+        ),
+        "existing_empty_allowlisted_nonmembership_exception_count": (
+            existing_empty_allowlisted_nonmembership_count
+        ),
+        "existing_empty_nonallowlisted_nonmembership_exception_count": (
+            existing_empty_nonallowlisted_nonmembership_count
+        ),
+        "proposed_system_zero_skip_count": proposed_system_skip_total,
+        "effective_system_zero_skip_count": effective_system_zero_skip_count,
+        "zero_policy_prerequisites_ok": zero_policy_prerequisites_ok,
+        "effective_empty_allowlisted_nonmembership_exception_count": (
+            effective_empty_allowlisted_exception_count
+        ),
+        "empty_exception_prerequisites_ok": (
+            empty_exception_prerequisites_ok
+        ),
+        "target_membership_event_count": target_parse_success_count,
+        "target_issue_count": simulated_target_issue_count,
+        "ambiguous_issue_count": simulated_ambiguous_issue_count,
+        "total_unresolved_issue_count": simulated_total_unresolved_issue_count,
+        "short_fragment_blocker_count": short_fragment_count,
+        "non_crlf_separator_blocker_count": non_crlf_separator_record_count,
+        "target_scope_clear": (
+            policy_simulation_accounting_complete
+            and simulated_target_issue_count == 0
+        ),
+        "global_scope_clear": (
+            policy_simulation_accounting_complete
+            and simulated_total_unresolved_issue_count == 0
+        ),
+        "accounting_complete": policy_simulation_accounting_complete,
+        "authorizes_invoice_processing": False,
+    }
     safe_summary = {
         "confirmed_target_header_count": confirmed_target_header_count,
         "target_membership_candidate_count": target_membership_candidate_count,
@@ -733,6 +1218,21 @@ def diagnose_journal_structure(
         "strict_zero_counts_sum_matches_total": (
             sum(strict_zero_event_counts.values()) == strict_zero_record_count
         ),
+        "system_zero_scope_counts": system_zero_scope_counts_output,
+        "system_zero_matrix_total": system_zero_matrix_total,
+        "system_zero_observed_total": system_zero_observed_total,
+        "system_zero_matrix_matches_observed_total": (
+            system_zero_matrix_total == system_zero_observed_total
+        ),
+        "proposed_system_skip_pipe_nonempty_count": (
+            proposed_system_skip_pipe_nonempty
+        ),
+        "proposed_system_skip_header_only_count": (
+            proposed_system_skip_header_only
+        ),
+        "proposed_system_skip_total": proposed_system_skip_total,
+        "forbidden_system_zero_total": forbidden_system_zero_total,
+        "system_zero_policy_caps_ok": system_zero_policy_caps_ok,
         "invalid_header_record_count": invalid_header_record_count,
         "target_invalid_header_record_count": target_invalid_header_record_count,
         "ambiguous_invalid_header_record_count": (
@@ -770,6 +1270,40 @@ def diagnose_journal_structure(
             sum(pipe_missing_prefix_counts.values())
             == focus_framing_record_counts["pipe_missing"]
         ),
+        "short_fragment_count": short_fragment_count,
+        "short_fragment_token_counts": short_fragment_token_counts_output,
+        "short_fragment_length_counts": short_fragment_length_counts_output,
+        "short_fragment_byteclass_counts": (
+            short_fragment_byteclass_counts_output
+        ),
+        "short_fragment_character_counts": (
+            short_fragment_character_counts_output
+        ),
+        "short_fragment_marker_counts": short_fragment_marker_counts_output,
+        "short_fragment_header_prefix_present_count": (
+            short_fragment_header_prefix_present_count
+        ),
+        "non_crlf_separator_record_count": non_crlf_separator_record_count,
+        "short_fragment_axes_reconcile": short_fragment_axes_reconcile,
+        "short_fragments_authorized_to_skip": False,
+        "other_rejected_failure_counts": other_failure_counts_output,
+        "other_rejected_core_counts": other_core_counts_output,
+        "other_rejected_member_scope_counts": (
+            other_member_scope_counts_output
+        ),
+        "other_rejected_event_scope_counts": other_event_scope_counts_output,
+        "other_rejected_framing_counts": other_framing_counts_output,
+        "other_rejected_joint_counts": other_joint_counts_output,
+        "other_rejected_joint_total": other_joint_total,
+        "other_rejected_joint_marginals_match": (
+            other_joint_marginals_match
+        ),
+        "other_rejected_axes_reconcile": other_axes_reconcile,
+        "focus_non_strict_core_total": focus_non_strict_core_total,
+        "focus_non_short_remainder_count": focus_non_short_remainder_count,
+        "remainder_record_count": remainder_record_count,
+        "remainder_accounting_complete": remainder_accounting_complete,
+        "post_policy_simulation": post_policy_simulation,
         "focus_counts_plus_other_match_rejected_total": (
             focus_framing_total + focus_other_rejected_header_count
             == strict_header_rejected_record_count
@@ -806,6 +1340,10 @@ def diagnose_journal_structure(
             == invalid_allowlisted_membership_event_count
             and residual_unclassified_count == 0
             and focus_accounting_complete
+            and system_zero_matrix_total == system_zero_observed_total
+            and system_zero_policy_caps_ok
+            and remainder_accounting_complete
+            and policy_simulation_accounting_complete
         ),
     }
     return {
