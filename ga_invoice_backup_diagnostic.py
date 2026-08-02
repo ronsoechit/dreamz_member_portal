@@ -1,0 +1,368 @@
+from __future__ import annotations
+
+import sys
+
+# Set this before importing any source-backed module.  The package runner also
+# uses ``python -B``, but the module is independently file-write-free.
+sys.dont_write_bytecode = True
+
+import argparse
+from collections import Counter
+from datetime import datetime
+from hashlib import sha256
+import json
+from pathlib import Path
+import re
+from typing import Sequence
+
+import ga_invoice_backup_probe as probe
+from ga_journal import VOIDED_EVENT_MASK, parse_membership_journal_line
+
+
+DIAGNOSTIC_SCHEMA = "dreamz.ga.invoice-backup-parse-diagnostic.v1"
+CLASSIFICATION_KEYS = (
+    "record_over_limit",
+    "hidden_header_separator",
+    "target_header_invalid",
+    "target_payload_field_count",
+    "target_payload_non_decimal",
+    "target_period_invalid",
+    "target_component_reconciliation_failed",
+    "target_parser_unexpected_none",
+    "ambiguous_member_zero",
+    "ambiguous_member_missing_or_invalid",
+    "ambiguous_header_invalid",
+)
+
+
+class _SafeArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:  # pragma: no cover - text is private
+        raise probe.ProbeBlocked("invalid_arguments")
+
+    def exit(self, status: int = 0, message: str | None = None) -> None:
+        raise probe.ProbeBlocked("invalid_arguments")
+
+
+def _canonical_json_sha256(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+    return sha256(encoded).hexdigest()
+
+
+def _strict_header_allowing_zero(line: bytes) -> tuple[int, int] | None:
+    """Validate the production header grammar while permitting member zero."""
+    match = probe._JOURNAL_HEADER_RE.fullmatch(line)
+    if not match:
+        return None
+    header, _payload = line.split(b"|", 1)
+    tokens = header.split()
+    if len(tokens) != 11 or any(not token for token in tokens):
+        return None
+    try:
+        datetime.strptime(tokens[0].decode("ascii"), "c%Y%m%d!%H%M")
+        sequence = int(tokens[1], 16)
+        numeric_fields = [int(token, 10) for token in tokens[2:]]
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if sequence < 0 or sequence > 0xFFFFFFFF:
+        return None
+    if any(value < 0 or value > 0xFFFFFFFF for value in numeric_fields):
+        return None
+    member_number = numeric_fields[3]
+    raw_event_type = numeric_fields[4]
+    if raw_event_type > 0xFFFF:
+        return None
+    return member_number, raw_event_type
+
+
+def _loose_member_number(line: bytes) -> int | None:
+    header = line.split(b"|", 1)[0]
+    tokens = header.split()
+    if len(tokens) != 11 or not tokens[5].isascii() or not tokens[5].isdigit():
+        return None
+    try:
+        member_number = int(tokens[5], 10)
+    except ValueError:
+        return None
+    if member_number < 0 or member_number > 0xFFFFFFFF:
+        return None
+    return member_number
+
+
+def _has_hidden_header(raw_line: bytes) -> bool:
+    unicode_lines = raw_line.decode("latin-1", errors="strict").splitlines()
+    return any(
+        re.match(r"^c\d{8}!\d{4}(?:\s|$)", hidden_line.strip())
+        for hidden_line in unicode_lines[1:]
+    )
+
+
+def _classify_target_payload(raw_line: bytes, member_id: str) -> str | None:
+    decoded = raw_line.decode("latin-1", errors="strict")
+    normalized = decoded.strip()
+    if "|" not in normalized:
+        return "target_parser_unexpected_none"
+    _header, payload = normalized.split("|", 1)
+    payload_parts = payload.split()
+    if len(payload_parts) != 11:
+        return "target_payload_field_count"
+    try:
+        values = [int(value) for value in payload_parts]
+    except ValueError:
+        return "target_payload_non_decimal"
+    try:
+        datetime.strptime(str(values[2]), "%Y%m%d")
+        datetime.strptime(str(values[3]), "%Y%m%d")
+    except ValueError:
+        return "target_period_invalid"
+    if values[7] != values[4] + values[5] + values[6] + values[10]:
+        return "target_component_reconciliation_failed"
+    try:
+        event = parse_membership_journal_line(decoded)
+    except (TypeError, UnicodeDecodeError, ValueError):
+        return "target_parser_unexpected_none"
+    if event is None or event.member_id != member_id:
+        return "target_parser_unexpected_none"
+    return None
+
+
+def diagnose_journal_structure(
+    journal_bytes: bytes,
+    allowlist: frozenset[str],
+) -> dict:
+    """Return only bounded aggregate structural facts; never retain source rows."""
+    classifications: Counter[str] = Counter({key: 0 for key in CLASSIFICATION_KEYS})
+    confirmed_target_header_count = 0
+    target_membership_candidate_count = 0
+    target_parse_success_count = 0
+    target_parse_failure_count = 0
+    ambiguous_scope_record_count = 0
+
+    for _record_number, raw_line in probe._iter_cr_lf_lines(journal_bytes):
+        if len(raw_line) > probe.MAX_JOURNAL_RECORD_BYTES:
+            classifications["record_over_limit"] += 1
+            ambiguous_scope_record_count += 1
+            continue
+        if not raw_line.strip(b" \t"):
+            continue
+        if _has_hidden_header(raw_line):
+            classifications["hidden_header_separator"] += 1
+            ambiguous_scope_record_count += 1
+            continue
+
+        strict_header = _strict_header_allowing_zero(raw_line)
+        if strict_header is None:
+            loose_member = _loose_member_number(raw_line)
+            if loose_member is not None and loose_member > 0:
+                if str(loose_member) in allowlist:
+                    classifications["target_header_invalid"] += 1
+                    target_parse_failure_count += 1
+                continue
+            if loose_member is None:
+                header_tokens = raw_line.split(b"|", 1)[0].split()
+                key = (
+                    "ambiguous_member_missing_or_invalid"
+                    if len(header_tokens) == 11
+                    else "ambiguous_header_invalid"
+                )
+            else:
+                # A zero member on an otherwise invalid row is not enough to
+                # prove a legitimate global/system record.
+                key = "ambiguous_header_invalid"
+            classifications[key] += 1
+            ambiguous_scope_record_count += 1
+            continue
+
+        member_number, raw_event_type = strict_header
+        if member_number == 0:
+            classifications["ambiguous_member_zero"] += 1
+            ambiguous_scope_record_count += 1
+            continue
+        member_id = str(member_number)
+        if member_id not in allowlist:
+            continue
+        confirmed_target_header_count += 1
+        event_type = raw_event_type & ~VOIDED_EVENT_MASK
+        if event_type not in {1, 3}:
+            continue
+        target_membership_candidate_count += 1
+        failure = _classify_target_payload(raw_line, member_id)
+        if failure is None:
+            target_parse_success_count += 1
+        else:
+            classifications[failure] += 1
+            target_parse_failure_count += 1
+
+    safe_summary = {
+        "confirmed_target_header_count": confirmed_target_header_count,
+        "target_membership_candidate_count": target_membership_candidate_count,
+        "target_parse_success_count": target_parse_success_count,
+        "target_parse_failure_count": target_parse_failure_count,
+        "ambiguous_scope_record_count": ambiguous_scope_record_count,
+        "classification_counts": {
+            key: int(classifications[key]) for key in CLASSIFICATION_KEYS
+        },
+    }
+    return {
+        **safe_summary,
+        "structural_summary_sha256": _canonical_json_sha256(safe_summary),
+    }
+
+
+def _empty_result() -> dict:
+    return {
+        "schema": DIAGNOSTIC_SCHEMA,
+        "mode": "read_only",
+        "status": "blocked",
+        # ``completed`` means the structural scan finished.  This deliberately
+        # remains false because diagnostics never authorize invoice processing.
+        "diagnostic_conclusive": False,
+        "authorizes_invoice_processing": False,
+        "reason_codes": [],
+        "source": None,
+        "allowlist": None,
+        "analysis": None,
+        "privacy": {
+            "raw_rows_returned": False,
+            "member_ids_returned": False,
+            "names_returned": False,
+            "emails_returned": False,
+            "phones_returned": False,
+            "addresses_returned": False,
+            "bank_data_returned": False,
+            "payment_values_returned": False,
+            "dates_returned": False,
+            "transaction_ids_returned": False,
+            "paths_returned": False,
+            "per_record_hashes_returned": False,
+            "files_written": False,
+            "network_used": False,
+        },
+    }
+
+
+def diagnose_invoice_backup(
+    backup_path: Path,
+    *,
+    expected_length: int,
+    expected_sha256: str,
+    allowlist_path: Path,
+    expected_allowlist_count: int,
+    expected_allowlist_set_sha256: str,
+) -> dict:
+    result = _empty_result()
+    try:
+        if (
+            not probe._lexically_local_absolute_windows_path(backup_path)
+            or not probe._lexically_local_absolute_windows_path(allowlist_path)
+        ):
+            raise probe.ProbeBlocked("backup_path_invalid")
+        expected_source_hash = str(expected_sha256 or "").strip().casefold()
+        expected_allowlist_hash = str(
+            expected_allowlist_set_sha256 or ""
+        ).strip().casefold()
+        if (
+            not isinstance(expected_length, int)
+            or isinstance(expected_length, bool)
+            or expected_length < 1
+            or expected_length > probe.MAX_ARCHIVE_BYTES
+            or not re.fullmatch(r"[0-9a-f]{64}", expected_source_hash)
+            or not re.fullmatch(r"[0-9a-f]{64}", expected_allowlist_hash)
+            or not isinstance(expected_allowlist_count, int)
+            or isinstance(expected_allowlist_count, bool)
+            or expected_allowlist_count < 1
+            or expected_allowlist_count > 100
+        ):
+            raise probe.ProbeBlocked("invalid_arguments")
+
+        allowlist_read = probe._read_stable_file_twice(
+            Path(allowlist_path), maximum_bytes=probe.MAX_ALLOWLIST_BYTES
+        )
+        allowlist, allowlist_hash = probe._canonical_allowlist(allowlist_read.data)
+        if (
+            len(allowlist) != expected_allowlist_count
+            or allowlist_hash != expected_allowlist_hash
+        ):
+            raise probe.ProbeBlocked("allowlist_binding_mismatch")
+        result["allowlist"] = {
+            "count": len(allowlist),
+            "set_sha256": allowlist_hash,
+        }
+
+        stable = probe._read_stable_file_twice(
+            Path(backup_path),
+            maximum_bytes=probe.MAX_ARCHIVE_BYTES,
+            expected_length=expected_length,
+        )
+        if stable.source_sha256 != expected_source_hash:
+            raise probe.ProbeBlocked("source_hash_mismatch")
+        snapshot = probe._inspect_archive(stable.data)
+        result["source"] = {
+            "kind": probe.SOURCE_KIND,
+            "byte_length": stable.byte_length,
+            "source_sha256": stable.source_sha256,
+            "file_identity_sha256": stable.file_identity_sha256,
+            "stable_read_count": stable.stable_read_count,
+            "journal_byte_length": len(snapshot.journal_bytes),
+            "journal_sha256": sha256(snapshot.journal_bytes).hexdigest(),
+            "crc_verified": True,
+        }
+        result["analysis"] = diagnose_journal_structure(
+            snapshot.journal_bytes, allowlist
+        )
+        result["status"] = "completed"
+        return result
+    except probe.ProbeBlocked as exc:
+        result["reason_codes"] = [exc.reason_code]
+        return result
+    except Exception:
+        result["reason_codes"] = ["probe_internal_error"]
+        return result
+
+
+def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
+    parser = _SafeArgumentParser(add_help=False)
+    parser.add_argument("--backup-path", required=True, type=Path)
+    parser.add_argument("--expected-length", required=True, type=int)
+    parser.add_argument("--expected-sha256", required=True)
+    parser.add_argument("--allowlist-path", required=True, type=Path)
+    parser.add_argument("--expected-allowlist-count", required=True, type=int)
+    parser.add_argument("--expected-allowlist-set-sha256", required=True)
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    try:
+        args = _parse_args(argv)
+        result = diagnose_invoice_backup(
+            args.backup_path,
+            expected_length=args.expected_length,
+            expected_sha256=args.expected_sha256,
+            allowlist_path=args.allowlist_path,
+            expected_allowlist_count=args.expected_allowlist_count,
+            expected_allowlist_set_sha256=args.expected_allowlist_set_sha256,
+        )
+    except Exception as exc:
+        result = _empty_result()
+        result["reason_codes"] = [
+            exc.reason_code
+            if isinstance(exc, probe.ProbeBlocked)
+            else "probe_internal_error"
+        ]
+    print(
+        json.dumps(
+            result,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
+    return 0 if result["status"] == "completed" else 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
