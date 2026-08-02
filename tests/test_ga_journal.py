@@ -200,6 +200,24 @@ MONTH_ADDON=9001,0,8500|Group PT
         self.assertEqual(addons[0].name, "Group PT")
         self.assertEqual(addons[0].amount_cents, 8500)
 
+    def test_plan_name_storage_is_shared_across_catalog_options(self):
+        plan_name = "X" * 4096
+        text = "\n".join(
+            [
+                f"CLASS= {plan_name}",
+                "MEMBERTYPE_ID=900000201",
+                *("OPTION=1 MONTHS INV 5500 1" for _ in range(1000)),
+                "-",
+            ]
+        )
+
+        options, addons = parse_gymassistant_billing_catalog_text(text)
+
+        self.assertEqual(addons, [])
+        self.assertEqual(len(options), 1000)
+        self.assertEqual(options[0].plan_name, plan_name)
+        self.assertEqual(len({id(option.plan_name) for option in options}), 1)
+
     def test_reads_billing_catalog_from_gymassistant_backup(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "GABackup.gbu"

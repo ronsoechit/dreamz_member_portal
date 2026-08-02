@@ -372,6 +372,10 @@ def parse_gymassistant_billing_catalog_text(
             membership_type_id = int(fields["MEMBERTYPE_ID"])
         except ValueError:
             return
+        # Strip once and share the immutable string across all options for the
+        # plan. Repeating ``strip()`` inside the loop can retain one large copy
+        # per option when the source CLASS value has surrounding whitespace.
+        plan_name = fields["CLASS"].strip()
         for option in options:
             parts = option.split()
             if len(parts) != 5:
@@ -386,7 +390,7 @@ def parse_gymassistant_billing_catalog_text(
             plan_options.append(
                 GymAssistantPlanOption(
                     membership_type_id=membership_type_id,
-                    plan_name=fields["CLASS"].strip(),
+                    plan_name=plan_name,
                     billing_option_code=option_code,
                     interval_count=interval_count,
                     interval_unit=parts[1].upper(),
