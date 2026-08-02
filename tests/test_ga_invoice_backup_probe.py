@@ -761,6 +761,85 @@ class InvoiceBackupProbeTests(unittest.TestCase):
             result["reason_codes"], ["catalog_resource_limit_exceeded"]
         )
 
+    def test_catalog_record_bound_accepts_confirmed_official_backup_scale(self):
+        record_count = 393_248
+        total_chars = 3_450_357
+        option_line = "OPTION=1 MONTHS INV 0 0"
+        option_count = 72
+        longest_line = "x" * 181
+        remaining_records = record_count - option_count - 1
+        remaining_line_chars = (
+            total_chars
+            - (record_count - 1)
+            - (len(option_line) * option_count)
+            - len(longest_line)
+        )
+        short_length, longer_count = divmod(
+            remaining_line_chars,
+            remaining_records,
+        )
+        short_count = remaining_records - longer_count
+        catalog = "".join(
+            (
+                (option_line + "\n") * option_count,
+                longest_line + "\n",
+                (("x" * (short_length + 1)) + "\n") * longer_count,
+                (("x" * short_length) + "\n") * (short_count - 1),
+                "x" * short_length,
+            )
+        )
+
+        self.assertEqual(len(catalog), total_chars)
+        self.assertEqual(len(catalog.splitlines()), record_count)
+        self.assertEqual(max(map(len, catalog.splitlines())), 181)
+        self.assertEqual(
+            sum(line.startswith("OPTION=") for line in catalog.splitlines()),
+            option_count,
+        )
+
+        probe._validate_catalog_resource_bounds(catalog)
+
+    def test_catalog_record_bound_is_exact(self):
+        at_limit = ("x\n" * (probe.MAX_CATALOG_RECORDS - 1)) + "x"
+
+        probe._validate_catalog_resource_bounds(at_limit)
+        with self.assertRaises(probe.ProbeBlocked) as blocked:
+            probe._validate_catalog_resource_bounds(at_limit + "\nx")
+
+        self.assertEqual(
+            blocked.exception.reason_code,
+            "catalog_resource_limit_exceeded",
+        )
+
+    def test_catalog_line_and_option_row_bounds_are_exact(self):
+        probe._validate_catalog_resource_bounds("x" * probe.MAX_CATALOG_LINE_CHARS)
+        with self.assertRaises(probe.ProbeBlocked):
+            probe._validate_catalog_resource_bounds(
+                "x" * (probe.MAX_CATALOG_LINE_CHARS + 1)
+            )
+
+        at_option_limit = "\n".join(
+            ["OPTION=1 MONTHS INV 0 0"]
+            * probe.MAX_CATALOG_OPTION_OR_ADDON_ROWS
+        )
+        probe._validate_catalog_resource_bounds(at_option_limit)
+        with self.assertRaises(probe.ProbeBlocked):
+            probe._validate_catalog_resource_bounds(
+                at_option_limit + "\nMONTH_ADDON=1,0,0|test"
+            )
+
+    def test_catalog_line_iterator_matches_python_splitlines(self):
+        separators = ("\r\n", "\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85")
+        cases = ["", "single", "single\n", "\n", "a\n\nb"]
+        cases.extend(f"a{separator}b{separator}" for separator in separators)
+
+        for value in cases:
+            with self.subTest(value=value.encode("latin-1").hex()):
+                self.assertEqual(
+                    list(probe._iter_catalog_lines(value)),
+                    value.splitlines(),
+                )
+
     def test_catalog_line_length_is_bounded_before_option_splitting(self):
         write_backup(self.backup, catalog=CATALOG)
 
