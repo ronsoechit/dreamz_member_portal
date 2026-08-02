@@ -7876,6 +7876,7 @@ INVOICE_EVENT_BATCH_MAX_BODY_BYTES = 4_000_000
 INVOICE_EVENT_BATCH_MAX_EVENTS = 20_000
 INVOICE_EVENT_BATCH_MAX_SHORT_FRAGMENTS = 8
 INVOICE_EVENT_BATCH_LOCK_NAMESPACE = "dreamz-ga-invoice-event-batches-v1"
+DATABASE_SIGNED_INT32_MAX = 2_147_483_647
 INVOICE_EVENT_BATCH_REQUEST_FIELDS = frozenset({
     "schema",
     "batch_id",
@@ -8211,6 +8212,7 @@ def normalize_invoice_membership_event(raw_event, *, allowed_member_ids=None):
             raw_event.get("journal_transaction_id"),
             "journal_transaction_id",
             minimum=1,
+            maximum=DATABASE_SIGNED_INT32_MAX,
             optional=True,
         ),
         "membership_type_id": parse_invoice_sync_int(
@@ -8264,7 +8266,7 @@ def normalize_invoice_membership_event(raw_event, *, allowed_member_ids=None):
             raw_event.get("remittance_reference"),
             "remittance_reference",
             minimum=-10_000_000,
-            maximum=10_000_000,
+            maximum=DATABASE_SIGNED_INT32_MAX,
             optional=True,
         ),
         "balance_payment_cents": parse_invoice_sync_int(

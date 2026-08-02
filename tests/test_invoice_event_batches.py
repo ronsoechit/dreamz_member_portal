@@ -230,6 +230,52 @@ class InvoiceEventBatchApiTests(unittest.TestCase):
             self.assertEqual(state.last_sync_run_id, sync_run.id)
             self.assertNotIn("source_sync_not_successful", invoice_event_freshness_issues(source_event))
 
+    def test_accepts_large_gym_assistant_reference_identifiers(self):
+        references = (10_000_001, 2_147_483_647)
+        events = [
+            self.event(
+                member_id,
+                journal_transaction_id=references[index],
+                remittance_reference=references[index],
+            )
+            for index, member_id in enumerate(COHORT)
+        ]
+        payload = self.payload(events=events)
+
+        response = self.post(payload)
+
+        self.assertEqual(response.status_code, 201, response.get_data(as_text=True))
+        stored = GymAssistantJournalEvent.query.order_by(
+            GymAssistantJournalEvent.member_id.asc()
+        ).all()
+        self.assertEqual(
+            [event.remittance_reference for event in stored],
+            list(references),
+        )
+        self.assertEqual(
+            [event.journal_transaction_id for event in stored],
+            list(references),
+        )
+
+    def test_rejects_reference_identifiers_above_database_integer_range(self):
+        for field_name in ("journal_transaction_id", "remittance_reference"):
+            with self.subTest(field_name=field_name):
+                events = [self.event(member_id) for member_id in COHORT]
+                events[0][field_name] = 2_147_483_648
+                payload = self.payload(
+                    batch_id=f"invoice-batch-{field_name}",
+                    events=events,
+                )
+
+                response = self.post(payload)
+
+                self.assertEqual(response.status_code, 422)
+                self.assertEqual(response.json["code"], "invalid_event")
+                self.assertEqual(GymAssistantInvoiceEventBatch.query.count(), 0)
+                self.assertEqual(GymAssistantJournalEvent.query.count(), 0)
+                self.assertEqual(GymAssistantInvoiceSyncState.query.count(), 0)
+                self.assertEqual(SyncRun.query.count(), 0)
+
     def test_exact_duplicate_returns_receipt_without_writes(self):
         payload = self.payload()
         first = self.post(payload)
