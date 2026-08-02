@@ -246,6 +246,12 @@ amount, ProShop purchases, drinks, account payments, or free-text product
 descriptions as an invoice amount. PT and Group PT remain blocked until they
 have their own structured and price-verified source.
 
+The historical 14-member import and invoice issuing are separate gates. The
+first import uses the dedicated, atomic
+`/api/sync/invoice-event-batches` endpoint. It must not use
+`/api/sync/members`, because that endpoint also synchronizes member/document
+data and reconciles portal invitations.
+
 Use this controlled rollout:
 
 1. Back up the production Postgres database. The first request after deployment
@@ -259,27 +265,36 @@ Use this controlled rollout:
 4. Verify the admin-only `/staff/invoices` page. Confirm private S3/R2 storage
    is configured; Railway-local storage is not durable and must not be used for
    issued PDFs.
-5. Set `INVOICE_GA_PILOT_ENABLED=true` and configure exactly one controlled
-   member in `INVOICE_GA_PILOT_MEMBER_IDS=<pilot-member-id>` on the portal.
-   Configure the same value for the frontdesk sync-agent task. Do not add other
-   members during the first pilot. Point the agent at the actual backup
-   directory with `GYM_ASSISTANT_BACKUP_ROOT=<backup-directory>` or pass
-   `--backup-root "<backup-directory>"`. The agent uses the newest `.gbu`
-   containing both `Members.btx` and `Journal.jtx`. Create a fresh `.gbu`
-   after the controlled payment; the portal checks the actual snapshot
-   timestamp and hashes and blocks snapshots with relevant parse errors.
-6. Keep `INVOICE_ISSUING_ENABLED=false`, run a fresh frontdesk sync, and verify
-   the member, membership amount, and service period against Gym Assistant.
-   Any open account balance must not appear as an invoice line.
-7. Use **Check membership events** to prepare the draft. A draft does not get
+5. Set `INVOICE_GA_PILOT_ENABLED=true` and configure the exact private
+   14-member cohort in `INVOICE_GA_PILOT_MEMBER_IDS` on the portal. Keep the
+   private allowlist outside Git and deployment packages intended for broad
+   sharing. Do not union this bootstrap cohort with monitor IDs.
+6. Run `invoice_event_batch.py` only through a reviewed exact release package.
+   Bind the first run to the already approved backup length/SHA-256, exact
+   allowlist count/hash, exact target-event count and exact permitted short-
+   fragment count. The package reads the `C:\Gym Assistant 2.6\Data\Backup`
+   `.gbu` twice, scans the allowlisted Journal rows, builds the payload from
+   that same in-memory scan, and submits only invoice events/status data.
+7. Require the explicit invoice receipt to match the batch, source, event-set
+   and member-set hashes and to report zero rejects/conflicts. A repeat with
+   the same batch ID and body is a no-op; the same ID with a different body is
+   rejected. One invalid event or conflict rolls back the whole batch. The
+   bootstrap creates no draft, PDF, email, portal invitation or invoice number.
+8. Create a fresh `.gbu` before preparing drafts. Run the same strict scanner
+   against it so the portal has a current source timestamp. Keep
+   `INVOICE_ISSUING_ENABLED=false`, then verify each latest membership amount
+   and service period against Gym Assistant. Any open account balance, drinks
+   or ProShop amount must not appear as an invoice line.
+9. Use **Check membership events** to prepare drafts only for individually
+   eligible members. A draft does not get
    an invoice number and is not visible to the member.
-8. After the source, number series, legal fields, inclusive ABB treatment, and
+10. After the source, number series, legal fields, inclusive ABB treatment, and
    S3 write/read/download have been checked, set
    `INVOICE_ISSUING_ENABLED=true`. An admin must complete all three standard
-   review checkboxes before the one pilot invoice can be issued. If the
+   review checkboxes before an individual pilot invoice can be issued. If the
    Gym Assistant period differs from the catalog billing interval, an
    additional explicit period confirmation is required.
-9. Sign in as the pilot member and verify `/account/invoices` and the private
+11. Sign in as that member and verify `/account/invoices` and the private
    PDF download in the member's selected portal language.
 
 Issuing never sends an automatic email. To stop the pilot immediately, set

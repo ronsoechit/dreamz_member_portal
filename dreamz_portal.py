@@ -907,6 +907,21 @@ class SyncRun(db.Model):
     error = db.Column(db.Text)
 
 
+INVOICE_EVENT_BATCH_SYNC_SOURCE = "invoice_event_batch"
+MEMBER_SYNC_EXCLUDED_SOURCES = frozenset({INVOICE_EVENT_BATCH_SYNC_SOURCE})
+
+
+def member_sync_run_scope_filter():
+    return or_(
+        SyncRun.source.is_(None),
+        SyncRun.source.notin_(MEMBER_SYNC_EXCLUDED_SOURCES),
+    )
+
+
+def member_sync_runs_query():
+    return SyncRun.query.filter(member_sync_run_scope_filter())
+
+
 class FepPaymentUpdate(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     idempotency_key = db.Column(db.String, unique=True, nullable=False, index=True)
@@ -1003,6 +1018,27 @@ class GymAssistantInvoiceSyncState(db.Model):
     last_synced_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
 
     last_sync_run = db.relationship("SyncRun")
+
+
+class GymAssistantInvoiceEventBatch(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    batch_id = db.Column(db.String(128), unique=True, nullable=False, index=True)
+    batch_sha256 = db.Column(db.String(64), nullable=False, index=True)
+    source_sha256 = db.Column(db.String(64), nullable=False, index=True)
+    event_set_sha256 = db.Column(db.String(64), nullable=False)
+    member_ids_sha256 = db.Column(db.String(64), nullable=False)
+    member_count = db.Column(db.Integer, nullable=False)
+    event_count = db.Column(db.Integer, nullable=False)
+    sync_run_id = db.Column(db.Integer, db.ForeignKey("sync_run.id"), nullable=False, index=True)
+    receipt_json = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+
+    sync_run = db.relationship("SyncRun")
+
+
+@event.listens_for(GymAssistantInvoiceEventBatch, "before_update")
+def prevent_gymassistant_invoice_event_batch_update(_mapper, _connection, _target):
+    raise RuntimeError("Gym Assistant invoice event batch receipts are immutable.")
 
 
 class GymAssistantJournalEvent(db.Model):
@@ -7680,7 +7716,10 @@ def sync_change_summary_for_template(sync_run):
 def sync_runs_for_local_date(selected_date):
     return [
         run
-        for run in SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc()).all()
+        for run in member_sync_runs_query().order_by(
+            SyncRun.started_at.desc(),
+            SyncRun.id.desc(),
+        ).all()
         if run.started_at and local_datetime(run.started_at).date() == selected_date
     ]
 
@@ -7766,7 +7805,7 @@ def daily_sync_changes(selected_date):
 def mark_stale_sync_runs(now=None):
     now = now or datetime.now()
     cutoff = now - timedelta(minutes=STALE_SYNC_RUN_MINUTES)
-    stale_runs = SyncRun.query.filter(
+    stale_runs = member_sync_runs_query().filter(
         SyncRun.status == "running",
         SyncRun.completed_at.is_(None),
         SyncRun.started_at < cutoff,
@@ -7830,6 +7869,165 @@ INVOICE_STATUS_ISSUED = "issued"
 INVOICE_STATUS_FAILED = "generation_failed"
 INVOICE_STATUS_VOID = "void"
 INVOICE_CENT = Decimal("0.01")
+INVOICE_EVENT_BATCH_SCHEMA = "dreamz.ga.invoice-event-batch.v1"
+INVOICE_EVENT_BATCH_RECEIPT_SCHEMA = "dreamz.ga.invoice-event-batch-receipt.v1"
+INVOICE_EVENT_BATCH_SCANNER_SCHEMA = "dreamz.ga.invoice-target-readiness.v1"
+INVOICE_EVENT_BATCH_MAX_BODY_BYTES = 4_000_000
+INVOICE_EVENT_BATCH_MAX_EVENTS = 20_000
+INVOICE_EVENT_BATCH_MAX_SHORT_FRAGMENTS = 8
+INVOICE_EVENT_BATCH_LOCK_NAMESPACE = "dreamz-ga-invoice-event-batches-v1"
+INVOICE_EVENT_BATCH_REQUEST_FIELDS = frozenset({
+    "schema",
+    "batch_id",
+    "batch_sha256",
+    "generated_at",
+    "invoice_member_count",
+    "invoice_member_ids_sha256",
+    "invoice_event_count",
+    "invoice_event_set_sha256",
+    "invoice_short_fragment_count",
+    "invoice_scanner_schema",
+    "invoice_pilot_member_ids",
+    "invoice_membership_events",
+    "invoice_journal_issue_count",
+    "invoice_journal_source",
+    "invoice_catalog_source",
+    "invoice_source_snapshot_at",
+    "invoice_source_sha256",
+    "invoice_catalog_sha256",
+})
+INVOICE_EVENT_BATCH_EVENT_FIELDS = frozenset({
+    "source_reference",
+    "source_payload_hash",
+    "member_id",
+    "event_name",
+    "event_type",
+    "is_voided",
+    "occurred_at",
+    "journal_sequence",
+    "journal_transaction_id",
+    "membership_type_id",
+    "billing_option_code",
+    "service_period_start",
+    "service_period_end_exclusive",
+    "service_period_end",
+    "dues_cents",
+    "other_contract_fee_cents",
+    "source_tax_cents",
+    "tender_total_cents",
+    "remittance_type",
+    "remittance_reference",
+    "balance_payment_cents",
+    "is_positive_membership_payment",
+    "requires_manual_review",
+    "manual_review_reason",
+    "catalog_plan_name",
+    "catalog_base_amount_cents",
+    "catalog_interval_count",
+    "catalog_interval_unit",
+    "catalog_match_status",
+    "catalog_period_match_status",
+})
+INVOICE_EVENT_BATCH_IMMUTABLE_EVENT_FIELDS = (
+    "member_id",
+    "event_name",
+    "event_type",
+    "is_voided",
+    "occurred_at",
+    "journal_sequence",
+    "journal_transaction_id",
+    "membership_type_id",
+    "billing_option_code",
+    "service_period_start",
+    "service_period_end_exclusive",
+    "dues_cents",
+    "other_contract_fee_cents",
+    "source_tax_cents",
+    "tender_total_cents",
+    "remittance_type",
+    "remittance_reference",
+    "balance_payment_cents",
+)
+
+
+class InvoiceEventBatchReject(ValueError):
+    def __init__(self, message, *, status_code=422, code="invalid_batch"):
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+
+
+def invoice_event_batch_strict_json():
+    if not request.is_json:
+        raise InvoiceEventBatchReject(
+            "Content-Type must be application/json.",
+            status_code=400,
+            code="invalid_json",
+        )
+    raw = request.get_data(cache=True)
+    if not raw or len(raw) > INVOICE_EVENT_BATCH_MAX_BODY_BYTES:
+        raise InvoiceEventBatchReject(
+            "Invoice event batch JSON body is empty or too large.",
+            status_code=400,
+            code="invalid_json",
+        )
+
+    def reject_duplicate_keys(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise InvoiceEventBatchReject(
+                    "Invoice event batch JSON contains a duplicate object key.",
+                    status_code=400,
+                    code="invalid_json",
+                )
+            value[key] = item
+        return value
+
+    def reject_nonfinite(value):
+        raise InvoiceEventBatchReject(
+            f"Non-finite JSON number {value} is not allowed.",
+            status_code=400,
+            code="invalid_json",
+        )
+
+    try:
+        return json.loads(
+            raw.decode("utf-8", errors="strict"),
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_nonfinite,
+        )
+    except InvoiceEventBatchReject:
+        raise
+    except (UnicodeDecodeError, TypeError, ValueError) as exc:
+        raise InvoiceEventBatchReject(
+            "Invoice event batch body is not strict UTF-8 JSON.",
+            status_code=400,
+            code="invalid_json",
+        ) from exc
+
+
+def invoice_event_batch_sha256(payload):
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def invoice_event_member_ids_sha256(member_ids):
+    canonical = "\n".join(sorted(member_ids, key=int))
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
+
+
+def invoice_event_set_sha256(events):
+    canonical = "\n".join(sorted(
+        f"{event['source_reference']}|{event['source_payload_hash']}"
+        for event in events
+    ))
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
 
 
 def configured_invoice_pilot_member_ids():
@@ -7881,6 +8079,25 @@ def acquire_invoice_member_transaction_lock(member_id):
     db.session.execute(
         text("SELECT pg_advisory_xact_lock(:lock_key)"),
         {"lock_key": lock_key},
+    )
+
+
+def invoice_event_batch_lock_key():
+    return int.from_bytes(
+        hashlib.sha256(INVOICE_EVENT_BATCH_LOCK_NAMESPACE.encode("utf-8")).digest()[:8],
+        byteorder="big",
+        signed=True,
+    )
+
+
+def acquire_invoice_event_batch_transaction_lock():
+    if db.session.get_bind().dialect.name != "postgresql":
+        return
+    from sqlalchemy import text
+
+    db.session.execute(
+        text("SELECT pg_advisory_xact_lock(:lock_key)"),
+        {"lock_key": invoice_event_batch_lock_key()},
     )
 
 
@@ -8366,6 +8583,671 @@ def sync_invoice_membership_events(payload, sync_run):
         "conflicts": conflicts,
         "covered_member_ids": sorted(covered_ids, key=int),
     }
+
+
+def invoice_event_batch_identity(payload):
+    if not isinstance(payload, dict):
+        raise InvoiceEventBatchReject(
+            "Invoice event batch must be a JSON object.",
+            status_code=400,
+            code="invalid_json",
+        )
+    actual_fields = frozenset(payload)
+    if actual_fields != INVOICE_EVENT_BATCH_REQUEST_FIELDS:
+        raise InvoiceEventBatchReject(
+            "Invoice event batch fields do not match the strict contract "
+            f"(missing={len(INVOICE_EVENT_BATCH_REQUEST_FIELDS - actual_fields)}, "
+            f"extra={len(actual_fields - INVOICE_EVENT_BATCH_REQUEST_FIELDS)}).",
+            code="invalid_contract",
+        )
+    if payload.get("schema") != INVOICE_EVENT_BATCH_SCHEMA:
+        raise InvoiceEventBatchReject(
+            "Invoice event batch schema is not supported.",
+            code="invalid_schema",
+        )
+    batch_id = payload.get("batch_id")
+    if (
+        not isinstance(batch_id, str)
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", batch_id)
+    ):
+        raise InvoiceEventBatchReject(
+            "Invoice event batch_id is invalid.",
+            code="invalid_batch_id",
+        )
+    idempotency_key = request.headers.get("Idempotency-Key")
+    if not idempotency_key:
+        raise InvoiceEventBatchReject(
+            "Idempotency-Key header is required.",
+            status_code=400,
+            code="idempotency_key_missing",
+        )
+    if not secrets.compare_digest(str(idempotency_key), batch_id):
+        raise InvoiceEventBatchReject(
+            "Idempotency-Key header must exactly match batch_id.",
+            status_code=409,
+            code="idempotency_key_mismatch",
+        )
+    supplied_sha256 = payload.get("batch_sha256")
+    if (
+        not isinstance(supplied_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", supplied_sha256)
+    ):
+        raise InvoiceEventBatchReject(
+            "Invoice event batch_sha256 must be a lowercase SHA-256 value.",
+            code="invalid_batch_digest",
+        )
+    hash_payload = dict(payload)
+    hash_payload.pop("batch_sha256", None)
+    calculated_sha256 = invoice_event_batch_sha256(hash_payload)
+    if not secrets.compare_digest(supplied_sha256, calculated_sha256):
+        raise InvoiceEventBatchReject(
+            "Invoice event batch_sha256 does not match the exact request payload.",
+            status_code=409,
+            code="batch_digest_mismatch",
+        )
+    return batch_id, supplied_sha256
+
+
+def invoice_event_batch_exact_int(value, field_name, *, minimum=0, maximum=None):
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise InvoiceEventBatchReject(
+            f"{field_name} must be an integer.",
+            code="invalid_contract",
+        )
+    if value < minimum or (maximum is not None and value > maximum):
+        raise InvoiceEventBatchReject(
+            f"{field_name} is outside the allowed range.",
+            code="invalid_contract",
+        )
+    return value
+
+
+def invoice_event_batch_hash(value, field_name):
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise InvoiceEventBatchReject(
+            f"{field_name} must be a lowercase SHA-256 value.",
+            code="invalid_contract",
+        )
+    return value
+
+
+def invoice_event_batch_source(value, field_name):
+    if not isinstance(value, str) or not value.strip() or len(value) > 2048:
+        raise InvoiceEventBatchReject(
+            f"{field_name} is invalid.",
+            code="invalid_contract",
+        )
+    return value.strip()
+
+
+def normalize_atomic_invoice_membership_event(raw_event, active_ids):
+    if not isinstance(raw_event, dict):
+        raise InvoiceEventBatchReject(
+            "Invoice membership event must be an object.",
+            code="invalid_event",
+        )
+    actual_fields = frozenset(raw_event)
+    if actual_fields != INVOICE_EVENT_BATCH_EVENT_FIELDS:
+        raise InvoiceEventBatchReject(
+            "Invoice membership event fields do not match the strict contract "
+            f"(missing={len(INVOICE_EVENT_BATCH_EVENT_FIELDS - actual_fields)}, "
+            f"extra={len(actual_fields - INVOICE_EVENT_BATCH_EVENT_FIELDS)}).",
+            code="invalid_event",
+        )
+
+    integer_fields = (
+        "event_type",
+        "membership_type_id",
+        "billing_option_code",
+        "dues_cents",
+        "other_contract_fee_cents",
+        "source_tax_cents",
+        "tender_total_cents",
+        "remittance_type",
+        "balance_payment_cents",
+    )
+    optional_integer_fields = (
+        "journal_transaction_id",
+        "remittance_reference",
+        "catalog_base_amount_cents",
+        "catalog_interval_count",
+    )
+    for field_name in integer_fields:
+        if not isinstance(raw_event.get(field_name), int) or isinstance(
+            raw_event.get(field_name), bool
+        ):
+            raise InvoiceEventBatchReject(
+                f"Invoice membership event {field_name} must be an integer.",
+                code="invalid_event",
+            )
+    for field_name in optional_integer_fields:
+        value = raw_event.get(field_name)
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool)
+        ):
+            raise InvoiceEventBatchReject(
+                f"Invoice membership event {field_name} must be an integer or null.",
+                code="invalid_event",
+            )
+    for field_name in (
+        "is_voided",
+        "is_positive_membership_payment",
+        "requires_manual_review",
+    ):
+        if not isinstance(raw_event.get(field_name), bool):
+            raise InvoiceEventBatchReject(
+                f"Invoice membership event {field_name} must be a boolean.",
+                code="invalid_event",
+            )
+    if (
+        not isinstance(raw_event.get("journal_sequence"), str)
+        or not re.fullmatch(r"[0-9A-Fa-f]{1,16}", raw_event["journal_sequence"])
+    ):
+        raise InvoiceEventBatchReject(
+            "Invoice membership event journal_sequence is invalid.",
+            code="invalid_event",
+        )
+
+    try:
+        values = normalize_invoice_membership_event(
+            raw_event,
+            allowed_member_ids=active_ids,
+        )
+    except (TypeError, ValueError) as exc:
+        raise InvoiceEventBatchReject(
+            str(exc),
+            code="invalid_event",
+        ) from exc
+
+    expected_service_period_end = (
+        values["service_period_end_exclusive"] - timedelta(days=1)
+    ).isoformat()
+    if raw_event.get("service_period_end") != expected_service_period_end:
+        raise InvoiceEventBatchReject(
+            "Invoice membership event service_period_end is inconsistent.",
+            code="invalid_event",
+        )
+    expected_manual_review = (
+        not values["is_voided"]
+        and values["dues_cents"] > 0
+        and values["balance_payment_cents"] < 0
+    )
+    expected_manual_reason = (
+        "membership_payment_uses_account_credit"
+        if expected_manual_review
+        else None
+    )
+    expected_positive = (
+        not values["is_voided"]
+        and values["dues_cents"] > 0
+        and values["tender_total_cents"] > 0
+        and not expected_manual_review
+        and values["service_period_end_exclusive"]
+        > values["service_period_start"]
+    )
+    if raw_event.get("requires_manual_review") is not expected_manual_review:
+        raise InvoiceEventBatchReject(
+            "Invoice membership event manual-review flag is inconsistent.",
+            code="invalid_event",
+        )
+    if raw_event.get("manual_review_reason") != expected_manual_reason:
+        raise InvoiceEventBatchReject(
+            "Invoice membership event manual-review reason is inconsistent.",
+            code="invalid_event",
+        )
+    if raw_event.get("is_positive_membership_payment") is not expected_positive:
+        raise InvoiceEventBatchReject(
+            "Invoice membership event positive-payment flag is inconsistent.",
+            code="invalid_event",
+        )
+    return values
+
+
+def validate_invoice_event_batch(payload):
+    if payload.get("invoice_scanner_schema") != INVOICE_EVENT_BATCH_SCANNER_SCHEMA:
+        raise InvoiceEventBatchReject(
+            "Invoice scanner schema is not supported.",
+            code="invalid_scanner_schema",
+        )
+    member_count = invoice_event_batch_exact_int(
+        payload.get("invoice_member_count"),
+        "invoice_member_count",
+        minimum=1,
+        maximum=100,
+    )
+    event_count = invoice_event_batch_exact_int(
+        payload.get("invoice_event_count"),
+        "invoice_event_count",
+        minimum=1,
+        maximum=INVOICE_EVENT_BATCH_MAX_EVENTS,
+    )
+    invoice_event_batch_exact_int(
+        payload.get("invoice_short_fragment_count"),
+        "invoice_short_fragment_count",
+        minimum=0,
+        maximum=INVOICE_EVENT_BATCH_MAX_SHORT_FRAGMENTS,
+    )
+    journal_issue_count = invoice_event_batch_exact_int(
+        payload.get("invoice_journal_issue_count"),
+        "invoice_journal_issue_count",
+        minimum=0,
+    )
+    if journal_issue_count != 0:
+        raise InvoiceEventBatchReject(
+            "Invoice journal issue count must be zero.",
+            code="journal_issues_present",
+        )
+
+    if not app.config.get("INVOICE_GA_PILOT_ENABLED"):
+        raise InvoiceEventBatchReject(
+            "Gym Assistant invoice pilot is not enabled.",
+            status_code=409,
+            code="invoice_pilot_disabled",
+        )
+    active_ids = configured_invoice_pilot_member_ids()
+    if not active_ids:
+        raise InvoiceEventBatchReject(
+            "Gym Assistant invoice pilot cohort is not configured.",
+            status_code=409,
+            code="invoice_cohort_not_configured",
+        )
+    if member_count != len(active_ids):
+        raise InvoiceEventBatchReject(
+            "Invoice member count does not match the active configured cohort.",
+            code="cohort_mismatch",
+        )
+
+    raw_member_ids = payload.get("invoice_pilot_member_ids")
+    if not isinstance(raw_member_ids, list):
+        raise InvoiceEventBatchReject(
+            "invoice_pilot_member_ids must be a list.",
+            code="cohort_mismatch",
+        )
+    canonical_member_ids = []
+    for member_id in raw_member_ids:
+        if (
+            not isinstance(member_id, str)
+            or not re.fullmatch(r"[1-9][0-9]*", member_id)
+            or int(member_id) > 0xFFFFFFFF
+        ):
+            raise InvoiceEventBatchReject(
+                "invoice_pilot_member_ids contains an invalid member ID.",
+                code="cohort_mismatch",
+            )
+        canonical_member_ids.append(member_id)
+    if (
+        len(canonical_member_ids) != len(set(canonical_member_ids))
+        or canonical_member_ids != sorted(canonical_member_ids, key=int)
+        or set(canonical_member_ids) != active_ids
+    ):
+        raise InvoiceEventBatchReject(
+            "Invoice member IDs do not exactly match the active configured cohort.",
+            code="cohort_mismatch",
+        )
+    expected_member_ids_sha256 = invoice_event_member_ids_sha256(active_ids)
+    supplied_member_ids_sha256 = invoice_event_batch_hash(
+        payload.get("invoice_member_ids_sha256"),
+        "invoice_member_ids_sha256",
+    )
+    if not secrets.compare_digest(
+        supplied_member_ids_sha256,
+        expected_member_ids_sha256,
+    ):
+        raise InvoiceEventBatchReject(
+            "Invoice member ID set hash does not match the active cohort.",
+            code="cohort_mismatch",
+        )
+
+    raw_events = payload.get("invoice_membership_events")
+    if not isinstance(raw_events, list) or len(raw_events) != event_count:
+        raise InvoiceEventBatchReject(
+            "Invoice event count does not match invoice_membership_events.",
+            code="event_count_mismatch",
+        )
+    normalized_events = []
+    source_references = set()
+    covered_ids = set()
+    for raw_event in raw_events:
+        values = normalize_atomic_invoice_membership_event(raw_event, active_ids)
+        source_reference = values["source_reference"]
+        if source_reference in source_references:
+            raise InvoiceEventBatchReject(
+                "Invoice event batch contains a duplicate source_reference.",
+                code="duplicate_event",
+            )
+        source_references.add(source_reference)
+        covered_ids.add(values["member_id"])
+        normalized_events.append(values)
+    if covered_ids != active_ids:
+        raise InvoiceEventBatchReject(
+            "Invoice event batch does not fully cover the active cohort.",
+            code="cohort_coverage_incomplete",
+        )
+
+    expected_event_set_sha256 = invoice_event_set_sha256(raw_events)
+    supplied_event_set_sha256 = invoice_event_batch_hash(
+        payload.get("invoice_event_set_sha256"),
+        "invoice_event_set_sha256",
+    )
+    if not secrets.compare_digest(
+        supplied_event_set_sha256,
+        expected_event_set_sha256,
+    ):
+        raise InvoiceEventBatchReject(
+            "Invoice event set hash does not match invoice_membership_events.",
+            code="event_set_mismatch",
+        )
+
+    try:
+        generated_at = parse_invoice_sync_datetime(
+            payload.get("generated_at"),
+            "generated_at",
+        )
+        source_snapshot_at = parse_invoice_sync_datetime(
+            payload.get("invoice_source_snapshot_at"),
+            "invoice_source_snapshot_at",
+        )
+    except ValueError as exc:
+        raise InvoiceEventBatchReject(
+            str(exc),
+            code="invalid_source_metadata",
+        ) from exc
+    if source_snapshot_at > generated_at:
+        raise InvoiceEventBatchReject(
+            "Invoice source snapshot cannot be newer than the generated timestamp.",
+            code="invalid_source_metadata",
+        )
+    source_sha256 = invoice_event_batch_hash(
+        payload.get("invoice_source_sha256"),
+        "invoice_source_sha256",
+    )
+    catalog_sha256 = invoice_event_batch_hash(
+        payload.get("invoice_catalog_sha256"),
+        "invoice_catalog_sha256",
+    )
+    return {
+        "active_ids": active_ids,
+        "normalized_events": normalized_events,
+        "source_references": source_references,
+        "generated_at": generated_at,
+        "source_snapshot_at": source_snapshot_at,
+        "source": invoice_event_batch_source(
+            payload.get("invoice_journal_source"),
+            "invoice_journal_source",
+        ),
+        "catalog_source": invoice_event_batch_source(
+            payload.get("invoice_catalog_source"),
+            "invoice_catalog_source",
+        ),
+        "source_sha256": source_sha256,
+        "catalog_sha256": catalog_sha256,
+        "member_ids_sha256": expected_member_ids_sha256,
+        "event_set_sha256": expected_event_set_sha256,
+        "member_count": member_count,
+        "event_count": event_count,
+        "short_fragment_count": payload["invoice_short_fragment_count"],
+    }
+
+
+def invoice_event_batch_existing_row(batch_id):
+    query = GymAssistantInvoiceEventBatch.query.filter_by(batch_id=batch_id)
+    if db.session.get_bind().dialect.name == "postgresql":
+        query = query.with_for_update()
+    return query.first()
+
+
+def invoice_event_batch_duplicate_receipt(record):
+    try:
+        receipt = json.loads(record.receipt_json)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Stored invoice event batch receipt is invalid.") from exc
+    receipt["status"] = "duplicate"
+    return receipt
+
+
+def invoice_event_batch_existing_event_match(existing, values):
+    immutable_match = all(
+        getattr(existing, field_name) == values[field_name]
+        for field_name in INVOICE_EVENT_BATCH_IMMUTABLE_EVENT_FIELDS
+        if field_name != "is_voided"
+    )
+    if existing.member_id != values["member_id"] or not immutable_match:
+        return False, False
+    if secrets.compare_digest(
+        existing.source_payload_hash,
+        values["source_payload_hash"],
+    ):
+        return existing.is_voided == values["is_voided"], False
+    is_controlled_void_transition = (
+        not existing.is_voided
+        and values["is_voided"]
+    )
+    return is_controlled_void_transition, is_controlled_void_transition
+
+
+def apply_invoice_event_batch(payload):
+    batch_id, batch_sha256 = invoice_event_batch_identity(payload)
+    acquire_invoice_event_batch_transaction_lock()
+    existing_batch = invoice_event_batch_existing_row(batch_id)
+    if existing_batch:
+        if not secrets.compare_digest(existing_batch.batch_sha256, batch_sha256):
+            raise InvoiceEventBatchReject(
+                "Invoice event batch_id is already bound to a different payload.",
+                status_code=409,
+                code="batch_id_conflict",
+            )
+        return invoice_event_batch_duplicate_receipt(existing_batch), True
+
+    validated = validate_invoice_event_batch(payload)
+    active_ids = validated["active_ids"]
+    for member_id in sorted(active_ids, key=int):
+        acquire_invoice_member_transaction_lock(member_id)
+
+    existing_nonvoid_refs = {
+        source_reference
+        for (source_reference,) in (
+            db.session.query(GymAssistantJournalEvent.source_reference)
+            .filter(
+                GymAssistantJournalEvent.member_id.in_(active_ids),
+                GymAssistantJournalEvent.is_voided.is_(False),
+            )
+            .all()
+        )
+    }
+    if not existing_nonvoid_refs.issubset(validated["source_references"]):
+        raise InvoiceEventBatchReject(
+            "Invoice event snapshot would silently drop previously accepted non-void events.",
+            status_code=409,
+            code="snapshot_regression",
+        )
+
+    event_query = GymAssistantJournalEvent.query.filter(
+        GymAssistantJournalEvent.source_reference.in_(validated["source_references"])
+    )
+    if db.session.get_bind().dialect.name == "postgresql":
+        event_query = event_query.with_for_update()
+    existing_events = {
+        event.source_reference: event
+        for event in event_query.all()
+    }
+    members = {
+        member.member_id: member
+        for member in Member.query.filter(Member.member_id.in_(active_ids)).all()
+    }
+
+    prepared = []
+    conflict_count = 0
+    received_by_member = {member_id: 0 for member_id in active_ids}
+    for values in validated["normalized_events"]:
+        existing = existing_events.get(values["source_reference"])
+        void_transition = False
+        if existing:
+            event_matches, void_transition = invoice_event_batch_existing_event_match(
+                existing,
+                values,
+            )
+            if not event_matches:
+                conflict_count += 1
+                continue
+        eligibility_status, eligibility_reason = invoice_event_eligibility(
+            values,
+            members.get(values["member_id"]),
+        )
+        received_by_member[values["member_id"]] += 1
+        prepared.append((
+            values,
+            existing,
+            eligibility_status,
+            eligibility_reason,
+            void_transition,
+        ))
+    if conflict_count:
+        raise InvoiceEventBatchReject(
+            "Invoice event batch conflicts with previously accepted source events.",
+            status_code=409,
+            code="event_conflict",
+        )
+    if len(prepared) != validated["event_count"]:
+        raise InvoiceEventBatchReject(
+            "Invoice event batch was not accepted in full.",
+            code="event_rejected",
+        )
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    invoice_sync_run = SyncRun(
+        source=INVOICE_EVENT_BATCH_SYNC_SOURCE,
+        started_at=now,
+        completed_at=now,
+        status="success",
+        members_received=0,
+        members_new=0,
+        members_updated=0,
+        documents_received=0,
+        members_snapshot_complete=False,
+        member_source_count=0,
+        member_unique_count=0,
+    )
+    db.session.add(invoice_sync_run)
+    db.session.flush()
+    inserted = updated = unchanged = 0
+    eligible = blocked = voided = 0
+    catalog_fields = (
+        "catalog_plan_name",
+        "catalog_base_amount_cents",
+        "catalog_interval_count",
+        "catalog_interval_unit",
+        "catalog_match_status",
+        "catalog_period_match_status",
+    )
+    for (
+        values,
+        existing,
+        eligibility_status,
+        eligibility_reason,
+        void_transition,
+    ) in prepared:
+        if eligibility_status == "eligible":
+            eligible += 1
+        elif eligibility_status == "voided":
+            voided += 1
+        else:
+            blocked += 1
+        if existing:
+            changed = any(
+                getattr(existing, field_name) != values[field_name]
+                for field_name in catalog_fields
+            ) or (
+                existing.eligibility_status != eligibility_status
+                or existing.eligibility_reason != eligibility_reason
+            ) or void_transition
+            for field_name in catalog_fields:
+                setattr(existing, field_name, values[field_name])
+            if void_transition:
+                existing.source_payload_hash = values["source_payload_hash"]
+                existing.is_voided = True
+            existing.eligibility_status = eligibility_status
+            existing.eligibility_reason = eligibility_reason
+            existing.last_sync_run_id = invoice_sync_run.id
+            existing.last_seen_at = now
+            if void_transition:
+                void_invoice_linked_to_source_event(
+                    existing,
+                    "source_event_voided",
+                    now=now,
+                )
+            if changed:
+                updated += 1
+            else:
+                unchanged += 1
+        else:
+            db.session.add(GymAssistantJournalEvent(
+                **values,
+                eligibility_status=eligibility_status,
+                eligibility_reason=eligibility_reason,
+                first_sync_run_id=invoice_sync_run.id,
+                last_sync_run_id=invoice_sync_run.id,
+                first_seen_at=now,
+                last_seen_at=now,
+            ))
+            inserted += 1
+
+    for member_id in sorted(active_ids, key=int):
+        state = db.session.get(GymAssistantInvoiceSyncState, member_id)
+        if state is None:
+            state = GymAssistantInvoiceSyncState(member_id=member_id)
+            db.session.add(state)
+        state.source = validated["source"]
+        state.catalog_source = validated["catalog_source"]
+        state.source_generated_at = validated["generated_at"]
+        state.source_snapshot_at = validated["source_snapshot_at"]
+        state.source_sha256 = validated["source_sha256"]
+        state.catalog_sha256 = validated["catalog_sha256"]
+        state.journal_issue_count = 0
+        state.events_received = received_by_member[member_id]
+        state.last_sync_run_id = invoice_sync_run.id
+        state.last_synced_at = now
+
+    receipt = {
+        "schema": INVOICE_EVENT_BATCH_RECEIPT_SCHEMA,
+        "status": "success",
+        "batch_id": batch_id,
+        "batch_sha256": batch_sha256,
+        "source_sha256": validated["source_sha256"],
+        "event_set_sha256": validated["event_set_sha256"],
+        "member_ids_sha256": validated["member_ids_sha256"],
+        "received": validated["event_count"],
+        "member_count": validated["member_count"],
+        "rejected": 0,
+        "conflicts": 0,
+        "inserted": inserted,
+        "updated": updated,
+        "unchanged": unchanged,
+        "eligible": eligible,
+        "blocked": blocked,
+        "voided": voided,
+        "short_fragment_count": validated["short_fragment_count"],
+        "sync_run_id": invoice_sync_run.id,
+        "completed_at": now.isoformat(timespec="milliseconds") + "Z",
+    }
+    invoice_sync_run.change_summary = json.dumps(
+        {"invoice_event_batch": receipt},
+        ensure_ascii=True,
+        sort_keys=True,
+    )
+    db.session.add(GymAssistantInvoiceEventBatch(
+        batch_id=batch_id,
+        batch_sha256=batch_sha256,
+        source_sha256=validated["source_sha256"],
+        event_set_sha256=validated["event_set_sha256"],
+        member_ids_sha256=validated["member_ids_sha256"],
+        member_count=validated["member_count"],
+        event_count=validated["event_count"],
+        sync_run_id=invoice_sync_run.id,
+        receipt_json=json.dumps(receipt, ensure_ascii=True, sort_keys=True),
+        created_at=now,
+    ))
+    db.session.commit()
+    return receipt, False
 
 
 def invoice_decimal(value, field_name="amount"):
@@ -9182,13 +10064,17 @@ def acquire_member_sync_advisory_lock():
 
 
 def sync_run_is_latest(sync_run):
-    latest_run_id = db.session.query(db.func.max(SyncRun.id)).scalar()
+    latest_run_id = (
+        db.session.query(db.func.max(SyncRun.id))
+        .filter(member_sync_run_scope_filter())
+        .scalar()
+    )
     return latest_run_id == sync_run.id
 
 
 def legacy_member_snapshot_promotion(sync_run):
     recent_runs = (
-        SyncRun.query
+        member_sync_runs_query()
         .order_by(SyncRun.id.desc())
         .limit(LEGACY_MEMBER_SNAPSHOT_CONFIRMATIONS)
         .all()
@@ -9259,6 +10145,7 @@ def legacy_member_snapshot_promotion(sync_run):
     recent_high_watermark = (
         db.session.query(db.func.max(SyncRun.members_received))
         .filter(
+            member_sync_run_scope_filter(),
             SyncRun.id < oldest_candidate.id,
             SyncRun.status == "success",
             SyncRun.source == sync_run.source,
@@ -9297,7 +10184,7 @@ def promote_member_snapshot(sync_run, synced_members_by_id, protocol, reason):
 
 def prune_legacy_member_snapshot_sets():
     retained_runs = (
-        SyncRun.query
+        member_sync_runs_query()
         .filter(SyncRun.member_ids_json.isnot(None))
         .order_by(SyncRun.id.desc())
         .limit(LEGACY_MEMBER_SNAPSHOT_RETAIN_MEMBER_SETS)
@@ -9307,7 +10194,7 @@ def prune_legacy_member_snapshot_sets():
     if not retained_ids:
         return
     (
-        SyncRun.query
+        member_sync_runs_query()
         .filter(
             SyncRun.member_ids_json.isnot(None),
             ~SyncRun.id.in_(retained_ids),
@@ -16037,6 +16924,34 @@ def staff_whatsapp_login_status():
     return render_template("staff_whatsapp_login.html", **whatsapp_login_status_context())
 
 
+@app.post("/api/sync/invoice-event-batches")
+def api_sync_invoice_event_batches():
+    require_sync_access()
+    ensure_runtime_schema()
+    try:
+        payload = invoice_event_batch_strict_json()
+        receipt, duplicate = apply_invoice_event_batch(payload)
+    except InvoiceEventBatchReject as exc:
+        db.session.rollback()
+        return jsonify({
+            "schema": "dreamz.ga.invoice-event-batch-error.v1",
+            "status": "rejected",
+            "code": exc.code,
+            "error": str(exc),
+        }), exc.status_code
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Atomic invoice event batch persistence failed.")
+        return jsonify({
+            "schema": "dreamz.ga.invoice-event-batch-error.v1",
+            "status": "failed",
+            "code": "persistence_failed",
+            "error": "Invoice event batch could not be persisted atomically.",
+        }), 503
+
+    return jsonify(receipt), (200 if duplicate else 201)
+
+
 @app.post("/api/sync/members")
 def api_sync_members():
     require_sync_access()
@@ -16345,7 +17260,10 @@ def fep_sync_meta(sync_run):
 
 
 def fep_latest_sync_meta():
-    latest = SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc()).first()
+    latest = member_sync_runs_query().order_by(
+        SyncRun.started_at.desc(),
+        SyncRun.id.desc(),
+    ).first()
     return fep_sync_meta(latest)
 
 
@@ -16356,6 +17274,7 @@ def api_fep_member_snapshot():
     latest_complete_run_id = (
         db.session.query(SyncRun.id)
         .filter(
+            member_sync_run_scope_filter(),
             SyncRun.status == "success",
             SyncRun.members_snapshot_complete.is_(True),
         )
@@ -17919,7 +18838,10 @@ def staff_sync_status():
     except ValueError:
         page = 1
     try:
-        query = SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc())
+        query = member_sync_runs_query().order_by(
+            SyncRun.started_at.desc(),
+            SyncRun.id.desc(),
+        )
         total_runs = query.count()
         total_pages = max((total_runs + SYNC_PAGE_SIZE - 1) // SYNC_PAGE_SIZE, 1)
         page = min(page, total_pages)
@@ -19369,7 +20291,10 @@ def latest_member_sync_context(member_id, limit=6):
     member_id = str(member_id)
     language = current_language()
     recent_changes = []
-    runs = SyncRun.query.order_by(SyncRun.started_at.desc(), SyncRun.id.desc()).limit(600).all()
+    runs = member_sync_runs_query().order_by(
+        SyncRun.started_at.desc(),
+        SyncRun.id.desc(),
+    ).limit(600).all()
     latest_seen = None
     if runs:
         latest_run = runs[0]

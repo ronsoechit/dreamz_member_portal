@@ -888,6 +888,62 @@ class SyncAgentTests(unittest.TestCase):
         self.assertRegex(payload["invoice_source_sha256"], r"^[0-9a-f]{64}$")
         self.assertRegex(payload["invoice_catalog_sha256"], r"^[0-9a-f]{64}$")
 
+    def test_invoice_sync_reuses_target_scanner_for_embedded_target_defect(self):
+        target = (
+            "c20260215!1558 7001 1771185480 0 990001 90001 3 0 0 0 29"
+            "|900000101 257 20260201 20260301 6500 0 0 6500 0 0 0"
+        )
+        other = (
+            "c20260215!1559 7002 1771185540 0 990002 99999 38 0 0 0 29"
+            "|200 ProShop purchase"
+        )
+        truncated = "bad-ts 7001 0 0 90001 BAD|x"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            data_dir.mkdir(parents=True)
+            write_members_btx(data_dir / "Members.btx", member_id="90001")
+            (data_dir / "Journal.jtx").write_text(
+                "\r\n".join([target, other + truncated]),
+                encoding="latin-1",
+            )
+
+            payload = build_sync_payload(root, invoice_member_ids={"90001"})
+
+        self.assertEqual(payload["invoice_membership_events"], [])
+        self.assertGreater(payload["invoice_journal_issue_count"], 0)
+
+    def test_invoice_sync_blocks_duplicate_catalog_keys(self):
+        target = (
+            "c20260215!1558 7001 1771185480 0 990001 90001 3 0 0 0 29"
+            "|900000101 257 20260201 20260301 6500 0 0 6500 0 0 0"
+        )
+        catalog_block = "\n".join(
+            [
+                "CLASS=contract Dreamz 6 months",
+                "MEMBERTYPE_ID=900000101",
+                "OPTION=1 MONTHS EFT 6500 0",
+                "-",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Gym Assistant 2.6"
+            data_dir = root / "Data"
+            data_dir.mkdir(parents=True)
+            (data_dir / "Members.btx").write_text(
+                catalog_block + "\n" + catalog_block,
+                encoding="latin-1",
+            )
+            (data_dir / "Journal.jtx").write_text(
+                target,
+                encoding="latin-1",
+            )
+
+            payload = build_sync_payload(root, invoice_member_ids={"90001"})
+
+        self.assertEqual(payload["invoice_journal_issue_count"], 1)
+        self.assertEqual(payload["invoice_membership_events"], [])
+
     def test_invoice_snapshot_timestamp_comes_from_source_files_not_send_time(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "Gym Assistant 2.6"

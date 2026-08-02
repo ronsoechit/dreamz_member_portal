@@ -19,7 +19,7 @@ import json
 from pathlib import Path
 import re
 import sys
-from typing import Sequence
+from typing import Iterable, Sequence
 
 # This probe promises a no-write execution. Set the interpreter policy before
 # importing either local module so a direct invocation cannot create pyc files.
@@ -566,6 +566,36 @@ def _scan_target_events(
         target_issue_count=target_issues,
         ignored_short_fragment_count=ignored_short_fragments,
     )
+
+
+def scan_target_invoice_membership_events(
+    journal_bytes: bytes,
+    member_ids: Iterable[str],
+) -> _TargetScan:
+    """Run the exact target scanner used by readiness and production sync."""
+
+    if not isinstance(journal_bytes, bytes):
+        raise ValueError("journal_bytes must be bytes")
+    canonical_ids: list[str] = []
+    for raw_member_id in member_ids:
+        member_id = str(raw_member_id).strip()
+        if (
+            not re.fullmatch(r"[1-9][0-9]*", member_id)
+            or int(member_id, 10) > 0xFFFFFFFF
+        ):
+            raise ValueError("invoice member ID is invalid")
+        canonical_ids.append(member_id)
+    if not canonical_ids or len(canonical_ids) != len(set(canonical_ids)):
+        raise ValueError("invoice member IDs must be non-empty and unique")
+    try:
+        return _scan_target_events(
+            journal_bytes,
+            frozenset(canonical_ids),
+        )
+    except archive_probe.ProbeBlocked as exc:
+        raise ValueError(
+            f"target invoice scan blocked: {exc.reason_code}"
+        ) from None
 
 
 def _analyze_snapshot(

@@ -26,9 +26,9 @@ from ga_import import (
 )
 from ga_journal import (
     parse_gymassistant_billing_catalog_text,
-    parse_gymassistant_journal_text,
     service_period_matches_catalog_interval,
 )
+from ga_invoice_target_probe import scan_target_invoice_membership_events
 from ga_journal_snapshot import parse_member_scoped_journal_snapshot_bytes
 from ga_documents import infer_member_document_records
 from portal_sync_journal_evidence import (
@@ -459,7 +459,7 @@ def build_existing_member_journal_evidence(
     }
 
 
-def backup_snapshot_entries(data: bytes) -> tuple[str, bytes]:
+def backup_snapshot_entries(data: bytes) -> tuple[bytes, bytes]:
     with zipfile.ZipFile(BytesIO(data)) as backup:
         journal_entry = next(
             (
@@ -481,12 +481,9 @@ def backup_snapshot_entries(data: bytes) -> tuple[str, bytes]:
             raise ValueError(
                 "GymAssistant backup must contain Journal.jtx and Members.btx."
             )
-        journal_text = backup.read(journal_entry).decode(
-            "latin-1",
-            errors="replace",
-        )
+        journal_bytes = backup.read(journal_entry)
         members_bytes = backup.read(members_entry)
-    return journal_text, members_bytes
+    return journal_bytes, members_bytes
 
 
 def iter_member_log_files(source_root: Path, backup: Path | None = None) -> Iterable[Path]:
@@ -799,6 +796,7 @@ def invoice_membership_event_payload(
     catalog_sha256 = None
     catalog_issue_count = 0
     catalog_options = []
+    target_scan = None
     try:
         if invoice_backup:
             (
@@ -806,10 +804,10 @@ def invoice_membership_event_payload(
                 source_snapshot_at,
                 source_sha256,
             ) = read_stable_file_snapshot(invoice_backup)
-            journal_text, members_bytes = backup_snapshot_entries(backup_bytes)
-            result = parse_gymassistant_journal_text(
-                journal_text,
-                member_ids=member_ids,
+            journal_bytes, members_bytes = backup_snapshot_entries(backup_bytes)
+            target_scan = scan_target_invoice_membership_events(
+                journal_bytes,
+                member_ids,
             )
             catalog_options, _ = parse_gymassistant_billing_catalog_text(
                 members_bytes.decode("latin-1", errors="replace")
@@ -827,9 +825,9 @@ def invoice_membership_event_payload(
                 members_snapshot_at,
                 catalog_sha256,
             ) = read_stable_file_snapshot(members_path)
-            result = parse_gymassistant_journal_text(
-                journal_bytes.decode("latin-1", errors="replace"),
-                member_ids=member_ids,
+            target_scan = scan_target_invoice_membership_events(
+                journal_bytes,
+                member_ids,
             )
             catalog_options, _ = parse_gymassistant_billing_catalog_text(
                 members_bytes.decode("latin-1", errors="replace")
@@ -852,12 +850,28 @@ def invoice_membership_event_payload(
             None,
             None,
         )
-    options_by_key = {
-        (option.membership_type_id, option.billing_option_code): option
-        for option in catalog_options
-    }
+    if target_scan is None:
+        return [], 1, None, None, None, None, None
+    options_by_key = {}
+    for option in catalog_options:
+        key = (option.membership_type_id, option.billing_option_code)
+        if key in options_by_key:
+            catalog_issue_count += 1
+            continue
+        options_by_key[key] = option
+    issue_count = target_scan.target_issue_count + catalog_issue_count
+    if issue_count:
+        return (
+            [],
+            issue_count,
+            source,
+            catalog_source,
+            source_snapshot_at,
+            source_sha256,
+            catalog_sha256,
+        )
     records = []
-    for event in result.events:
+    for event in target_scan.events:
         record = event.as_sync_record()
         option = options_by_key.get((event.membership_type_id, event.billing_option_code))
         if option:
@@ -891,7 +905,7 @@ def invoice_membership_event_payload(
 
     return (
         records,
-        len(result.issues) + catalog_issue_count,
+        0,
         source,
         catalog_source,
         source_snapshot_at,

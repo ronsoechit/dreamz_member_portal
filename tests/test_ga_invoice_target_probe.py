@@ -101,6 +101,15 @@ class InvoiceTargetProbeTests(unittest.TestCase):
         self.assertEqual(result["analysis"]["target_issue_count"], 0)
         self.assertEqual(result["analysis"]["ignored_short_fragment_count"], 3)
 
+    def test_public_sync_scanner_uses_same_target_scope(self):
+        scan = target_probe.scan_target_invoice_membership_events(
+            TARGET.encode("ascii"),
+            ["90001"],
+        )
+
+        self.assertEqual(len(scan.events), 1)
+        self.assertEqual(scan.target_issue_count, 0)
+
     def test_target_nonmembership_empty_payload_is_out_of_invoice_scope(self):
         nonmembership = (
             "c20260215!1600 7003 1771185600 0 990003 90001 43 0 0 0 29|"
