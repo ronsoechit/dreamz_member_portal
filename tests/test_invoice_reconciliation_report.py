@@ -192,6 +192,22 @@ class InvoiceReconciliationReportTests(unittest.TestCase):
         ))
         db.session.commit()
 
+        # The ordinary read-only sync can observe the same immutable source
+        # events after the bootstrap batch and assign a newer observation run.
+        follow_up_run = SyncRun(
+            source="frontdesk",
+            started_at=now,
+            completed_at=now,
+            status="success",
+        )
+        db.session.add(follow_up_run)
+        db.session.flush()
+        for event in GymAssistantJournalEvent.query.all():
+            event.last_sync_run_id = follow_up_run.id
+        for state in GymAssistantInvoiceSyncState.query.all():
+            state.last_sync_run_id = follow_up_run.id
+        db.session.commit()
+
     def login(self, role="admin"):
         with self.client.session_transaction() as session:
             session["staff_role"] = role

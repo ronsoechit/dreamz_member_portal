@@ -10024,10 +10024,10 @@ def staff_invoice_reconciliation_context():
             )
         ]
 
-    batch_events = (
-        [event for event in events if event.last_sync_run_id == latest_batch.sync_run_id]
-        if latest_batch else []
-    )
+    # A later read-only member sync may refresh last_sync_run_id without
+    # changing the immutable Journal event set. Reconcile the current exact
+    # cohort contents to the batch hashes, not to that mutable observation ID.
+    batch_events = list(events) if latest_batch else []
     batch_member_ids = {event.member_id for event in batch_events}
     batch_event_set_observed_sha256 = (
         invoice_event_set_sha256([
@@ -10058,7 +10058,6 @@ def staff_invoice_reconciliation_context():
         and batch_member_ids == cohort_ids
         and all(
             states.get(member_id)
-            and states[member_id].last_sync_run_id == latest_batch.sync_run_id
             and secrets.compare_digest(
                 str(states[member_id].source_sha256 or ""),
                 latest_batch.source_sha256,
