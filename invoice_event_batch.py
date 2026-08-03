@@ -45,6 +45,13 @@ class InvoiceBatchBlocked(RuntimeError):
         self.reason_code = reason_code
 
 
+class _NoRedirectHandler(urlrequest.HTTPRedirectHandler):
+    """Refuse redirects before an authenticated request can be replayed."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise InvoiceBatchBlocked("portal_redirect_refused")
+
+
 def canonical_json_bytes(value: object) -> bytes:
     return json.dumps(
         value,
@@ -78,14 +85,13 @@ def _validated_hash(value: object, reason_code: str) -> str:
     return normalized
 
 
-def _source_snapshot_at(path: Path) -> str:
-    try:
-        modified_at = path.stat().st_mtime
-    except OSError as exc:
-        raise InvoiceBatchBlocked("source_unstable") from exc
-    return datetime.fromtimestamp(modified_at, timezone.utc).replace(
-        microsecond=0
-    ).isoformat()
+def _source_snapshot_at(mtime_ns: int) -> str:
+    if not isinstance(mtime_ns, int) or isinstance(mtime_ns, bool) or mtime_ns < 0:
+        raise InvoiceBatchBlocked("source_unstable")
+    return datetime.fromtimestamp(
+        mtime_ns / 1_000_000_000,
+        timezone.utc,
+    ).replace(microsecond=0).isoformat()
 
 
 def build_exact_invoice_event_batch(
@@ -155,7 +161,7 @@ def build_exact_invoice_event_batch(
         )
         if stable.source_sha256 != expected_source_hash:
             raise InvoiceBatchBlocked("source_hash_mismatch")
-        snapshot_at = _source_snapshot_at(Path(backup_path))
+        snapshot_at = _source_snapshot_at(stable.mtime_ns)
         snapshot = archive_probe._inspect_archive(stable.data)
         target_scan = scan_target_invoice_membership_events(
             snapshot.journal_bytes,
@@ -315,8 +321,9 @@ def post_invoice_event_batch(
         raise InvoiceBatchBlocked("portal_url_invalid")
     if not str(sync_token or "").strip():
         raise InvoiceBatchBlocked("sync_token_missing")
+    endpoint = portal_url.rstrip("/") + "/api/sync/invoice-event-batches"
     request = urlrequest.Request(
-        portal_url.rstrip("/") + "/api/sync/invoice-event-batches",
+        endpoint,
         data=canonical_json_bytes(payload),
         method="POST",
         headers={
@@ -325,8 +332,11 @@ def post_invoice_event_batch(
             "Idempotency-Key": str(payload.get("batch_id") or ""),
         },
     )
+    opener = urlrequest.build_opener(_NoRedirectHandler())
     try:
-        with urlrequest.urlopen(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
+            if response.geturl() != endpoint:
+                raise InvoiceBatchBlocked("portal_response_url_mismatch")
             result = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         raise InvoiceBatchBlocked(f"portal_http_{exc.code}") from None

@@ -2,7 +2,9 @@ from contextlib import redirect_stderr, redirect_stdout
 from hashlib import sha256
 from io import BytesIO, StringIO
 import json
+import os
 from pathlib import Path
+import re
 import stat
 import tempfile
 import unittest
@@ -102,7 +104,19 @@ class InvoiceBackupProbeTests(unittest.TestCase):
         self.assertEqual(result["analysis"]["target_membership_event_count"], 2)
         self.assertEqual(result["analysis"]["positive_membership_event_count"], 2)
         self.assertEqual(result["analysis"]["target_member_without_event_count"], 0)
-        encoded = json.dumps(result, sort_keys=True)
+        def without_opaque_hashes(value):
+            if isinstance(value, dict):
+                return {
+                    key: without_opaque_hashes(child)
+                    for key, child in value.items()
+                }
+            if isinstance(value, list):
+                return [without_opaque_hashes(child) for child in value]
+            if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value):
+                return "<sha256>"
+            return value
+
+        encoded = json.dumps(without_opaque_hashes(result), sort_keys=True)
         for forbidden in (
             "90001",
             "90002",
@@ -113,6 +127,23 @@ class InvoiceBackupProbeTests(unittest.TestCase):
             "ProShop purchase",
         ):
             self.assertNotIn(forbidden, encoded)
+
+    def test_stable_read_exposes_the_exact_bound_mtime(self):
+        fixed_mtime_ns = 1_775_187_245_999_999_900
+        os.utime(self.backup, ns=(fixed_mtime_ns, fixed_mtime_ns))
+
+        stable = probe._read_stable_file_twice(
+            self.backup,
+            maximum_bytes=probe.MAX_ARCHIVE_BYTES,
+            expected_length=self.backup.stat().st_size,
+        )
+
+        self.assertEqual(stable.mtime_ns, fixed_mtime_ns)
+        self.assertEqual(stable.byte_length, self.backup.stat().st_size)
+        self.assertEqual(
+            stable.source_sha256,
+            sha256(self.backup.read_bytes()).hexdigest(),
+        )
 
     def test_valid_data_descriptors_are_bound_to_central_values(self):
         output = NonSeekableBytesIO()

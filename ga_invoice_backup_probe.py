@@ -150,6 +150,7 @@ class _ExactRead:
 class _StableRead:
     data: bytes
     byte_length: int
+    mtime_ns: int
     source_sha256: str
     file_identity_sha256: str
     stable_read_count: int
@@ -392,6 +393,7 @@ def _read_stable_file_twice(
     return _StableRead(
         data=second.data,
         byte_length=second.byte_length,
+        mtime_ns=second.mtime_ns,
         source_sha256=sha256(second.data).hexdigest(),
         file_identity_sha256=second.file_identity_sha256,
         stable_read_count=2,
