@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}{{ t('staff_invoice_reconciliation_title') }} | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<section class="mb-6 rounded-xl border border-blue-500/30 bg-gray-900/80 p-6 shadow-xl">
+  <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+    <div class="max-w-3xl">
+      <div class="inline-flex rounded-full border border-blue-400/40 bg-blue-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-widest text-blue-200">
+        {{ t('staff_invoice_reconciliation_read_only') }}
+      </div>
+      <h1 class="mt-4 text-3xl font-semibold text-white">{{ t('staff_invoice_reconciliation_title') }}</h1>
+      <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('staff_invoice_reconciliation_intro') }}</p>
+    </div>
+    <a href="{{ url_for('staff_invoices') }}" class="inline-flex rounded-lg border border-gray-600 bg-gray-800 px-4 py-2 text-sm font-semibold text-gray-100 hover:border-yellow-400">
+      {{ t('staff_invoice_reconciliation_back') }}
+    </a>
+  </div>
+</section>
+
+<section class="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+  <article class="rounded-xl border {% if cohort_count_matches %}border-green-500/30{% else %}border-red-500/40{% endif %} bg-gray-900/70 p-5">
+    <div class="text-xs font-semibold uppercase tracking-widest text-gray-400">{{ t('staff_invoice_reconciliation_cohort') }}</div>
+    <div class="mt-2 text-3xl font-semibold text-white">{{ cohort_count }} / {{ cohort_expected_count }}</div>
+  </article>
+  <article class="rounded-xl border {% if member_with_event_count == cohort_count %}border-green-500/30{% else %}border-red-500/40{% endif %} bg-gray-900/70 p-5">
+    <div class="text-xs font-semibold uppercase tracking-widest text-gray-400">{{ t('staff_invoice_reconciliation_members_imported') }}</div>
+    <div class="mt-2 text-3xl font-semibold text-white">{{ member_with_event_count }} / {{ cohort_count }}</div>
+  </article>
+  <article class="rounded-xl border border-gray-700 bg-gray-900/70 p-5">
+    <div class="text-xs font-semibold uppercase tracking-widest text-gray-400">{{ t('staff_invoice_reconciliation_events') }}</div>
+    <div class="mt-2 text-3xl font-semibold text-white">{{ total_event_count }}</div>
+  </article>
+  <article class="rounded-xl border {% if batch_reconciled %}border-green-500/30{% else %}border-red-500/40{% endif %} bg-gray-900/70 p-5">
+    <div class="text-xs font-semibold uppercase tracking-widest text-gray-400">{{ t('staff_invoice_reconciliation_batch') }}</div>
+    <div class="mt-2 text-lg font-semibold {% if batch_reconciled %}text-green-200{% else %}text-red-200{% endif %}">
+      {{ t('staff_invoice_reconciliation_match') if batch_reconciled else t('staff_invoice_reconciliation_mismatch') }}
+    </div>
+  </article>
+</section>
+
+<section class="mb-6 rounded-xl border border-gray-700 bg-gray-900/70 p-5">
+  <h2 class="text-lg font-semibold text-white">{{ t('staff_invoice_reconciliation_batch') }}</h2>
+  {% if latest_batch %}
+    <dl class="mt-4 grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-4">
+      <div><dt class="text-xs uppercase text-gray-500">ID</dt><dd class="mt-1 break-all text-gray-200">{{ latest_batch.batch_id }}</dd></div>
+      <div><dt class="text-xs uppercase text-gray-500">{{ t('date') }}</dt><dd class="mt-1 text-gray-200">{{ latest_batch.created_at|format_date('%d/%m/%Y %H:%M') }}</dd></div>
+      <div><dt class="text-xs uppercase text-gray-500">{{ t('staff_invoice_reconciliation_members_imported') }}</dt><dd class="mt-1 text-gray-200">{{ batch_member_count_observed }} / {{ latest_batch.member_count }}</dd></div>
+      <div><dt class="text-xs uppercase text-gray-500">{{ t('staff_invoice_reconciliation_events') }}</dt><dd class="mt-1 text-gray-200">{{ batch_event_count_observed }} / {{ latest_batch.event_count }}</dd></div>
+      <div class="md:col-span-2"><dt class="text-xs uppercase text-gray-500">Member-set SHA-256</dt><dd class="mt-1 break-all font-mono text-xs text-gray-400">{{ latest_batch.member_ids_sha256 }}</dd></div>
+      <div class="md:col-span-2"><dt class="text-xs uppercase text-gray-500">Event-set SHA-256</dt><dd class="mt-1 break-all font-mono text-xs text-gray-400">{{ latest_batch.event_set_sha256 }}</dd></div>
+      <div class="md:col-span-2"><dt class="text-xs uppercase text-gray-500">{{ t('staff_invoice_reconciliation_observed_event_hash') }}</dt><dd class="mt-1 break-all font-mono text-xs {% if batch_event_set_matches %}text-green-300{% else %}text-red-300{% endif %}">{{ batch_event_set_observed_sha256 or '—' }}</dd></div>
+      <div><dt class="text-xs uppercase text-gray-500">{{ t('staff_invoice_reconciliation_source_hash') }}</dt><dd class="mt-1 {% if batch_source_hash_matches %}text-green-300{% else %}text-red-300{% endif %}">{{ t('staff_invoice_reconciliation_match') if batch_source_hash_matches else t('staff_invoice_reconciliation_mismatch') }}</dd></div>
+    </dl>
+  {% else %}
+    <p class="mt-3 text-sm text-red-200">{{ t('staff_invoice_reconciliation_no_batch') }}</p>
+  {% endif %}
+</section>
+
+<section class="mb-6 grid gap-4 lg:grid-cols-3">
+  {% for title_key, reasons in [
+    ('staff_invoice_reconciliation_stored_reasons', stored_reason_counts),
+    ('staff_invoice_reconciliation_current_reasons', current_reason_counts),
+    ('staff_invoice_reconciliation_freshness', freshness_reason_counts)
+  ] %}
+    <article class="rounded-xl border border-gray-700 bg-gray-900/70 p-5">
+      <h2 class="text-sm font-semibold uppercase tracking-widest text-gray-300">{{ t(title_key) }}</h2>
+      <ul class="mt-3 space-y-2">
+        {% for item in reasons %}
+          <li class="flex items-start justify-between gap-3 rounded-lg bg-black/20 px-3 py-2 text-sm">
+            <span class="text-gray-200">{{ item.label }}</span><span class="font-semibold text-yellow-200">{{ item.count }}</span>
+          </li>
+        {% else %}
+          <li class="text-sm text-green-200">{{ t('staff_invoice_reconciliation_none') }}</li>
+        {% endfor %}
+      </ul>
+    </article>
+  {% endfor %}
+</section>
+
+<section>
+  <div class="mb-3 flex items-center justify-between">
+    <h2 class="text-lg font-semibold text-white">{{ t('staff_invoice_reconciliation_members') }}</h2>
+    <span class="text-xs text-gray-500">{{ rows|length }}</span>
+  </div>
+  <div class="overflow-x-auto rounded-xl border border-gray-700">
+    <table class="min-w-full text-sm">
+      <thead class="bg-gray-800 text-gray-200">
+        <tr>
+          <th class="p-3 text-left">{{ t('member') }}</th>
+          <th class="p-3 text-left">{{ t('invoice_source') }}</th>
+          <th class="p-3 text-left">{{ t('staff_invoice_reconciliation_stored_status') }}</th>
+          <th class="p-3 text-left">{{ t('staff_invoice_reconciliation_current_status') }}</th>
+          <th class="p-3 text-left">{{ t('staff_invoice_reconciliation_freshness') }}</th>
+          <th class="p-3 text-left">{{ t('staff_invoice_reconciliation_catalog') }}</th>
+          <th class="p-3 text-left">{{ t('staff_invoice_reconciliation_invoice') }}</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-800">
+        {% for row in rows %}
+          <tr class="bg-gray-900/50 align-top" data-member-id="{{ row.member_id }}">
+            <td class="p-3"><div class="font-semibold text-white">{{ row.display_name }}</div><div class="mt-1 text-xs text-yellow-300">#{{ row.member_id }}</div></td>
+            <td class="p-3">
+              {% if row.event %}
+                <div class="text-gray-200">{{ row.event.occurred_at.date()|format_date }}</div>
+                <div class="mt-1 text-gray-300">${{ '%.2f'|format(row.event.dues_cents / 100) }}</div>
+                <div class="mt-1 text-xs text-gray-500">{{ row.event.service_period_start|format_date }} – {{ row.service_period_end|format_date }}</div>
+                <div class="mt-1 text-xs text-gray-500">{{ t('staff_invoice_reconciliation_snapshot') }}: {{ row.state.source_snapshot_at|format_date('%d/%m/%Y %H:%M') if row.state and row.state.source_snapshot_at else '—' }}</div>
+                <div class="mt-1 text-xs text-gray-500">{{ row.event_count }} {{ t('staff_invoice_reconciliation_events') }}</div>
+              {% else %}
+                <span class="text-red-200">{{ t('staff_invoice_reconciliation_no_event') }}</span>
+              {% endif %}
+            </td>
+            <td class="p-3"><div class="font-semibold {% if row.stored_status == 'eligible' %}text-green-200{% else %}text-red-200{% endif %}">{{ row.stored_status|replace('_', ' ')|title }}</div><div class="mt-1 text-xs leading-5 text-gray-300">{{ row.stored_reason_label }}</div></td>
+            <td class="p-3">
+              <div class="font-semibold {% if row.is_ready %}text-green-200{% else %}text-red-200{% endif %}">{{ t('staff_invoice_reconciliation_ready') if row.is_ready else t('staff_invoice_reconciliation_not_ready') }}</div>
+              {% for label in row.non_freshness_blocker_labels %}<div class="mt-1 text-xs leading-5 text-red-100">{{ label }}</div>{% endfor %}
+            </td>
+            <td class="p-3">{% for label in row.freshness_labels %}<div class="text-xs leading-5 text-yellow-100">{{ label }}</div>{% else %}<span class="text-green-200">{{ t('staff_invoice_reconciliation_current') }}</span>{% endfor %}</td>
+            <td class="p-3">
+              {% if row.event %}
+                <div class="text-gray-200">{{ row.event.catalog_plan_name or '—' }}</div>
+                <div class="mt-1 text-xs text-gray-400">{{ row.event.catalog_match_status|upper }} · {{ row.event.catalog_period_match_status|upper }}</div>
+                <div class="mt-1 text-xs text-gray-500">MT {{ row.event.membership_type_id }} / {{ row.event.billing_option_code }}</div>
+              {% else %}—{% endif %}
+            </td>
+            <td class="p-3">{% if row.latest_invoice %}<div class="text-gray-200">{{ t('invoice_status_' ~ row.latest_invoice.status) }}</div><div class="mt-1 text-xs text-gray-500">{{ row.invoice_count }}</div>{% else %}<span class="text-gray-500">{{ t('staff_invoice_reconciliation_none') }}</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

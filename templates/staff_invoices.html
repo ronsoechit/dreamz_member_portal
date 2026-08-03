@@ -14,12 +14,17 @@
         {{ t('staff_invoice_pilot_membership_only') }}
       </p>
     </div>
-    <form method="post" action="{{ url_for('staff_reconcile_invoices') }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="inline-flex rounded-lg bg-yellow-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400">
-        {{ t('staff_invoice_reconcile') }}
-      </button>
-    </form>
+    <div class="flex flex-wrap gap-3">
+      <a href="{{ url_for('staff_invoice_reconciliation') }}" class="inline-flex rounded-lg border border-blue-400/40 bg-blue-500/10 px-5 py-3 text-sm font-semibold text-blue-100 transition hover:bg-blue-500/20">
+        {{ t('staff_invoice_reconciliation_open') }}
+      </a>
+      <form method="post" action="{{ url_for('staff_reconcile_invoices') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="inline-flex rounded-lg bg-yellow-500 px-5 py-3 text-sm font-semibold text-black transition hover:bg-yellow-400">
+          {{ t('staff_invoice_reconcile') }}
+        </button>
+      </form>
+    </div>
   </div>
 </section>
 

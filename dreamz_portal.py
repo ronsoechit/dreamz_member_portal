@@ -5537,6 +5537,8 @@ def can_skip_runtime_schema_prepare():
     endpoint = request.endpoint or ""
     if endpoint in {"static", "web_manifest", "service_worker"}:
         return True
+    if endpoint == "staff_invoice_reconciliation" and request.method == "GET":
+        return True
     if endpoint == "staff_login" and request.method == "GET":
         return True
     if endpoint in {"staff_home", "admin_dashboard"} and request.method == "GET":
@@ -9796,6 +9798,10 @@ INVOICE_REASON_TRANSLATION_KEYS = {
     "catalog_plan_option_missing": "invoice_eligibility_unclassified_other_amount",
     "catalog_price_mismatch": "invoice_eligibility_unclassified_other_amount",
     "membership_payment_uses_account_credit": "invoice_eligibility_unclassified_other_amount",
+    "source_amount_requires_review": "invoice_eligibility_source_amount_requires_review",
+    "legacy_membership_code_requires_review": "invoice_eligibility_legacy_membership_code_requires_review",
+    "remittance_type_requires_review": "invoice_eligibility_remittance_type_requires_review",
+    "missing_member_record": "invoice_eligibility_missing_member_record",
     "catalog_period_requires_review": "invoice_eligibility_period_review_required",
     "source_payload_changed": "invoice_eligibility_source_changed",
     "source_event_not_eligible": "invoice_eligibility_no_positive_membership_event",
@@ -9892,6 +9898,201 @@ def staff_invoice_pilot_context():
             1 for invoice in invoices if invoice.status in {INVOICE_STATUS_READY, INVOICE_STATUS_FAILED}
         ),
         "invoice_issued_count": sum(1 for invoice in invoices if invoice.status == INVOICE_STATUS_ISSUED),
+    }
+
+
+def staff_invoice_reconciliation_context():
+    """Return an exact-cohort reconciliation view without creating any records."""
+    cohort_ids = configured_invoice_pilot_member_ids()
+    cohort_hash = invoice_event_member_ids_sha256(cohort_ids)
+    members = {
+        member.member_id: member
+        for member in Member.query.filter(Member.member_id.in_(cohort_ids)).all()
+    } if cohort_ids else {}
+    states = {
+        state.member_id: state
+        for state in GymAssistantInvoiceSyncState.query.filter(
+            GymAssistantInvoiceSyncState.member_id.in_(cohort_ids)
+        ).all()
+    } if cohort_ids else {}
+    events = (
+        GymAssistantJournalEvent.query
+        .filter(GymAssistantJournalEvent.member_id.in_(cohort_ids))
+        .order_by(
+            GymAssistantJournalEvent.member_id.asc(),
+            GymAssistantJournalEvent.occurred_at.desc(),
+            GymAssistantJournalEvent.id.desc(),
+        )
+        .all()
+    ) if cohort_ids else []
+    invoices = (
+        MemberInvoice.query
+        .filter(MemberInvoice.member_id.in_(cohort_ids))
+        .order_by(MemberInvoice.created_at.desc(), MemberInvoice.id.desc())
+        .all()
+    ) if cohort_ids else []
+    latest_batch = (
+        GymAssistantInvoiceEventBatch.query
+        .filter_by(member_ids_sha256=cohort_hash, member_count=len(cohort_ids))
+        .order_by(
+            GymAssistantInvoiceEventBatch.created_at.desc(),
+            GymAssistantInvoiceEventBatch.id.desc(),
+        )
+        .first()
+    ) if cohort_ids else None
+
+    latest_events = {}
+    event_counts = {member_id: 0 for member_id in cohort_ids}
+    for source_event in events:
+        event_counts[source_event.member_id] += 1
+        latest_events.setdefault(source_event.member_id, source_event)
+    invoices_by_member = {member_id: [] for member_id in cohort_ids}
+    for invoice in invoices:
+        invoices_by_member[invoice.member_id].append(invoice)
+
+    reason_counts = {"stored": {}, "current": {}, "freshness": {}}
+
+    def add_reason(group, reason):
+        if reason:
+            counts = reason_counts[group]
+            counts[reason] = counts.get(reason, 0) + 1
+
+    def reason_label(reason):
+        if reason == "eligible":
+            return translated_text("invoice_eligibility_eligible", current_language())
+        return invoice_reason_text(reason)
+
+    now = invoice_utc_now()
+    rows = []
+    for member_id in sorted(cohort_ids, key=int):
+        member = members.get(member_id)
+        source_event = latest_events.get(member_id)
+        member_invoices = invoices_by_member.get(member_id) or []
+        if source_event:
+            stored_status = source_event.eligibility_status
+            stored_reason = source_event.eligibility_reason or (
+                "eligible" if stored_status == "eligible" else "source_event_not_eligible"
+            )
+            freshness_issues = invoice_event_freshness_issues(source_event, now=now)
+            current_blockers = invoice_event_issue_blockers(source_event)
+        else:
+            stored_status = "missing"
+            stored_reason = "missing_source_event"
+            freshness_issues = ["missing_source_event"]
+            current_blockers = ["missing_source_event"]
+        if member is None:
+            current_blockers = list(dict.fromkeys([
+                *current_blockers,
+                "missing_member_record",
+            ]))
+        non_freshness_blockers = [
+            reason for reason in current_blockers if reason not in freshness_issues
+        ]
+        add_reason("stored", stored_reason)
+        for reason in dict.fromkeys(current_blockers):
+            add_reason("current", reason)
+        for reason in dict.fromkeys(freshness_issues):
+            add_reason("freshness", reason)
+        rows.append({
+            "member_id": member_id,
+            "display_name": display_member_name(member.name) if member else member_id,
+            "state": states.get(member_id),
+            "event": source_event,
+            "event_count": event_counts.get(member_id, 0),
+            "service_period_end": (
+                source_event.service_period_end_exclusive - timedelta(days=1)
+                if source_event else None
+            ),
+            "stored_status": stored_status,
+            "stored_reason_label": reason_label(stored_reason),
+            "freshness_labels": [reason_label(reason) for reason in freshness_issues],
+            "current_blocker_labels": [reason_label(reason) for reason in current_blockers],
+            "non_freshness_blocker_labels": [
+                reason_label(reason) for reason in non_freshness_blockers
+            ],
+            "is_ready": not current_blockers,
+            "invoice_count": len(member_invoices),
+            "latest_invoice": member_invoices[0] if member_invoices else None,
+        })
+
+    def summarized_reasons(group):
+        return [
+            {"reason": reason, "label": reason_label(reason), "count": count}
+            for reason, count in sorted(
+                reason_counts[group].items(),
+                key=lambda item: (-item[1], item[0]),
+            )
+        ]
+
+    batch_events = (
+        [event for event in events if event.last_sync_run_id == latest_batch.sync_run_id]
+        if latest_batch else []
+    )
+    batch_member_ids = {event.member_id for event in batch_events}
+    batch_event_set_observed_sha256 = (
+        invoice_event_set_sha256([
+            {
+                "source_reference": event.source_reference,
+                "source_payload_hash": event.source_payload_hash,
+            }
+            for event in batch_events
+        ])
+        if batch_events else None
+    )
+    batch_event_count_matches = bool(
+        latest_batch and len(batch_events) == latest_batch.event_count
+    )
+    batch_member_set_matches = bool(
+        latest_batch and batch_member_ids == cohort_ids
+    )
+    batch_event_set_matches = bool(
+        latest_batch
+        and batch_event_set_observed_sha256
+        and secrets.compare_digest(
+            batch_event_set_observed_sha256,
+            latest_batch.event_set_sha256,
+        )
+    )
+    batch_source_hash_matches = bool(
+        latest_batch
+        and batch_member_ids == cohort_ids
+        and all(
+            states.get(member_id)
+            and states[member_id].last_sync_run_id == latest_batch.sync_run_id
+            and secrets.compare_digest(
+                str(states[member_id].source_sha256 or ""),
+                latest_batch.source_sha256,
+            )
+            for member_id in cohort_ids
+        )
+    )
+    return {
+        "cohort_count": len(cohort_ids),
+        "cohort_expected_count": 14,
+        "cohort_count_matches": len(cohort_ids) == 14,
+        "cohort_hash": cohort_hash,
+        "member_with_event_count": len(latest_events),
+        "total_event_count": len(events),
+        "latest_batch": latest_batch,
+        "batch_event_count_observed": len(batch_events),
+        "batch_member_count_observed": len(batch_member_ids),
+        "batch_event_count_matches": batch_event_count_matches,
+        "batch_member_set_matches": batch_member_set_matches,
+        "batch_event_set_observed_sha256": batch_event_set_observed_sha256,
+        "batch_event_set_matches": batch_event_set_matches,
+        "batch_source_hash_matches": batch_source_hash_matches,
+        "batch_reconciled": all((
+            batch_event_count_matches,
+            batch_member_set_matches,
+            batch_event_set_matches,
+            batch_source_hash_matches,
+        )),
+        "rows": rows,
+        "stored_reason_counts": summarized_reasons("stored"),
+        "current_reason_counts": summarized_reasons("current"),
+        "freshness_reason_counts": summarized_reasons("freshness"),
+        "ready_count": sum(1 for row in rows if row["is_ready"]),
+        "blocked_count": sum(1 for row in rows if not row["is_ready"]),
     }
 
 
@@ -20401,6 +20602,21 @@ def staff_invoices():
     require_staff_access(required_role="admin")
     ensure_runtime_schema()
     return render_template("staff_invoices.html", **staff_invoice_pilot_context())
+
+
+@app.get("/staff/invoices/reconciliation")
+def staff_invoice_reconciliation():
+    require_staff_access(required_role="admin")
+    response = app.make_response(render_template(
+        "staff_invoice_reconciliation.html",
+        **staff_invoice_reconciliation_context(),
+    ))
+    response.headers["Cache-Control"] = (
+        "private, no-store, no-cache, max-age=0, must-revalidate"
+    )
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.post("/staff/invoices/reconcile")
