@@ -199,6 +199,8 @@
   </div>
   <div class="grid gap-4">
     {% for invoice in invoices %}
+      {% set invoice_is_immutable = invoice.status in ['issued', 'void'] %}
+      {% set selected_invoice_language = invoice.language if invoice_is_immutable else invoice_language_preferences.get(invoice.member_id) %}
       <article class="rounded-xl border border-gray-700 bg-gray-900/70 p-5">
         <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.8fr)]">
           <div>
@@ -228,7 +230,11 @@
               </div>
               <div>
                 <dt class="text-xs uppercase tracking-wide text-gray-500">{{ t('language') }}</dt>
-                <dd class="mt-1 text-gray-200">{{ invoice.language|upper }}</dd>
+                {% if selected_invoice_language %}
+                  <dd class="mt-1 text-gray-200">{{ selected_invoice_language|upper }}</dd>
+                {% else %}
+                  <dd class="mt-1 font-semibold text-yellow-200">{{ t('staff_invoice_language_not_selected') }}</dd>
+                {% endif %}
               </div>
             </dl>
             <p class="mt-4 text-sm leading-6 text-gray-400">{{ t('invoice_membership_only_note') }}</p>
@@ -243,6 +249,11 @@
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <div class="text-xs font-semibold uppercase tracking-widest text-yellow-300">{{ t('staff_invoice_review_title') }}</div>
               <p class="mt-2 text-sm text-gray-300">{{ t('staff_invoice_review_required') }}</p>
+              {% if not selected_invoice_language %}
+                <p class="mt-4 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm leading-5 text-yellow-100">
+                  {{ t('staff_invoice_language_required') }}
+                </p>
+              {% endif %}
               <div class="mt-4 space-y-3">
                 <label class="flex gap-3 text-sm leading-5 text-gray-200">
                   <input class="mt-1 h-4 w-4 accent-yellow-500" type="checkbox" name="review_source_confirmed" value="1" required>
@@ -263,7 +274,7 @@
                   </label>
                 {% endif %}
               </div>
-              <button type="submit" {% if invoice_config_issues %}disabled{% endif %} class="mt-5 w-full rounded-lg px-4 py-3 text-sm font-semibold {% if invoice_config_issues %}cursor-not-allowed bg-gray-700 text-gray-400{% else %}bg-yellow-500 text-black hover:bg-yellow-400{% endif %}">
+              <button type="submit" {% if invoice_config_issues or not selected_invoice_language %}disabled{% endif %} class="mt-5 w-full rounded-lg px-4 py-3 text-sm font-semibold {% if invoice_config_issues or not selected_invoice_language %}cursor-not-allowed bg-gray-700 text-gray-400{% else %}bg-yellow-500 text-black hover:bg-yellow-400{% endif %}">
                 {{ t('staff_invoice_issue') }}
               </button>
             </form>

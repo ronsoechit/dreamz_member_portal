@@ -2,11 +2,14 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 import json
+import os
 import tempfile
 import unittest
 
 from flask import session
 from pypdf import PdfReader
+
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
 from dreamz_portal import (
     GymAssistantInvoiceSyncState,
@@ -172,8 +175,18 @@ class MemberInvoicePilotTests(unittest.TestCase):
         db.session.commit()
         return invoice
 
-    def enable_issuing(self):
+    def enable_issuing(self, language="en"):
         app.config["INVOICE_ISSUING_ENABLED"] = True
+        if (
+            language
+            and Member.query.filter_by(member_id=PILOT_MEMBER_ID).first()
+            and not db.session.get(MemberPortalPreference, PILOT_MEMBER_ID)
+        ):
+            db.session.add(MemberPortalPreference(
+                member_id=PILOT_MEMBER_ID,
+                invoice_language=language,
+            ))
+            db.session.commit()
 
     def test_sync_and_draft_use_membership_dues_only(self):
         self.add_pilot_member(plan_type="new current plan")
@@ -473,6 +486,7 @@ class MemberInvoicePilotTests(unittest.TestCase):
     def test_issue_creates_dutch_paid_pdf_without_account_amounts(self):
         self.add_pilot_member()
         invoice = self.prepare_draft()
+        self.assertEqual(invoice.language, "en")
         db.session.add(MemberPortalPreference(member_id=PILOT_MEMBER_ID, invoice_language="nl"))
         db.session.commit()
         self.enable_issuing()
@@ -496,6 +510,75 @@ class MemberInvoicePilotTests(unittest.TestCase):
         self.assertIn("$65.00", text)
         self.assertNotIn("$178.25", text)
         self.assertNotIn("$432.10", text)
+
+    def test_missing_language_preference_blocks_before_number_and_pdf(self):
+        self.add_pilot_member()
+        invoice = self.prepare_draft()
+        self.enable_issuing(language=None)
+
+        with self.assertRaisesRegex(ValueError, "language preference is not confirmed"):
+            issue_member_invoice(invoice, "ron")
+
+        self.assertIsNone(invoice.invoice_number)
+        self.assertIsNone(invoice.storage_uri)
+        self.assertIsNone(invoice.pdf_sha256)
+        self.assertEqual(invoice.status, "ready_for_review")
+        self.assertEqual(list(Path(self.temp_dir.name).rglob("*.pdf")), [])
+
+    def test_invalid_language_preference_blocks_instead_of_falling_back_to_english(self):
+        self.add_pilot_member()
+        invoice = self.prepare_draft()
+        db.session.add(MemberPortalPreference(
+            member_id=PILOT_MEMBER_ID,
+            invoice_language="invalid",
+        ))
+        db.session.commit()
+        self.enable_issuing(language=None)
+
+        with self.assertRaisesRegex(ValueError, "language preference is not confirmed"):
+            issue_member_invoice(invoice, "ron")
+
+        self.assertIsNone(invoice.invoice_number)
+        self.assertIsNone(invoice.storage_uri)
+
+    def test_issued_pdf_and_language_remain_immutable_after_preference_change(self):
+        self.add_pilot_member()
+        invoice = self.prepare_draft()
+        preference = MemberPortalPreference(
+            member_id=PILOT_MEMBER_ID,
+            invoice_language="nl",
+        )
+        db.session.add(preference)
+        db.session.commit()
+        self.enable_issuing()
+        issue_member_invoice(invoice, "ron")
+        db.session.commit()
+        original_number = invoice.invoice_number
+        original_hash = invoice.pdf_sha256
+        original_bytes = Path(invoice.storage_uri).read_bytes()
+
+        preference.invoice_language = "es"
+        preference.updated_at = datetime.now()
+        db.session.commit()
+        with self.client.session_transaction() as member_session:
+            member_session["member_id"] = PILOT_MEMBER_ID
+
+        download = self.client.get(f"/account/invoices/{invoice.id}/download")
+        with self.client.session_transaction() as staff_session:
+            staff_session.pop("member_id", None)
+            staff_session["staff_role"] = "admin"
+            staff_session["staff_username"] = "ron"
+        staff_page = self.client.get("/staff/invoices")
+
+        db.session.refresh(invoice)
+        self.assertEqual(download.status_code, 200)
+        self.assertEqual(download.data, original_bytes)
+        self.assertEqual(staff_page.status_code, 200)
+        self.assertIn(">NL</dd>", staff_page.get_data(as_text=True))
+        self.assertNotIn(">ES</dd>", staff_page.get_data(as_text=True))
+        self.assertEqual(invoice.invoice_number, original_number)
+        self.assertEqual(invoice.language, "nl")
+        self.assertEqual(invoice.pdf_sha256, original_hash)
 
     def test_staff_review_requires_all_three_checks(self):
         self.add_pilot_member()
@@ -580,10 +663,32 @@ class MemberInvoicePilotTests(unittest.TestCase):
         self.assertIn("Pilot Member", body)
         self.assertIn("$65.00", body)
         self.assertIn(str(PILOT_TRANSACTION_ID), body)
-        self.assertIn(">EN</dd>", body)
+        self.assertIn("Not selected", body)
+        self.assertRegex(body, r'<button type="submit" disabled[^>]*>')
         self.assertIn("$243.25", body)
         self.assertIn("$178.25", body)
         self.assertNotIn("$432.10", body)
+
+    def test_staff_pilot_screen_uses_live_draft_preference(self):
+        self.add_pilot_member()
+        self.prepare_draft()
+        db.session.add(MemberPortalPreference(
+            member_id=PILOT_MEMBER_ID,
+            invoice_language="nl",
+        ))
+        db.session.commit()
+        self.enable_issuing()
+        with self.client.session_transaction() as staff_session:
+            staff_session["staff_role"] = "admin"
+            staff_session["staff_username"] = "ron"
+
+        response = self.client.get("/staff/invoices")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_data(as_text=True)
+        self.assertIn(">NL</dd>", body)
+        self.assertNotIn("Not selected", body)
+        self.assertNotRegex(body, r'<button type="submit" disabled[^>]*>')
 
     def test_member_can_only_download_own_issued_invoice(self):
         self.add_pilot_member()

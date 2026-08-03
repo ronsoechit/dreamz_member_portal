@@ -9285,9 +9285,19 @@ def invoice_decimal(value, field_name="amount"):
     return decimal_value.quantize(INVOICE_CENT)
 
 
+def confirmed_invoice_language_for_member(member_id):
+    member_id = str(member_id or "").strip()
+    if not member_id:
+        return None
+    preference = db.session.get(MemberPortalPreference, member_id)
+    if not preference:
+        return None
+    language = str(preference.invoice_language or "").strip().lower()
+    return language if language in LANGUAGES else None
+
+
 def invoice_language_for_member(member_id):
-    preference = db.session.get(MemberPortalPreference, str(member_id))
-    return normalize_language(preference.invoice_language if preference else DEFAULT_LANGUAGE)
+    return confirmed_invoice_language_for_member(member_id) or DEFAULT_LANGUAGE
 
 
 def persist_member_invoice_language_preference(member_id, language, *, commit=True):
@@ -9716,6 +9726,9 @@ def issue_member_invoice(invoice, actor):
     member = Member.query.filter_by(member_id=invoice.member_id).first()
     if not member:
         raise ValueError("Invoice member was not found.")
+    issue_language = confirmed_invoice_language_for_member(invoice.member_id)
+    if not issue_language:
+        raise ValueError("Invoice language preference is not confirmed.")
     now = datetime.now()
     issue_date = current_portal_datetime().date()
     if not invoice.invoice_number:
@@ -9734,7 +9747,7 @@ def issue_member_invoice(invoice, actor):
     invoice.crib_number = app.config["INVOICE_CRIB_NUMBER"]
     invoice.contact_email = app.config["INVOICE_CONTACT_EMAIL"]
     invoice.contact_phone = app.config["INVOICE_CONTACT_PHONE"]
-    invoice.language = invoice_language_for_member(invoice.member_id)
+    invoice.language = issue_language
     invoice.member_name = display_member_name(member.name) or invoice.member_name
     invoice.member_email = member.email
     invoice.reviewed_at = now
@@ -9857,6 +9870,16 @@ def staff_invoice_pilot_context():
         .order_by(MemberInvoice.payment_date.desc(), MemberInvoice.created_at.desc())
         .all()
     ) if allowed_ids else []
+    preference_rows = (
+        MemberPortalPreference.query
+        .filter(MemberPortalPreference.member_id.in_(allowed_ids))
+        .all()
+    ) if allowed_ids else []
+    invoice_language_preferences = {}
+    for preference in preference_rows:
+        language = str(preference.invoice_language or "").strip().lower()
+        if language in LANGUAGES:
+            invoice_language_preferences[preference.member_id] = language
     invoices_by_event = {invoice.source_event_id: invoice for invoice in invoices}
     event_rows = []
     for event in events:
@@ -9894,6 +9917,7 @@ def staff_invoice_pilot_context():
         "pilot_members": pilot_members,
         "event_rows": event_rows,
         "invoices": invoices,
+        "invoice_language_preferences": invoice_language_preferences,
         "invoice_pending_count": sum(
             1 for invoice in invoices if invoice.status in {INVOICE_STATUS_READY, INVOICE_STATUS_FAILED}
         ),
