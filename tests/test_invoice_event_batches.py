@@ -276,6 +276,138 @@ class InvoiceEventBatchApiTests(unittest.TestCase):
                 self.assertEqual(GymAssistantInvoiceSyncState.query.count(), 0)
                 self.assertEqual(SyncRun.query.count(), 0)
 
+    def test_preserves_legacy_source_code_boundaries_but_blocks_invoicing(self):
+        boundaries = (
+            (-2_147_483_648, -2_147_483_648),
+            (0xFFFFFFFF, 2_147_483_647),
+        )
+        events = []
+        for index, member_id in enumerate(COHORT):
+            membership_type_id, billing_option_code = boundaries[index]
+            events.append(self.event(
+                member_id,
+                membership_type_id=membership_type_id,
+                billing_option_code=billing_option_code,
+                catalog_plan_name=None,
+                catalog_base_amount_cents=None,
+                catalog_interval_count=None,
+                catalog_interval_unit=None,
+                catalog_match_status="missing",
+                catalog_period_match_status="missing",
+            ))
+
+        response = self.post(self.payload(
+            batch_id="invoice-batch-legacy-code-boundaries",
+            events=events,
+        ))
+
+        self.assertEqual(response.status_code, 201, response.get_data(as_text=True))
+        stored = GymAssistantJournalEvent.query.order_by(
+            GymAssistantJournalEvent.member_id.asc()
+        ).all()
+        self.assertEqual(
+            [(event.membership_type_id, event.billing_option_code) for event in stored],
+            list(boundaries),
+        )
+        self.assertTrue(all(event.eligibility_status == "blocked" for event in stored))
+        self.assertTrue(all(
+            event.eligibility_reason == "catalog_plan_option_missing"
+            for event in stored
+        ))
+        self.assertEqual(MemberInvoice.query.count(), 0)
+
+    def test_rejects_source_codes_outside_storage_envelope_atomically(self):
+        invalid_values = (
+            ("membership_type_id", -2_147_483_649),
+            ("membership_type_id", 0x100000000),
+            ("billing_option_code", -2_147_483_649),
+            ("billing_option_code", 2_147_483_648),
+            ("remittance_type", -2_147_483_649),
+            ("remittance_type", 2_147_483_648),
+        )
+        for index, (field_name, value) in enumerate(invalid_values):
+            with self.subTest(field_name=field_name, value=value):
+                events = [self.event(member_id) for member_id in COHORT]
+                events[0][field_name] = value
+                payload = self.payload(
+                    batch_id=f"invoice-batch-source-code-range-{index}",
+                    events=events,
+                )
+
+                response = self.post(payload)
+
+                self.assertEqual(response.status_code, 422)
+                self.assertEqual(response.json["code"], "invalid_event")
+                self.assertEqual(GymAssistantInvoiceEventBatch.query.count(), 0)
+                self.assertEqual(GymAssistantJournalEvent.query.count(), 0)
+                self.assertEqual(GymAssistantInvoiceSyncState.query.count(), 0)
+                self.assertEqual(SyncRun.query.count(), 0)
+
+    def test_rejects_source_amounts_outside_storage_envelope_atomically(self):
+        for index, field_name in enumerate((
+            "dues_cents",
+            "other_contract_fee_cents",
+            "source_tax_cents",
+            "tender_total_cents",
+            "balance_payment_cents",
+            "catalog_base_amount_cents",
+        )):
+            with self.subTest(field_name=field_name):
+                events = [self.event(member_id) for member_id in COHORT]
+                events[0][field_name] = 2_147_483_648
+                payload = self.payload(
+                    batch_id=f"invoice-batch-source-amount-range-{index}",
+                    events=events,
+                )
+
+                response = self.post(payload)
+
+                self.assertEqual(response.status_code, 422)
+                self.assertEqual(response.json["code"], "invalid_event")
+                self.assertEqual(GymAssistantInvoiceEventBatch.query.count(), 0)
+                self.assertEqual(GymAssistantJournalEvent.query.count(), 0)
+                self.assertEqual(GymAssistantInvoiceSyncState.query.count(), 0)
+                self.assertEqual(SyncRun.query.count(), 0)
+
+    def test_ingests_historical_signed_amounts_without_making_invoices(self):
+        events = [
+            self.event(
+                COHORT[0],
+                is_voided=True,
+                dues_cents=-500,
+                tender_total_cents=-500,
+                is_positive_membership_payment=False,
+                catalog_plan_name=None,
+                catalog_base_amount_cents=None,
+                catalog_interval_count=None,
+                catalog_interval_unit=None,
+                catalog_match_status="missing",
+                catalog_period_match_status="missing",
+            ),
+            self.event(
+                COHORT[1],
+                dues_cents=20_000_000,
+                tender_total_cents=20_000_000,
+                catalog_base_amount_cents=20_000_000,
+            ),
+        ]
+
+        response = self.post(self.payload(
+            batch_id="invoice-batch-historical-signed-amounts",
+            events=events,
+        ))
+
+        self.assertEqual(response.status_code, 201, response.get_data(as_text=True))
+        stored = GymAssistantJournalEvent.query.order_by(
+            GymAssistantJournalEvent.member_id.asc()
+        ).all()
+        self.assertEqual(stored[0].dues_cents, -500)
+        self.assertEqual(stored[0].eligibility_status, "voided")
+        self.assertEqual(stored[1].dues_cents, 20_000_000)
+        self.assertEqual(stored[1].eligibility_status, "blocked")
+        self.assertEqual(stored[1].eligibility_reason, "source_amount_requires_review")
+        self.assertEqual(MemberInvoice.query.count(), 0)
+
     def test_exact_duplicate_returns_receipt_without_writes(self):
         payload = self.payload()
         first = self.post(payload)
@@ -563,7 +695,7 @@ class InvoiceEventBatchApiTests(unittest.TestCase):
         journal = "\n".join((
             (
                 "c20260215!1558 7001 1771185480 0 990001 91001 3 0 0 0 29"
-                "|1144074289 257 20260201 20260301 6500 0 0 6500 0 0 0"
+                "|1144074289 -1 20260201 20260301 6500 0 0 6500 0 0 0"
             ),
             (
                 "c20260215!1559 7002 1771185540 0 990002 91002 3 0 0 0 29"
@@ -603,6 +735,10 @@ class InvoiceEventBatchApiTests(unittest.TestCase):
         verified = batch_module.verify_invoice_batch_receipt(payload, response.json)
         self.assertEqual(verified["status"], "success")
         self.assertEqual(GymAssistantJournalEvent.query.count(), 2)
+        legacy_event = GymAssistantJournalEvent.query.filter_by(member_id=COHORT[0]).one()
+        self.assertEqual(legacy_event.billing_option_code, -1)
+        self.assertEqual(legacy_event.eligibility_status, "blocked")
+        self.assertEqual(legacy_event.eligibility_reason, "catalog_plan_option_missing")
         self.assertEqual(GymAssistantInvoiceSyncState.query.count(), 2)
         self.assertEqual(GymAssistantInvoiceEventBatch.query.count(), 1)
         self.assertEqual(SyncRun.query.count(), 1)

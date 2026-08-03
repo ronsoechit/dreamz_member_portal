@@ -7876,7 +7876,10 @@ INVOICE_EVENT_BATCH_MAX_BODY_BYTES = 4_000_000
 INVOICE_EVENT_BATCH_MAX_EVENTS = 20_000
 INVOICE_EVENT_BATCH_MAX_SHORT_FRAGMENTS = 8
 INVOICE_EVENT_BATCH_LOCK_NAMESPACE = "dreamz-ga-invoice-event-batches-v1"
+DATABASE_SIGNED_INT32_MIN = -2_147_483_648
 DATABASE_SIGNED_INT32_MAX = 2_147_483_647
+GYMASSISTANT_UNSIGNED_INT32_MAX = 0xFFFFFFFF
+INVOICE_EVENT_MAX_ELIGIBLE_CENTS = 10_000_000
 INVOICE_EVENT_BATCH_REQUEST_FIELDS = frozenset({
     "schema",
     "batch_id",
@@ -8218,12 +8221,14 @@ def normalize_invoice_membership_event(raw_event, *, allowed_member_ids=None):
         "membership_type_id": parse_invoice_sync_int(
             raw_event.get("membership_type_id"),
             "membership_type_id",
-            minimum=1,
+            minimum=DATABASE_SIGNED_INT32_MIN,
+            maximum=GYMASSISTANT_UNSIGNED_INT32_MAX,
         ),
         "billing_option_code": parse_invoice_sync_int(
             raw_event.get("billing_option_code"),
             "billing_option_code",
-            minimum=0,
+            minimum=DATABASE_SIGNED_INT32_MIN,
+            maximum=DATABASE_SIGNED_INT32_MAX,
         ),
         "service_period_start": parse_invoice_sync_date(
             raw_event.get("service_period_start"),
@@ -8236,51 +8241,52 @@ def normalize_invoice_membership_event(raw_event, *, allowed_member_ids=None):
         "dues_cents": parse_invoice_sync_int(
             raw_event.get("dues_cents"),
             "dues_cents",
-            minimum=0,
-            maximum=10_000_000,
+            minimum=DATABASE_SIGNED_INT32_MIN,
+            maximum=DATABASE_SIGNED_INT32_MAX,
         ),
         "other_contract_fee_cents": parse_invoice_sync_int(
             raw_event.get("other_contract_fee_cents"),
             "other_contract_fee_cents",
-            minimum=0,
-            maximum=10_000_000,
+            minimum=DATABASE_SIGNED_INT32_MIN,
+            maximum=DATABASE_SIGNED_INT32_MAX,
         ),
         "source_tax_cents": parse_invoice_sync_int(
             raw_event.get("source_tax_cents"),
             "source_tax_cents",
-            minimum=0,
-            maximum=10_000_000,
+            minimum=DATABASE_SIGNED_INT32_MIN,
+            maximum=DATABASE_SIGNED_INT32_MAX,
         ),
         "tender_total_cents": parse_invoice_sync_int(
             raw_event.get("tender_total_cents"),
             "tender_total_cents",
-            minimum=-10_000_000,
-            maximum=10_000_000,
+            minimum=DATABASE_SIGNED_INT32_MIN,
+            maximum=DATABASE_SIGNED_INT32_MAX,
         ),
         "remittance_type": parse_invoice_sync_int(
             raw_event.get("remittance_type"),
             "remittance_type",
-            minimum=0,
+            minimum=DATABASE_SIGNED_INT32_MIN,
+            maximum=DATABASE_SIGNED_INT32_MAX,
         ),
         "remittance_reference": parse_invoice_sync_int(
             raw_event.get("remittance_reference"),
             "remittance_reference",
-            minimum=-10_000_000,
+            minimum=DATABASE_SIGNED_INT32_MIN,
             maximum=DATABASE_SIGNED_INT32_MAX,
             optional=True,
         ),
         "balance_payment_cents": parse_invoice_sync_int(
             raw_event.get("balance_payment_cents"),
             "balance_payment_cents",
-            minimum=-10_000_000,
-            maximum=10_000_000,
+            minimum=DATABASE_SIGNED_INT32_MIN,
+            maximum=DATABASE_SIGNED_INT32_MAX,
         ),
         "catalog_plan_name": str(raw_event.get("catalog_plan_name") or "").strip()[:255] or None,
         "catalog_base_amount_cents": parse_invoice_sync_int(
             raw_event.get("catalog_base_amount_cents"),
             "catalog_base_amount_cents",
-            minimum=0,
-            maximum=10_000_000,
+            minimum=DATABASE_SIGNED_INT32_MIN,
+            maximum=DATABASE_SIGNED_INT32_MAX,
             optional=True,
         ),
         "catalog_interval_count": parse_invoice_sync_int(
@@ -8345,6 +8351,17 @@ def normalize_invoice_membership_event(raw_event, *, allowed_member_ids=None):
 def invoice_event_eligibility(values, member):
     if values["is_voided"]:
         return "voided", "source_event_voided"
+    source_amounts = (
+        values["dues_cents"],
+        values["other_contract_fee_cents"],
+        values["source_tax_cents"],
+        values["tender_total_cents"],
+        values["balance_payment_cents"],
+    )
+    if values["catalog_base_amount_cents"] is not None:
+        source_amounts += (values["catalog_base_amount_cents"],)
+    if any(abs(amount) > INVOICE_EVENT_MAX_ELIGIBLE_CENTS for amount in source_amounts):
+        return "blocked", "source_amount_requires_review"
     if values["dues_cents"] <= 0:
         return "blocked", "no_positive_membership_dues"
     if values["tender_total_cents"] <= 0:
@@ -8373,6 +8390,10 @@ def invoice_event_eligibility(values, member):
         or values["dues_cents"] != values["catalog_base_amount_cents"]
     ):
         return "blocked", "catalog_price_mismatch"
+    if values["membership_type_id"] <= 0 or values["billing_option_code"] < 0:
+        return "blocked", "legacy_membership_code_requires_review"
+    if values["remittance_type"] < 0:
+        return "blocked", "remittance_type_requires_review"
 
     billing_cents = member_billing_amount_cents(member)
     if billing_cents is None or billing_cents <= 0:
