@@ -87,7 +87,8 @@
     </label>
     <label class="block">
       <span class="dreamz-field-label">{{ t('group_class_type') }}</span>
-      <select name="class_type_id" class="dreamz-field mt-1">
+      <select id="new-lesson-class-type" name="class_type_id" required class="dreamz-field mt-1">
+        <option value="" selected disabled>{{ t('group_class_select_existing_type') }}</option>
         {% for class_type in class_types %}<option value="{{ class_type.id }}">{{ class_type.name }}</option>{% endfor %}
       </select>
     </label>
@@ -104,7 +105,7 @@
     </label>
     <label class="block rounded border border-yellow-500/30 bg-yellow-500/10 p-3 lg:col-span-2">
       <span class="dreamz-field-label text-yellow-200">{{ t('group_class_new_type_name') }}</span>
-      <input name="new_class_name" maxlength="80" class="dreamz-field mt-1" placeholder="{{ t('group_class_new_type_placeholder') }}">
+      <input id="new-lesson-class-name" name="new_class_name" maxlength="80" class="dreamz-field mt-1" placeholder="{{ t('group_class_new_type_placeholder') }}">
       <span class="mt-2 block text-xs leading-5 text-gray-300">{{ t('group_class_new_type_help') }}</span>
     </label>
     <label class="block">
@@ -303,4 +304,23 @@
     {% endfor %}
   </div>
 </details>
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const existingType = document.getElementById("new-lesson-class-type");
+    const newTypeName = document.getElementById("new-lesson-class-name");
+    if (!existingType || !newTypeName) return;
+
+    const syncClassTypeChoice = () => {
+      const isCreatingNewType = Boolean(newTypeName.value.trim());
+      if (isCreatingNewType) existingType.value = "";
+      existingType.disabled = isCreatingNewType;
+      existingType.required = !isCreatingNewType;
+      existingType.classList.toggle("cursor-not-allowed", isCreatingNewType);
+      existingType.classList.toggle("opacity-50", isCreatingNewType);
+    };
+
+    newTypeName.addEventListener("input", syncClassTypeChoice);
+    syncClassTypeChoice();
+  });
+</script>
 {% endblock %}

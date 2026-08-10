@@ -1013,6 +1013,9 @@ class StaffRouteTests(unittest.TestCase):
         self.assertIn("DANCE FIT", body)
         self.assertIn("New class type and draft lesson saved", body)
         self.assertIn('name="new_class_name"', body)
+        self.assertIn("Select an existing class type", body)
+        self.assertIn('id="new-lesson-class-type"', body)
+        self.assertIn('id="new-lesson-class-name"', body)
 
     def test_new_class_name_reuses_existing_class_type(self):
         seed_group_class_schedule()
