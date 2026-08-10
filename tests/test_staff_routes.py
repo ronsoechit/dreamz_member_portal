@@ -956,6 +956,100 @@ class StaffRouteTests(unittest.TestCase):
         schedule = GroupClassSchedule.query.one()
         self.assertTrue(schedule.has_unpublished_changes)
 
+    def test_manager_can_create_new_class_type_while_adding_draft_lesson(self):
+        seed_group_class_schedule()
+        selected_type_id = GroupClassType.query.filter_by(name="ZUMBA").one().id
+
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "christel"
+            sess["_csrf_token"] = "token"
+
+        self.client.get("/staff/group-classes")
+        initial_type_count = GroupClassType.query.count()
+        initial_draft_count = GroupClassDraftOccurrence.query.count()
+
+        response = self.client.post(
+            "/staff/group-classes/occurrences",
+            data={
+                "csrf_token": "token",
+                "day_of_week": "6",
+                "start_time": "11:00",
+                "end_time": "12:00",
+                "class_type_id": str(selected_type_id),
+                "new_class_name": "  dance   fit  ",
+                "room": "aerobics room",
+                "instructor": "Christel",
+                "capacity": "24",
+                "status": "scheduled",
+                "is_bookable": "1",
+                "is_published": "1",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(GroupClassType.query.count(), initial_type_count + 1)
+        self.assertEqual(GroupClassDraftOccurrence.query.count(), initial_draft_count + 1)
+        class_type = GroupClassType.query.filter_by(name="DANCE FIT").one()
+        self.assertEqual(class_type.category, "other")
+        self.assertEqual(class_type.intensity, "medium")
+        added = GroupClassDraftOccurrence.query.filter_by(
+            source_occurrence_id=None,
+            class_type_id=class_type.id,
+            day_of_week=6,
+        ).one()
+        self.assertEqual(added.instructor, "Christel")
+        self.assertEqual(added.updated_by, "christel")
+        self.assertEqual(
+            GroupClassScheduleAudit.query.filter_by(action="class_type_added", actor="christel").count(),
+            1,
+        )
+        self.assertEqual(
+            GroupClassScheduleAudit.query.filter_by(action="draft_added", actor="christel").count(),
+            1,
+        )
+        body = response.get_data(as_text=True)
+        self.assertIn("DANCE FIT", body)
+        self.assertIn("New class type and draft lesson saved", body)
+        self.assertIn('name="new_class_name"', body)
+
+    def test_new_class_name_reuses_existing_class_type(self):
+        seed_group_class_schedule()
+        zumba = GroupClassType.query.filter_by(name="ZUMBA").one()
+
+        with self.client.session_transaction() as sess:
+            sess["staff_role"] = "manager"
+            sess["staff_username"] = "christel"
+            sess["_csrf_token"] = "token"
+
+        self.client.get("/staff/group-classes")
+        initial_type_count = GroupClassType.query.count()
+        response = self.client.post(
+            "/staff/group-classes/occurrences",
+            data={
+                "csrf_token": "token",
+                "day_of_week": "6",
+                "start_time": "12:00",
+                "end_time": "13:00",
+                "new_class_name": "  zumba ",
+                "room": "AEROBICS ROOM",
+                "status": "scheduled",
+                "is_bookable": "1",
+                "is_published": "1",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(GroupClassType.query.count(), initial_type_count)
+        GroupClassDraftOccurrence.query.filter_by(
+            source_occurrence_id=None,
+            class_type_id=zumba.id,
+            day_of_week=6,
+        ).one()
+        self.assertEqual(GroupClassScheduleAudit.query.filter_by(action="class_type_added").count(), 0)
+
     def test_staff_publish_sends_complete_schedule_to_wordpress_webhook(self):
         seed_group_class_schedule()
         app.config["WORDPRESS_SCHEDULE_WEBHOOK_URL"] = (

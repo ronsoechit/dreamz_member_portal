@@ -102,6 +102,11 @@
       <span class="dreamz-field-label">{{ t('group_class_instructor') }}</span>
       <input name="instructor" class="dreamz-field mt-1">
     </label>
+    <label class="block rounded border border-yellow-500/30 bg-yellow-500/10 p-3 lg:col-span-2">
+      <span class="dreamz-field-label text-yellow-200">{{ t('group_class_new_type_name') }}</span>
+      <input name="new_class_name" maxlength="80" class="dreamz-field mt-1" placeholder="{{ t('group_class_new_type_placeholder') }}">
+      <span class="mt-2 block text-xs leading-5 text-gray-300">{{ t('group_class_new_type_help') }}</span>
+    </label>
     <label class="block">
       <span class="dreamz-field-label">{{ t('group_class_capacity') }}</span>
       <input name="capacity" type="number" min="0" class="dreamz-field mt-1">

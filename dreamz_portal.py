@@ -4647,6 +4647,10 @@ def parse_group_class_time(value):
         abort(400, translated_text("group_class_invalid_time", current_language()))
 
 
+def normalize_group_class_type_name(value):
+    return re.sub(r"\s+", " ", (value or "").strip()).upper()
+
+
 def group_class_record_snapshot(record):
     return {
         "class_type_id": record.class_type_id,
@@ -19326,10 +19330,6 @@ def staff_group_class_occurrence_save():
         ).first()
     is_new = draft is None
     old_data = group_class_record_snapshot(draft) if not is_new else None
-    class_type_id = parse_optional_int(request.form.get("class_type_id"))
-    class_type = db.session.get(GroupClassType, class_type_id) if class_type_id else None
-    if not class_type:
-        abort(400, translated_text("group_class_required_fields", current_language()))
 
     try:
         day_of_week = int(request.form.get("day_of_week", ""))
@@ -19346,12 +19346,36 @@ def staff_group_class_occurrence_save():
     status = request.form.get("status", "scheduled").strip()
     if status not in GROUP_CLASS_OCCURRENCE_STATUSES:
         status = "scheduled"
-    if class_type.name == "RESERVED":
-        status = "reserved"
 
     room = request.form.get("room", "").strip().upper()
     if not room:
         abort(400, translated_text("group_class_required_fields", current_language()))
+
+    new_class_name = normalize_group_class_type_name(request.form.get("new_class_name"))
+    if len(new_class_name) > 80:
+        abort(400, translated_text("group_class_type_name_too_long", current_language()))
+
+    class_type_was_created = False
+    if new_class_name:
+        class_type = GroupClassType.query.filter_by(name=new_class_name).first()
+        if not class_type:
+            class_type = GroupClassType(
+                name=new_class_name,
+                category="other",
+                intensity="medium",
+                default_bookable=True,
+                default_publish=True,
+            )
+            db.session.add(class_type)
+            class_type_was_created = True
+    else:
+        class_type_id = parse_optional_int(request.form.get("class_type_id"))
+        class_type = db.session.get(GroupClassType, class_type_id) if class_type_id else None
+    if not class_type:
+        abort(400, translated_text("group_class_required_fields", current_language()))
+
+    if class_type.name == "RESERVED":
+        status = "reserved"
 
     if is_new:
         draft = GroupClassDraftOccurrence(schedule_id=schedule.id)
@@ -19387,6 +19411,19 @@ def staff_group_class_occurrence_save():
     schedule.draft_updated_at = datetime.now()
     schedule.draft_updated_by = draft.updated_by
     schedule.updated_at = datetime.now()
+    if class_type_was_created:
+        add_group_class_schedule_audit(
+            schedule,
+            "class_type_added",
+            actor=draft.updated_by,
+            new_data={
+                "name": class_type.name,
+                "category": class_type.category,
+                "intensity": class_type.intensity,
+                "default_bookable": class_type.default_bookable,
+                "default_publish": class_type.default_publish,
+            },
+        )
     add_group_class_schedule_audit(
         schedule,
         "draft_added" if is_new else "draft_updated",
@@ -19396,7 +19433,10 @@ def staff_group_class_occurrence_save():
         new_data=new_data,
     )
     db.session.commit()
-    flash(translated_text("group_class_draft_saved", current_language()))
+    flash(translated_text(
+        "group_class_new_type_and_draft_saved" if class_type_was_created else "group_class_draft_saved",
+        current_language(),
+    ))
     return redirect(url_for("staff_group_classes"))
 
 
