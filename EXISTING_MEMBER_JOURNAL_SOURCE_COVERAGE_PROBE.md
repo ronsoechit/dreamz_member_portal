@@ -1,67 +1,66 @@
-# Existing-member Journal source coverage probe
+# Existing-member official Journal export preflight
 
-Status: local source only; not installed or run on `DREAMZ-FRNTDSK`.
+Status: local source only; not installed or enabled on `DREAMZ-FRNTDSK`.
 
-`ga_journal_source_coverage_probe.py` is a standalone, stdout-only read-only
-probe for the existing-member PRE/POST Journal evidence design. It does not
-claim Portal work, use a token, call a network endpoint, mutate Gym Assistant,
-or enable the evidence feature.
+`ga_journal_source_coverage_probe.py` is a stdout-only, read-only preflight for
+the existing-member PRE/POST Journal evidence flow. It does not claim Portal
+work, call the network, write a file, control Gym Assistant or enable evidence.
 
-## Exact source contract
+## Correct source contract
 
-The production CLI is deliberately bound to the verified Dreamz locator:
+The live source is the proprietary binary file:
 
-`C:\Gym Assistant 2.6\Data\Journal.jtx`
+`C:\Gym Assistant 2.6\Data\Journal.dat`
 
-The caller supplies the exact `Data` directory, not a journal file and not the
-Gym Assistant install directory. The probe:
+It is never parsed as JTX. The older `Backup\Journal.jtx` is a historical
+export and is not treated as the current journal. At runtime, Portal Sync must
+ask Gym Assistant itself to execute **Export Journal**, save that result to a
+temporary path outside the Gym Assistant tree, validate every CRLF-delimited
+record with classifier `dreamz.ga.journal.export-records.v2`, use only hashes
+and counts for evidence, and then delete the temporary export. A version-only
+or otherwise recordless export is rejected.
 
-- accepts only `Gym Assistant 2.6\Data\Journal.jtx` under the hash-bound active
-  Dreamz data-root;
-- rejects UNC, mapped-drive, traversal and alternate-drive input through a
-  purely lexical exact-`C:` check before any filesystem operation;
-- rejects a missing source instead of falling back to `Backup`, `.bak`, an
-  environment override, a symlink/reparse point, or another copy;
-- requires two consecutive byte-identical reads with the same file identity,
-  then confirms the same identity, bytes and metadata again after both tree
-  scans;
-- uses the exact classifier
-  `dreamz.ga.journal.member-lines.v1` and validates every non-empty row against
-  its 11-token header grammar and zero-based member-number field 5;
-- scans the data tree twice for other journal-like or `.jtx` files and blocks on any
-  possible rotated/historical segment, incomplete scan, reparse point or scan
-  drift;
+The preflight:
+
+- accepts only the exact production `C:` data directory;
+- rejects UNC paths, mapped drives, traversal, symlinks and reparse points;
+- verifies two identical reads and unchanged identities for `Journal.dat` and
+  `Gym Assistant 26.exe`;
+- inventories `Journal.tmp`, rotated `.dat` files and historical `.jtx` files
+  under the known `Data`, `Backup` and `Data\Backup` roots as a hashed source
+  binding; these known segments are not parsed and are not automatically an
+  error;
+- returns `export_preflight_ready: true` only when the local prerequisites are
+  stable;
+- always returns `coverage_proven: false` and
+  `official_export_required: true`, because only a fresh successful official
+  export can prove record coverage;
 - emits only hashes, counts, booleans and fixed reason codes. It never emits a
-  path, journal row, member number, member name, amount or payload.
+  source path, row, member number, name, amount or payload.
 
-## Future reviewed frontdesk command
+## Reviewed frontdesk preflight
 
-Do not run this as an installer or as part of an ordinary Portal Sync cycle.
-During a separately reviewed read-only frontdesk check, run:
+This command is diagnostic only and must not be used as an installer:
 
 ```powershell
 python .\ga_journal_source_coverage_probe.py --data-root "C:\Gym Assistant 2.6\Data"
 ```
 
-Exit code `0` means the machine-readable JSON has `coverage_proven: true` and
-no reason codes. Exit code `2` means fail-closed/block. A passing observation is
-evidence for review; it does not by itself authorize setting
-`PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_SOURCE_COVERAGE` or enabling the
-feature.
-
-The probe writes no result file. If an audit artifact is ever required, the
-operator must redirect stdout to an explicitly reviewed location outside the
-Gym Assistant root and preserve the resulting hash separately.
+Exit code `0` means the machine is ready for a separately controlled official
+export test. Exit code `2` means fail closed. A ready result does not authorize
+enabling the feature. The first official export, its sanitized validation
+summary, rollback path and Portal/Signup compatibility must be reviewed first.
 
 ## Complete reason-code contract
 
+- `active_journal_empty`
 - `classifier_version_mismatch`
 - `data_root_binding_mismatch`
 - `data_root_reparse_point`
+- `executable_empty`
+- `executable_missing`
+- `executable_reparse_point`
 - `install_root_reparse_point`
-- `journal_empty`
-- `member_number_field_unproven`
-- `possible_historical_journal_segments`
 - `probe_internal_error`
 - `source_identity_changed`
 - `source_missing`
@@ -71,8 +70,6 @@ Gym Assistant root and preserve the resulting hash separately.
 - `source_tree_unstable`
 - `source_unavailable`
 - `source_unstable`
-- `unsupported_record_grammar`
 - `wrong_data_root`
 
-Any blocker keeps the existing-member evidence feature off and routes the
-pilot to manual review.
+Any blocker keeps the evidence feature off and routes a pilot to manual review.

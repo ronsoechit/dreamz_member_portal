@@ -3,9 +3,11 @@ import unittest
 
 from ga_journal_snapshot import (
     CLASSIFIER_VERSION,
+    EXPORT_VERSION_RECORD,
     VOIDED_EVENT_MASK,
     canonical_member_record_multiset_sha256,
     parse_member_scoped_journal_snapshot_bytes,
+    validate_official_journal_export_bytes,
 )
 
 
@@ -17,24 +19,36 @@ def journal_line(
     member_number: str = TARGET_MEMBER,
     event_type: int = 3,
     sequence: str = "7001",
-    payload: bytes = b"opaque-payload",
+    payload: bytes | None = b"opaque-payload",
+    field_7: int = 0,
 ) -> bytes:
-    return (
+    header = (
         b"c20260215!1558 "
         + sequence.encode("ascii")
         + b" 1771185480 0 990001 "
         + member_number.encode("ascii")
         + b" "
         + str(event_type).encode("ascii")
-        + b" 0 0 0 29|"
-        + payload
+        + b" "
+        + str(field_7).encode("ascii")
+        + b" 0 0 29"
     )
+    return header if payload is None else header + b"|" + payload
 
 
 class MemberScopedJournalSnapshotTests(unittest.TestCase):
-    def parse(self, rows: list[bytes], *, coverage: bool = True):
+    def parse(
+        self,
+        rows: list[bytes],
+        *,
+        coverage: bool = True,
+        include_version: bool = True,
+    ):
+        records = list(rows)
+        if include_version:
+            records.insert(0, EXPORT_VERSION_RECORD)
         return parse_member_scoped_journal_snapshot_bytes(
-            b"\r\n".join(rows),
+            b"\r\n".join(records),
             member_number=TARGET_MEMBER,
             source_coverage_proven=coverage,
         )
@@ -123,7 +137,7 @@ class MemberScopedJournalSnapshotTests(unittest.TestCase):
 
     def test_malformed_target_and_ambiguous_rows_make_scope_incomplete(self):
         malformed_target = (
-            b"c20260215!1558 7001 1771185480 0 990001 90001 3 0 0 0 29|"
+            b"not-a-timestamp 7001 1771185480 0 990001 90001 3 0 0 0 29|x"
         )
         ambiguous = b"c20260215!1558 malformed"
         snapshot = self.parse([malformed_target, ambiguous])
@@ -132,12 +146,13 @@ class MemberScopedJournalSnapshotTests(unittest.TestCase):
         self.assertEqual(
             [issue.code for issue in snapshot.issues],
             [
+                "source_coverage_invalid",
                 "malformed_target_record",
                 "malformed_record_scope_ambiguous",
             ],
         )
 
-    def test_malformed_row_safely_attributed_to_other_member_is_ignored(self):
+    def test_malformed_other_member_row_still_fails_full_export_coverage(self):
         malformed_other = (
             b"not-a-timestamp 7001 1771185480 0 990001 99999 38 0 0 0 29|x"
         )
@@ -145,9 +160,9 @@ class MemberScopedJournalSnapshotTests(unittest.TestCase):
             [malformed_other, journal_line(event_type=38, payload=b"target")]
         )
 
-        self.assertTrue(snapshot.complete)
+        self.assertFalse(snapshot.complete)
         self.assertEqual(snapshot.member_record_count, 1)
-        self.assertEqual(snapshot.issues, ())
+        self.assertIn("source_coverage_invalid", [issue.code for issue in snapshot.issues])
 
     def test_shifted_member_token_cannot_be_attributed_away(self):
         shifted_target = (
@@ -159,12 +174,12 @@ class MemberScopedJournalSnapshotTests(unittest.TestCase):
         self.assertFalse(snapshot.complete)
         self.assertEqual(
             [issue.code for issue in snapshot.issues],
-            ["malformed_record_scope_ambiguous"],
+            ["source_coverage_invalid", "malformed_record_scope_ambiguous"],
         )
 
     def test_source_coverage_is_fail_closed_by_default(self):
         snapshot = parse_member_scoped_journal_snapshot_bytes(
-            journal_line(),
+            b"\r\n".join([EXPORT_VERSION_RECORD, journal_line()]),
             member_number=TARGET_MEMBER,
         )
 
@@ -175,25 +190,111 @@ class MemberScopedJournalSnapshotTests(unittest.TestCase):
             ["source_coverage_unproven"],
         )
 
-    def test_only_cr_lf_terminators_split_records(self):
-        row = journal_line(payload=b"opaque\x85payload")
+    def test_only_crlf_terminates_records_and_payload_lf_is_hashed(self):
+        row = journal_line(payload=b"opaque\npayload\x85value")
         snapshot = self.parse([row])
 
         self.assertTrue(snapshot.complete)
         self.assertEqual(snapshot.member_record_count, 1)
 
-    def test_blank_whitespace_lines_are_ignored_and_header_whitespace_is_valid(self):
+    def test_official_export_record_variants_are_scoped_without_payload_parsing(self):
+        snapshot = self.parse(
+            [
+                journal_line(member_number="0", event_type=38, payload=b"global"),
+                journal_line(sequence="7002", payload=None),
+                journal_line(sequence="7003", payload=b""),
+                journal_line(sequence="7004", field_7=-1, payload=b"sentinel"),
+            ]
+        )
+
+        self.assertTrue(snapshot.complete)
+        self.assertEqual(snapshot.member_record_count, 3)
+        self.assertEqual(snapshot.issues, ())
+
+    def test_duplicate_or_misplaced_export_version_record_fails_closed(self):
+        snapshot = self.parse(
+            [journal_line(), EXPORT_VERSION_RECORD, EXPORT_VERSION_RECORD],
+            include_version=False,
+        )
+
+        self.assertFalse(snapshot.complete)
+        self.assertIn("source_coverage_invalid", [issue.code for issue in snapshot.issues])
+
+    def test_lone_cr_is_not_an_export_record_delimiter(self):
+        snapshot = parse_member_scoped_journal_snapshot_bytes(
+            EXPORT_VERSION_RECORD
+            + b"\r\n"
+            + journal_line()
+            + b"\r"
+            + journal_line(sequence="7002"),
+            member_number=TARGET_MEMBER,
+            source_coverage_proven=True,
+        )
+
+        self.assertFalse(snapshot.complete)
+        self.assertIn("source_coverage_invalid", [issue.code for issue in snapshot.issues])
+
+    def test_complete_export_coverage_reports_only_sanitized_counts(self):
+        data = b"\r\n".join(
+            [
+                EXPORT_VERSION_RECORD,
+                journal_line(member_number="0", payload=b"private-global-canary"),
+                journal_line(sequence="7002", payload=None),
+                journal_line(sequence="7003", payload=b""),
+                journal_line(sequence="7004", payload=b"embedded\nline"),
+            ]
+        )
+
+        coverage = validate_official_journal_export_bytes(data)
+
+        self.assertTrue(coverage.complete)
+        self.assertEqual(coverage.record_count, 5)
+        self.assertEqual(coverage.supported_record_count, 4)
+        self.assertEqual(coverage.member_record_count, 3)
+        self.assertEqual(coverage.global_record_count, 1)
+        self.assertEqual(coverage.header_only_record_count, 1)
+        self.assertEqual(coverage.empty_payload_record_count, 1)
+        self.assertEqual(coverage.embedded_lf_record_count, 1)
+        serialized = json.dumps(coverage.as_sanitized_dict())
+        self.assertNotIn("embedded\nline", serialized)
+        self.assertNotIn("private-global-canary", serialized)
+
+    def test_coverage_requires_exact_leading_version_and_all_supported_records(self):
+        missing = validate_official_journal_export_bytes(journal_line())
+        malformed = validate_official_journal_export_bytes(
+            b"\r\n".join([EXPORT_VERSION_RECORD, journal_line(), b"not-a-record"])
+        )
+
+        self.assertFalse(missing.complete)
+        self.assertIn("export_version_missing", {issue.code for issue in missing.issues})
+        self.assertFalse(malformed.complete)
+        self.assertIn(
+            "unsupported_export_record",
+            {issue.code for issue in malformed.issues},
+        )
+
+    def test_version_only_export_fails_closed(self):
+        coverage = validate_official_journal_export_bytes(EXPORT_VERSION_RECORD + b"\r\n")
+
+        self.assertFalse(coverage.complete)
+        self.assertIn(
+            "journal_export_no_data_records",
+            {issue.code for issue in coverage.issues},
+        )
+
+    def test_whitespace_only_record_fails_full_export_coverage(self):
         row = journal_line().replace(b" 1771185480", b"\t1771185480", 1)
         snapshot = self.parse([b"   \t", row, b"\t"])
 
-        self.assertTrue(snapshot.complete)
+        self.assertFalse(snapshot.complete)
         self.assertEqual(snapshot.member_record_count, 1)
+        self.assertIn("source_coverage_invalid", [issue.code for issue in snapshot.issues])
 
     def test_serialized_scope_contains_no_raw_record_data(self):
         secret_values = [
             "Member Name",
             "6500",
-            r"C:\Gym Assistant 2.6\Data\Journal.jtx",
+            r"C:\Gym Assistant 2.6\Data\Journal.dat",
             "raw-transaction-value",
         ]
         row = journal_line(payload="|".join(secret_values).encode("latin-1"))

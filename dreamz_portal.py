@@ -14561,9 +14561,11 @@ EXISTING_MEMBER_JOURNAL_EVIDENCE_RECEIPT_SCHEMA = (
 EXISTING_MEMBER_JOURNAL_EVIDENCE_SIGNATURE_DOMAIN = (
     b"dreamz.member-journal-evidence.v1\x00"
 )
-EXISTING_MEMBER_JOURNAL_EVIDENCE_SOURCE_KIND = "gym_assistant_live_journal"
+EXISTING_MEMBER_JOURNAL_EVIDENCE_SOURCE_KIND = (
+    "gym_assistant_official_journal_export"
+)
 EXISTING_MEMBER_JOURNAL_EVIDENCE_CLASSIFIER_VERSION = (
-    "dreamz.ga.journal.member-lines.v1"
+    "dreamz.ga.journal.export-records.v2"
 )
 EXISTING_MEMBER_JOURNAL_EVIDENCE_TARGET_AGENT = "frontdesk_dreamz"
 EXISTING_MEMBER_JOURNAL_EVIDENCE_SOURCE_FLOW = "existing_member_reverification"

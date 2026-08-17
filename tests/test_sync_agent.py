@@ -11,6 +11,14 @@ import zipfile
 from unittest.mock import Mock, patch
 from urllib.error import URLError
 
+from ga_journal_snapshot import (
+    EXPORT_VERSION_RECORD,
+    validate_official_journal_export_bytes,
+)
+from gymassistant_journal_export import (
+    JournalExportConfig,
+    OfficialJournalExportSnapshot,
+)
 from sync_agent import (
     JournalSourceIdentityChangedError,
     JournalSourceUnstableError,
@@ -35,6 +43,30 @@ import sync_agent
 
 
 PHOTO_VERSIONED_KEY = "portal/Data/Pictures/0000100-55c64d0fcd6f9d5f.jpg"
+
+
+def official_journal_snapshot(data: bytes) -> OfficialJournalExportSnapshot:
+    return OfficialJournalExportSnapshot(
+        data=data,
+        byte_length=len(data),
+        source_sha256=hashlib.sha256(data).hexdigest(),
+        stable_read_count=2,
+        locator_fingerprint_sha256=hashlib.sha256(b"official-export").hexdigest(),
+        data_path_fingerprint_sha256=hashlib.sha256(b"data-path").hexdigest(),
+        source_binding_sha256=hashlib.sha256(b"source-binding").hexdigest(),
+        coverage=validate_official_journal_export_bytes(data),
+    )
+
+
+def journal_export_config(root: Path) -> JournalExportConfig:
+    return JournalExportConfig(
+        source_root=root,
+        executable=root / "Gym Assistant 26.exe",
+        expected_data_path=str(root / "Data"),
+        candidate_path=root / "journal-evidence" / "Journal.pending.jtx",
+        credential_path=root / "master-access.dpapi",
+        bridge_work_root=root / "bridge",
+    )
 
 
 def write_backup(path: Path, member_id: str = "100") -> None:
@@ -620,10 +652,10 @@ class SyncAgentTests(unittest.TestCase):
             backup_dir.mkdir(parents=True)
             (backup_dir / "Journal.jtx").write_bytes(b"backup-only")
 
-            with self.assertRaisesRegex(FileNotFoundError, "live Data/Journal.jtx"):
+            with self.assertRaisesRegex(FileNotFoundError, "live Data/Journal.dat"):
                 authoritative_live_journal_path(root)
 
-            live = data_dir / "Journal.jtx"
+            live = data_dir / "Journal.dat"
             live.write_bytes(b"live")
             self.assertEqual(authoritative_live_journal_path(root), live.resolve())
 
@@ -632,9 +664,9 @@ class SyncAgentTests(unittest.TestCase):
             root = Path(tmp) / "Gym Assistant 2.6"
             data_dir = root / "Data"
             data_dir.mkdir(parents=True)
-            target = Path(tmp) / "alternate-Journal.jtx"
+            target = Path(tmp) / "alternate-Journal.dat"
             target.write_bytes(b"not-the-bound-live-file")
-            candidate = data_dir / "Journal.jtx"
+            candidate = data_dir / "Journal.dat"
             try:
                 candidate.symlink_to(target)
             except OSError as exc:
@@ -648,11 +680,11 @@ class SyncAgentTests(unittest.TestCase):
             root = Path(tmp) / "Gym Assistant 2.6"
             data_dir = root / "Data"
             data_dir.mkdir(parents=True)
-            (data_dir / "Journal.jtx").write_bytes(b"live")
+            (data_dir / "Journal.dat").write_bytes(b"live")
 
             with patch(
                 "sync_agent._path_is_symlink_or_reparse_point",
-                side_effect=lambda path: Path(path).name.casefold() == "journal.jtx",
+                side_effect=lambda path: Path(path).name.casefold() == "journal.dat",
             ):
                 with self.assertRaisesRegex(ValueError, "reparse point"):
                     authoritative_live_journal_path(root)
@@ -732,8 +764,8 @@ class SyncAgentTests(unittest.TestCase):
             root = Path(tmp) / "Gym Assistant 2.6"
             data_dir = root / "Data"
             data_dir.mkdir(parents=True)
-            (data_dir / "Journal.jtx").write_bytes(b"")
-            alternate = Path(tmp) / "alternate" / "Journal.jtx"
+            (data_dir / "Journal.dat").write_bytes(b"binary-live-source")
+            alternate = Path(tmp) / "alternate" / "Journal.dat"
             alternate.parent.mkdir()
             alternate.write_bytes(b"")
 
@@ -745,39 +777,50 @@ class SyncAgentTests(unittest.TestCase):
                     build_existing_member_journal_evidence(
                         root,
                         member_number="90001",
+                        source_coverage_proven=True,
                     )
 
     def test_evidence_builder_is_sanitized_and_coverage_fail_closed(self):
         raw_values = [
             "Member Name",
             "6500",
-            r"C:\Gym Assistant 2.6\Data\Journal.jtx",
+            r"C:\Gym Assistant 2.6\Data\Journal.dat",
         ]
         row = (
             "c20260215!1558 7001 1771185480 0 990001 90001 77 0 0 0 29|"
             + "|".join(raw_values)
         ).encode("latin-1")
+        export_data = b"\r\n".join([EXPORT_VERSION_RECORD, row])
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "Gym Assistant 2.6"
             data_dir = root / "Data"
             data_dir.mkdir(parents=True)
-            (data_dir / "Journal.jtx").write_bytes(row)
+            (data_dir / "Journal.dat").write_bytes(b"binary-live-source")
+            exporter = Mock(return_value=official_journal_snapshot(export_data))
 
-            unproven = build_existing_member_journal_evidence(
-                root,
-                member_number="90001",
-            )
+            with self.assertRaisesRegex(ValueError, "coverage is unproven"):
+                build_existing_member_journal_evidence(
+                    root,
+                    member_number="90001",
+                    export_config=journal_export_config(root),
+                    snapshot_exporter=exporter,
+                )
+            exporter.assert_not_called()
             fixture_proven = build_existing_member_journal_evidence(
                 root,
                 member_number="90001",
                 source_coverage_proven=True,
+                export_config=journal_export_config(root),
+                snapshot_exporter=exporter,
             )
 
-        self.assertFalse(unproven["scope"]["complete"])
-        self.assertEqual(unproven["scope"]["issue_count"], 1)
         self.assertTrue(fixture_proven["scope"]["complete"])
         self.assertEqual(fixture_proven["scope"]["member_record_count"], 1)
         self.assertEqual(fixture_proven["source"]["stable_read_count"], 2)
+        self.assertEqual(
+            fixture_proven["source"]["kind"],
+            "gym_assistant_official_journal_export",
+        )
         self.assertEqual(
             set(fixture_proven["source"]),
             {

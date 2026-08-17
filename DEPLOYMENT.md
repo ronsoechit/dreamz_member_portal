@@ -134,10 +134,13 @@ caller. It never creates a second Portal member.
 
 The protected writer has a second, independent journal-evidence gate. Keep
 `EXISTING_MEMBER_JOURNAL_EVIDENCE_ENABLED=false` until all of the following have
-been reviewed together: the authoritative live `Data\Journal.jtx` source coverage,
-the exact Portal Sync classifier, the Portal and agent Ed25519 public-key maps,
-and a Signup Bridge that advertises and enforces
-`dreamz.signup-bridge.existing-member-journal-evidence.v2`. The Portal owns its
+been reviewed together: the authoritative binary `Data\Journal.dat` source
+binding, a fresh validated Gym Assistant **Export Journal** result, the exact
+Portal Sync classifier, the Portal and agent Ed25519 public-key maps, and a
+Signup Bridge that advertises and enforces
+`dreamz.signup-bridge.existing-member-journal-evidence.v3`. `Journal.dat` is
+never parsed as JTX and `Backup\Journal.jtx` is never treated as the current
+source. The Portal owns its
 receipt-signing private key; the frontdesk Portal Sync agent owns a different
 agent-signing private key. Never exchange, log, commit or reuse those private
 keys.
@@ -147,14 +150,42 @@ requires these profile-scoped settings:
 
 ```text
 PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_ENABLED=true
-PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_SOURCE_COVERAGE=dreamz.ga.journal.member-lines.v1
+PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_SOURCE_COVERAGE=dreamz.ga.journal.export-records.v2
 PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_AGENT_ID=frontdesk_dreamz
 PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_KEY_ID=<current agent key ID>
 PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_PRIVATE_KEY=<frontdesk-only Ed25519 private key>
 PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_TIMEOUT_SECONDS=15
 PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_LIMIT=1
 PORTAL_SYNC_EXISTING_MEMBER_JOURNAL_EVIDENCE_RETRIES=1
+PORTAL_SYNC_JOURNAL_EXPORT_GYMASSISTANT_EXE=C:\Gym Assistant 2.6\Gym Assistant 26.exe
+PORTAL_SYNC_JOURNAL_EXPORT_EXPECTED_DATA_PATH=C:\Gym Assistant 2.6\Data
+PORTAL_SYNC_JOURNAL_EXPORT_CANDIDATE_PATH=C:\DreamzPortalSync\journal-evidence\Journal.pending.jtx
 ```
+
+The export reuses the DPAPI-protected master-access credential and the Signup
+Bridge work root by default. It acquires the same named export mutex, pauses
+the bridge, never starts Gym Assistant by itself, and refuses to proceed while
+another Gym Assistant dialog/member view
+is open, and requires the temporary `.jtx` to live outside the Gym Assistant
+installation. A version-only export or any unsupported record fails closed.
+The agent validates the entire temporary export, returns only hashes/counts and
+deletes the temporary JTX in all success and failure paths. No production feature
+may be enabled until a controlled frontdesk export test has passed.
+
+After the matching immutable Portal Sync package is installed with the feature
+still disabled, run the operator check as the interactive
+`DREAMZ-FRNTDSK\Dreamz Fitness` user. Running it without a switch performs only
+the read-only source preflight:
+
+```powershell
+.\scripts\Test-OfficialGymAssistantJournalExport.ps1
+```
+
+Only in an agreed quiet window, with Gym Assistant already open at its clean
+main member screen, run the same script with `-ExecuteOfficialExport`. That
+action opens Gym Assistant's own `Export Journal` flow, validates the temporary
+result, prints only hashes/counts, removes the temporary file, and processes no
+Portal request or member change.
 
 The five-minute task cycle must remain healthy. A signed PRE receipt is required
 before the existing-member update becomes claimable. A successful local read-back

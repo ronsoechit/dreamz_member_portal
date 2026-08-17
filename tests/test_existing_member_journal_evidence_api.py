@@ -201,7 +201,7 @@ class ExistingMemberJournalEvidenceApiTests(unittest.TestCase):
     ):
         request_payload = claimed["request"]
         source = {
-            "kind": "gym_assistant_live_journal",
+            "kind": "gym_assistant_official_journal_export",
             "locator_fingerprint_sha256": "a" * 64,
             "data_path_fingerprint_sha256": "b" * 64,
             "file_identity_sha256": "c" * 64,
@@ -211,7 +211,7 @@ class ExistingMemberJournalEvidenceApiTests(unittest.TestCase):
         }
         source.update(source_overrides or {})
         scope = {
-            "classifier_version": "dreamz.ga.journal.member-lines.v1",
+            "classifier_version": "dreamz.ga.journal.export-records.v2",
             "complete": True,
             "member_record_count": 9,
             "member_record_multiset_sha256": "e" * 64,

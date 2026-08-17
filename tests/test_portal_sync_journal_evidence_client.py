@@ -362,11 +362,11 @@ class PortalSyncJournalEvidenceClientTests(unittest.TestCase):
         )
         self.assertEqual(
             envelope["payload_sha256"],
-            "fcaeb8d02a4706b63704010ba151200fb6f899e6302e0ea8bf947a1121972d0c",
+            "4c631a37f72c22169f5927a17f5b64c939e0d5a8d9c4201dcf332f95040f3c31",
         )
         self.assertEqual(
             envelope["signature"],
-            "spVG4IFgCj1jPpeNmQQCdF-wG5B-6efxQYpIAJwNgz-zP8OlAukxCZBTOLQ5Br7DaySQ2LvIvaOswFaxkSLcAg",
+            "Y1uVh9Efb2pFvSdf-iBZe6QhstQ4ntJ1YqQ1unuRZuP9kwKGaW-2kfKxllCLH72Z2kd9WeP1XuI5WLHiai71BQ",
         )
         public_key = Ed25519PrivateKey.from_private_bytes(AGENT_SEED).public_key()
         public_key.verify(
@@ -518,7 +518,7 @@ class PortalSyncJournalEvidenceClientTests(unittest.TestCase):
 
         def fail_snapshot(*args, **kwargs):
             raise FileNotFoundError(
-                r"C:\Gym Assistant 2.6\Data\Journal.jtx for Example Member"
+                r"C:\Gym Assistant 2.6\Data\Journal.dat for Example Member"
             )
 
         result = client.process_journal_evidence_queue(
@@ -556,7 +556,7 @@ class PortalSyncJournalEvidenceClientTests(unittest.TestCase):
         for forbidden in (
             "Example Member",
             "6500",
-            r"C:\Gym Assistant 2.6\Data\Journal.jtx",
+            r"C:\Gym Assistant 2.6\Data\Journal.dat",
             "fixture-root",
         ):
             self.assertNotIn(forbidden, serialized)

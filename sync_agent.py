@@ -12,7 +12,7 @@ from pathlib import Path
 import shlex
 import stat
 import subprocess
-from typing import Iterable
+from typing import Callable, Iterable, Mapping
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -30,6 +30,13 @@ from ga_journal import (
 )
 from ga_invoice_target_probe import scan_target_invoice_membership_events
 from ga_journal_snapshot import parse_member_scoped_journal_snapshot_bytes
+from gymassistant_journal_export import (
+    SOURCE_KIND as OFFICIAL_JOURNAL_EXPORT_SOURCE_KIND,
+    JournalExportConfig,
+    OfficialJournalExportSnapshot,
+    export_official_journal_snapshot,
+    load_journal_export_config,
+)
 from ga_documents import infer_member_document_records
 from portal_sync_journal_evidence import (
     process_journal_evidence_queue_if_configured,
@@ -183,26 +190,27 @@ def _path_is_symlink_or_reparse_point(path: Path) -> bool:
 
 
 def authoritative_live_journal_path(source_root: Path) -> Path:
-    """Return only the authoritative live Data/Journal.jtx.
+    """Return only the authoritative live binary Data/Journal.dat.
 
-    This evidence path intentionally does not reuse ``live_journal_path``:
-    invoice sync may fall back to backups, while preservation evidence must
-    fail closed rather than observe a backup or a configured alternate source.
+    The binary file is used only to bind an official Gym Assistant journal
+    export to the live data directory. It is never parsed as JTX. Invoice sync
+    may still fall back to backups through ``live_journal_path``; preservation
+    evidence must fail closed rather than observe a backup or alternate source.
     """
     source_root = Path(source_root)
     configured_data_directory = source_root / "Data"
     if _path_is_symlink_or_reparse_point(configured_data_directory):
         raise ValueError("authoritative live journal data path is a reparse point")
     data_directory = configured_data_directory.resolve(strict=True)
-    candidate = configured_data_directory / "Journal.jtx"
+    candidate = configured_data_directory / "Journal.dat"
     if any(part.casefold() == "backup" for part in candidate.parts):
         raise ValueError("authoritative live journal cannot be under a backup root")
     if _path_is_symlink_or_reparse_point(candidate):
-        raise ValueError("authoritative live Journal.jtx is a reparse point")
+        raise ValueError("authoritative live Journal.dat is a reparse point")
     if not candidate.is_file():
-        raise FileNotFoundError("authoritative live Data/Journal.jtx is missing")
+        raise FileNotFoundError("authoritative live Data/Journal.dat is missing")
     resolved = candidate.resolve(strict=True)
-    if resolved.parent != data_directory or resolved.name.casefold() != "journal.jtx":
+    if resolved.parent != data_directory or resolved.name.casefold() != "journal.dat":
         raise ValueError("authoritative live journal data-path identity drifted")
     return resolved
 
@@ -406,39 +414,53 @@ def read_stable_file_snapshot_twice(
     ) from last_error
 
 
-def _path_fingerprint(path: Path) -> str:
-    normalized = str(path.resolve(strict=True)).replace("\\", "/")
-    if os.name == "nt":
-        normalized = normalized.casefold()
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-
-
 def build_existing_member_journal_evidence(
     source_root: Path,
     *,
     member_number: str | int,
     source_coverage_proven: bool = False,
     max_read_attempts: int = 3,
+    export_config: JournalExportConfig | None = None,
+    environ: Mapping[str, str] | None = None,
+    snapshot_exporter: Callable[..., OfficialJournalExportSnapshot] = (
+        export_official_journal_snapshot
+    ),
 ) -> dict:
     """Build the unsigned, privacy-safe Portal Sync evidence core.
 
     This helper intentionally does not claim a Portal request, sign an envelope
     or post a result. Source coverage defaults to unproven, so an unwired caller
-    cannot accidentally create complete evidence.
+    cannot trigger Gym Assistant or accidentally create complete evidence.
+    ``Journal.dat`` is checked only as the live source identity; all scoped
+    records come from a fresh, validated official ``Export Journal`` result.
     """
     if not isinstance(source_coverage_proven, bool):
         raise ValueError("source_coverage_proven must be a boolean")
+    if not source_coverage_proven:
+        raise ValueError("official journal export source coverage is unproven")
     source_root = Path(source_root)
     data_directory = (source_root / "Data").resolve(strict=True)
     journal_path = authoritative_live_journal_path(source_root)
     if journal_path.parent != data_directory:
         raise ValueError("authoritative live journal data-path identity drifted")
-    stable = read_stable_file_snapshot_twice(
-        journal_path,
-        max_attempts=max_read_attempts,
+    config = export_config or load_journal_export_config(
+        source_root,
+        environ=environ,
+    )
+    if Path(config.source_root).resolve(strict=True) != source_root.resolve(strict=True):
+        raise ValueError("journal export source-root identity drifted")
+    exported = snapshot_exporter(
+        source_root=source_root,
+        executable=config.executable,
+        expected_data_path=config.expected_data_path,
+        candidate_path=config.candidate_path,
+        credential_path=config.credential_path,
+        bridge_work_root=config.bridge_work_root,
+        source_coverage_proven=source_coverage_proven,
+        max_read_attempts=max_read_attempts,
     )
     scope = parse_member_scoped_journal_snapshot_bytes(
-        stable.data,
+        exported.data,
         member_number=member_number,
         source_coverage_proven=source_coverage_proven,
     )
@@ -447,13 +469,15 @@ def build_existing_member_journal_evidence(
         "member_number": scope.member_number,
         "observed_at": utc_now_iso(),
         "source": {
-            "kind": "gym_assistant_live_journal",
-            "locator_fingerprint_sha256": _path_fingerprint(journal_path),
-            "data_path_fingerprint_sha256": _path_fingerprint(data_directory),
-            "file_identity_sha256": stable.file_identity_sha256,
-            "byte_length": stable.byte_length,
-            "source_sha256": stable.source_sha256,
-            "stable_read_count": stable.stable_read_count,
+            "kind": OFFICIAL_JOURNAL_EXPORT_SOURCE_KIND,
+            "locator_fingerprint_sha256": exported.locator_fingerprint_sha256,
+            "data_path_fingerprint_sha256": (
+                exported.data_path_fingerprint_sha256
+            ),
+            "file_identity_sha256": exported.source_binding_sha256,
+            "byte_length": exported.byte_length,
+            "source_sha256": exported.source_sha256,
+            "stable_read_count": exported.stable_read_count,
         },
         "scope": scope.as_evidence_scope(),
     }

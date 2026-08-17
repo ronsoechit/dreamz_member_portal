@@ -8,21 +8,56 @@ import re
 from typing import Iterable
 
 
-CLASSIFIER_VERSION = "dreamz.ga.journal.member-lines.v1"
+CLASSIFIER_VERSION = "dreamz.ga.journal.export-records.v2"
 VOIDED_EVENT_MASK = 0x8000
+EXPORT_VERSION_RECORD = b"2.0c"
 
 _HEX_SHA256_RE = re.compile(r"[0-9a-f]{64}")
-_JOURNAL_HEADER_RE = re.compile(
-    rb"^(c\d{8}!\d{4})[ \t]+([0-9A-Fa-f]+)"
-    rb"(?:[ \t]+([0-9]+)){9}\|(.+)$",
-    flags=re.DOTALL,
-)
+_TIMESTAMP_RE = re.compile(rb"c\d{8}!\d{4}")
+_HEX_RE = re.compile(rb"[0-9A-Fa-f]+")
+_UNSIGNED_DECIMAL_RE = re.compile(rb"[0-9]+")
+_SIGNED_DECIMAL_RE = re.compile(rb"-?[0-9]+")
 
 
 @dataclass(frozen=True)
 class MemberJournalScopeIssue:
     line_number: int
     code: str
+
+
+@dataclass(frozen=True)
+class OfficialJournalExportCoverage:
+    classifier_version: str
+    complete: bool
+    byte_length: int
+    source_sha256: str
+    record_count: int
+    supported_record_count: int
+    member_record_count: int
+    global_record_count: int
+    version_record_count: int
+    header_only_record_count: int
+    empty_payload_record_count: int
+    embedded_lf_record_count: int
+    issues: tuple[MemberJournalScopeIssue, ...]
+
+    def as_sanitized_dict(self) -> dict:
+        return {
+            "classifier_version": self.classifier_version,
+            "complete": self.complete,
+            "byte_length": self.byte_length,
+            "source_sha256": self.source_sha256,
+            "record_count": self.record_count,
+            "supported_record_count": self.supported_record_count,
+            "member_record_count": self.member_record_count,
+            "global_record_count": self.global_record_count,
+            "version_record_count": self.version_record_count,
+            "header_only_record_count": self.header_only_record_count,
+            "empty_payload_record_count": self.empty_payload_record_count,
+            "embedded_lf_record_count": self.embedded_lf_record_count,
+            "issue_count": len(self.issues),
+            "issue_codes": sorted({issue.code for issue in self.issues}),
+        }
 
 
 @dataclass(frozen=True)
@@ -86,15 +121,28 @@ def canonical_member_record_multiset_sha256(
     return sha256(_canonical_json_bytes(manifest)).hexdigest()
 
 
-def _split_cr_lf_lines(data: bytes) -> list[bytes]:
-    """Split only CR/LF terminators; other byte values remain record bytes."""
-    return re.split(rb"\r\n|\n|\r", data)
+def _split_export_records(data: bytes) -> list[bytes]:
+    """Split Gym Assistant export records without splitting payload newlines.
+
+    The official export terminates records with CRLF. Lone LF bytes can occur
+    inside an opaque payload and therefore remain part of the record hash.
+    Lone CR bytes are not part of the observed export grammar.
+    """
+    return data.split(b"\r\n")
 
 
-def _attributable_member_number(line: bytes) -> str | None:
-    header = line.split(b"|", 1)[0]
+def _record_header(record: bytes) -> bytes:
+    return record.split(b"|", 1)[0]
+
+
+def _attributable_member_number(record: bytes) -> str | None:
+    header = _record_header(record)
     tokens = header.split()
-    if len(tokens) != 11 or not tokens[5].isascii() or not tokens[5].isdigit():
+    if (
+        len(tokens) != 11
+        or not tokens[5].isascii()
+        or not _UNSIGNED_DECIMAL_RE.fullmatch(tokens[5])
+    ):
         return None
     try:
         member_number = str(int(tokens[5]))
@@ -103,14 +151,30 @@ def _attributable_member_number(line: bytes) -> str | None:
     return member_number if member_number != "0" else None
 
 
-def _valid_journal_header(line: bytes) -> tuple[str, int] | None:
-    match = _JOURNAL_HEADER_RE.fullmatch(line)
-    if not match:
-        return None
+def _valid_journal_header(record: bytes) -> tuple[str, int] | None:
+    """Return the member scope for one complete official-export record.
 
-    header, _payload = line.split(b"|", 1)
+    Payload presence and contents are deliberately irrelevant. Gym Assistant
+    emits both header-only records and records with an empty payload. The one
+    observed signed sentinel is restricted to header field 7; all other
+    decimal fields retain their unsigned 32-bit contract.
+    """
+    if b"\r" in record:
+        return None
+    header = _record_header(record)
     tokens = header.split()
     if len(tokens) != 11 or any(not token for token in tokens):
+        return None
+    if not _TIMESTAMP_RE.fullmatch(tokens[0]) or not _HEX_RE.fullmatch(tokens[1]):
+        return None
+    if any(
+        not (
+            _SIGNED_DECIMAL_RE.fullmatch(token)
+            if index == 7
+            else _UNSIGNED_DECIMAL_RE.fullmatch(token)
+        )
+        for index, token in enumerate(tokens[2:], start=2)
+    ):
         return None
     try:
         datetime.strptime(tokens[0].decode("ascii"), "c%Y%m%d!%H%M")
@@ -118,13 +182,102 @@ def _valid_journal_header(line: bytes) -> tuple[str, int] | None:
         numeric_fields = [int(token, 10) for token in tokens[2:]]
     except (UnicodeDecodeError, ValueError):
         return None
-    if any(value < 0 or value > 0xFFFFFFFF for value in numeric_fields):
+    if any(
+        value > 0xFFFFFFFF
+        or (value < 0 and not (index == 7 and value == -1))
+        for index, value in enumerate(numeric_fields, start=2)
+    ):
         return None
     member_number = numeric_fields[3]
     raw_event_type = numeric_fields[4]
-    if member_number <= 0 or raw_event_type > 0xFFFF:
+    if member_number < 0 or raw_event_type < 0 or raw_event_type > 0xFFFF:
         return None
     return str(member_number), raw_event_type
+
+
+def validate_official_journal_export_bytes(
+    data: bytes,
+) -> OfficialJournalExportCoverage:
+    """Validate the complete grammar of one official Gym Assistant export.
+
+    Journal payloads stay opaque. Coverage is proven only when the export has
+    exactly one leading version record and every remaining nonempty CRLF
+    record has the observed fixed 11-field header grammar.
+    """
+    if not isinstance(data, bytes):
+        raise TypeError("journal export input must be bytes")
+
+    record_count = 0
+    supported_record_count = 0
+    member_record_count = 0
+    global_record_count = 0
+    version_record_count = 0
+    header_only_record_count = 0
+    empty_payload_record_count = 0
+    embedded_lf_record_count = 0
+    issues: list[MemberJournalScopeIssue] = []
+
+    for raw_record in _split_export_records(data):
+        if not raw_record:
+            continue
+        record_count += 1
+        if raw_record == EXPORT_VERSION_RECORD:
+            version_record_count += 1
+            if record_count != 1 or version_record_count != 1:
+                issues.append(
+                    MemberJournalScopeIssue(
+                        record_count,
+                        "unexpected_export_version_record",
+                    )
+                )
+            continue
+
+        parsed_header = _valid_journal_header(raw_record)
+        if parsed_header is None:
+            issues.append(
+                MemberJournalScopeIssue(record_count, "unsupported_export_record")
+            )
+            continue
+
+        supported_record_count += 1
+        member_number, _raw_event_type = parsed_header
+        if member_number == "0":
+            global_record_count += 1
+        else:
+            member_record_count += 1
+        if b"|" not in raw_record:
+            header_only_record_count += 1
+        else:
+            payload = raw_record.split(b"|", 1)[1]
+            if not payload:
+                empty_payload_record_count += 1
+            if b"\n" in payload:
+                embedded_lf_record_count += 1
+
+    if record_count == 0:
+        issues.append(MemberJournalScopeIssue(0, "journal_export_empty"))
+    if supported_record_count == 0:
+        issues.append(MemberJournalScopeIssue(0, "journal_export_no_data_records"))
+    if version_record_count == 0:
+        issues.append(MemberJournalScopeIssue(0, "export_version_missing"))
+    elif version_record_count > 1:
+        issues.append(MemberJournalScopeIssue(0, "export_version_not_unique"))
+
+    return OfficialJournalExportCoverage(
+        classifier_version=CLASSIFIER_VERSION,
+        complete=not issues,
+        byte_length=len(data),
+        source_sha256=sha256(data).hexdigest(),
+        record_count=record_count,
+        supported_record_count=supported_record_count,
+        member_record_count=member_record_count,
+        global_record_count=global_record_count,
+        version_record_count=version_record_count,
+        header_only_record_count=header_only_record_count,
+        empty_payload_record_count=empty_payload_record_count,
+        embedded_lf_record_count=embedded_lf_record_count,
+        issues=tuple(issues),
+    )
 
 
 def parse_member_scoped_journal_snapshot_bytes(
@@ -145,25 +298,44 @@ def parse_member_scoped_journal_snapshot_bytes(
     record_hashes: list[str] = []
     issues: list[MemberJournalScopeIssue] = []
 
-    for line_number, line in enumerate(_split_cr_lf_lines(data), start=1):
-        if not line.strip(b" \t"):
+    coverage = validate_official_journal_export_bytes(data)
+    if not coverage.complete:
+        issues.append(MemberJournalScopeIssue(0, "source_coverage_invalid"))
+
+    version_seen = False
+    record_number = 0
+    for raw_record in _split_export_records(data):
+        if not raw_record.strip(b" \t"):
             continue
-        parsed_header = _valid_journal_header(line)
+        record_number += 1
+        if raw_record == EXPORT_VERSION_RECORD:
+            if record_number == 1 and not version_seen:
+                version_seen = True
+                continue
+            issues.append(
+                MemberJournalScopeIssue(
+                    record_number,
+                    "unexpected_export_version_record",
+                )
+            )
+            continue
+
+        parsed_header = _valid_journal_header(raw_record)
         if parsed_header is not None:
             row_member_number, _raw_event_type = parsed_header
             if row_member_number == canonical_member:
-                record_hashes.append(sha256(line).hexdigest())
+                record_hashes.append(sha256(raw_record).hexdigest())
             continue
 
-        attributable_member = _attributable_member_number(line)
+        attributable_member = _attributable_member_number(raw_record)
         if attributable_member == canonical_member:
             issues.append(
-                MemberJournalScopeIssue(line_number, "malformed_target_record")
+                MemberJournalScopeIssue(record_number, "malformed_target_record")
             )
         elif attributable_member is None:
             issues.append(
                 MemberJournalScopeIssue(
-                    line_number,
+                    record_number,
                     "malformed_record_scope_ambiguous",
                 )
             )
