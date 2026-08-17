@@ -183,7 +183,9 @@ try {
     if ($task.State -notin @('Ready', 'Disabled')) {
         throw "Onverwachte taakstatus na installatie: $($task.State)"
     }
-    if ($task.Principal.UserId -ine $currentUser) {
+    $taskUser = [string]$task.Principal.UserId
+    $taskUserLeaf = ($taskUser -split '\\')[-1]
+    if ($taskUser -ine $currentUser -and $taskUserLeaf -ine $currentUserLeaf) {
         throw "De taak is aan de verkeerde Windows-gebruiker gekoppeld: $($task.Principal.UserId)"
     }
     if ([string]$task.Principal.LogonType -ine 'Interactive') {
