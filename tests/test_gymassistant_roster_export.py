@@ -123,9 +123,9 @@ class PromptFlowUI:
                 ("Cancel", "Button", 2),
             ),
             (
-                ("MemData.dat bestaat al. Wilt u het overschrijven?", "Static", 0),
-                ("Ja", "Button", 30),
-                ("Nee", "Button", 31),
+                ("MemberData.csv already exists. Do you want to replace it?", "Static", 0),
+                ("Yes", "Button", 30),
+                ("No", "Button", 31),
             ),
             (
                 ("5,027 member records exported.", "Static", 0),
@@ -242,14 +242,23 @@ class CleanupFlowUI:
 
 class GymAssistantRosterExportTests(unittest.TestCase):
     def test_export_prompt_classifier_recognizes_observed_dialogs(self) -> None:
-        candidate = Path(r"C:\DreamzPortalSync\exports\MemberData.pending.csv")
+        candidate = Path(r"C:\DreamzPortalSync\exports\pending\MemberData.csv")
         overwrite = window_info(1)
         overwrite_children = [
             window_info(
                 2,
-                text="MemData.dat bestaat al. Wilt u het overschrijven?",
+                text="MemberData.csv already exists. Do you want to replace it?",
                 class_name="Static",
                 parent=1,
+            )
+        ]
+        internal_overwrite = window_info(11)
+        internal_overwrite_children = [
+            window_info(
+                12,
+                text="MemData.dat bestaat al. Wilt u het overschrijven?",
+                class_name="Static",
+                parent=11,
             )
         ]
         success = window_info(3)
@@ -278,6 +287,10 @@ class GymAssistantRosterExportTests(unittest.TestCase):
         ]
 
         self.assertEqual(_classify_export_dialog(overwrite, overwrite_children, candidate), "overwrite")
+        self.assertEqual(
+            _classify_export_dialog(internal_overwrite, internal_overwrite_children, candidate),
+            "overwrite",
+        )
         self.assertEqual(_classify_export_dialog(success, success_children, candidate), "success")
         self.assertEqual(_classify_export_dialog(special, special_children, candidate), "special_commands")
         self.assertEqual(_exported_record_count("5,027 member records exported."), 5027)
@@ -285,7 +298,7 @@ class GymAssistantRosterExportTests(unittest.TestCase):
 
     def test_export_prompts_wait_for_overwrite_and_explicit_success(self) -> None:
         ui = PromptFlowUI()
-        candidate = Path(r"C:\DreamzPortalSync\exports\MemberData.pending.csv")
+        candidate = Path(r"C:\DreamzPortalSync\exports\pending\MemberData.csv")
         exporter = GymAssistantExporter(
             executable=Path(r"C:\Gym Assistant 2.6\Gym Assistant 26.exe"),
             expected_data_path=r"C:\Gym Assistant 2.6\Data",
@@ -300,14 +313,14 @@ class GymAssistantRosterExportTests(unittest.TestCase):
 
         self.assertEqual(count, 5027)
         self.assertEqual(ui.filename, str(candidate))
-        self.assertEqual(ui.clicked, ["CSV", "Yes", "Save", "Ja", "Close"])
+        self.assertEqual(ui.clicked, ["CSV", "Yes", "Save", "Yes", "Close"])
 
     def test_cleanup_returns_through_special_commands_and_about_dialog(self) -> None:
         ui = CleanupFlowUI()
         exporter = GymAssistantExporter(
             executable=Path(r"C:\Gym Assistant 2.6\Gym Assistant 26.exe"),
             expected_data_path=r"C:\Gym Assistant 2.6\Data",
-            candidate_path=Path(r"C:\DreamzPortalSync\exports\MemberData.pending.csv"),
+            candidate_path=Path(r"C:\DreamzPortalSync\exports\pending\MemberData.csv"),
             credential_path=Path(r"C:\state\master-access.dpapi"),
             ui_timeout_seconds=1.0,
             ui=ui,  # type: ignore[arg-type]
@@ -538,6 +551,94 @@ class GymAssistantRosterExportTests(unittest.TestCase):
             self.assertEqual(payload["status"], "failed")
             self.assertEqual(payload["error"], "UI-export testfout")
             self.assertNotIn("members", payload)
+
+    def test_unexpected_published_target_change_is_restored(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "MemberData.csv"
+            candidate = root / "pending" / "MemberData.csv"
+            state = root / "state" / "last-run.json"
+            history = root / "history"
+            write_csv(target, 4, start=1)
+            original = target.read_bytes()
+            args = SimpleNamespace(
+                candidate=str(candidate),
+                target=str(target),
+                state_path=str(state),
+                backup_dir=str(history),
+                minimum_members=1,
+                max_count_change_percent=15.0,
+                bridge_work_root=None,
+                bridge_timeout_seconds=0.1,
+                gymassistant_exe=str(root / "Gym Assistant 26.exe"),
+                expected_data_path=str(root / "Data"),
+                credential_path=str(root / "credential.dpapi"),
+                ui_timeout_seconds=0.1,
+                manual_auth=False,
+            )
+
+            def mutate_published_target() -> dict:
+                candidate.parent.mkdir(parents=True)
+                write_csv(candidate, 4, start=10)
+                write_csv(target, 4, start=100)
+                return {"status": "exported", "candidate": str(candidate)}
+
+            with patch(
+                "scripts.gymassistant_roster_export.roster_export.GymAssistantExporter.run",
+                side_effect=mutate_published_target,
+            ):
+                with self.assertRaisesRegex(RosterExportError, "onverwacht"):
+                    run_export(args)
+
+            self.assertEqual(target.read_bytes(), original)
+            self.assertFalse(candidate.exists())
+            payload = json.loads(state.read_text(encoding="utf-8"))
+            self.assertEqual(payload["status"], "failed")
+            self.assertIn("oorspronkelijke lijst is hersteld", payload["error"])
+            self.assertEqual(list(history.glob("*.pre-export")), [])
+
+    def test_run_export_publishes_candidate_with_target_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "MemberData.csv"
+            candidate = root / "pending" / "MemberData.csv"
+            state = root / "state" / "last-run.json"
+            history = root / "history"
+            write_csv(target, 4, start=1)
+            args = SimpleNamespace(
+                candidate=str(candidate),
+                target=str(target),
+                state_path=str(state),
+                backup_dir=str(history),
+                minimum_members=4,
+                max_count_change_percent=15.0,
+                bridge_work_root=None,
+                bridge_timeout_seconds=0.1,
+                gymassistant_exe=str(root / "Gym Assistant 26.exe"),
+                expected_data_path=str(root / "Data"),
+                credential_path=str(root / "credential.dpapi"),
+                ui_timeout_seconds=0.1,
+                manual_auth=False,
+            )
+
+            def create_candidate() -> dict:
+                candidate.parent.mkdir(parents=True)
+                write_csv(candidate, 4, start=10)
+                return {"status": "exported", "candidate": str(candidate)}
+
+            with patch(
+                "scripts.gymassistant_roster_export.roster_export.GymAssistantExporter.run",
+                side_effect=create_candidate,
+            ):
+                result = run_export(args)
+
+            self.assertEqual(result["status"], "published")
+            self.assertFalse(candidate.exists())
+            self.assertIn(b"First10", target.read_bytes())
+            payload = json.loads(state.read_text(encoding="utf-8"))
+            self.assertEqual(payload["status"], "published")
+            self.assertEqual(payload["validation"]["member_count"], 4)
+            self.assertEqual(list(history.glob("*.pre-export")), [])
 
     def test_interrupted_export_records_state_and_removes_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

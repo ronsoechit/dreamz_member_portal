@@ -17,7 +17,7 @@ $ProgressPreference = 'SilentlyContinue'
 
 $moduleRoot = Join-Path $RepoRoot 'scripts\gymassistant_roster_export'
 $runner = Join-Path $moduleRoot 'roster_export.py'
-$candidate = Join-Path $ExportRoot 'MemberData.pending.csv'
+$candidate = Join-Path (Join-Path $ExportRoot 'pending') 'MemberData.csv'
 $target = Join-Path $ExportRoot 'MemberData.csv'
 $backupDir = Join-Path $ExportRoot 'history'
 $statePath = Join-Path $StateRoot 'last-run.json'

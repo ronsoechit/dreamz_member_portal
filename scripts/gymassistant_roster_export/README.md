@@ -1,7 +1,7 @@
 # Gym Assistant official roster export
 
 This runner automates Gym Assistant's own **Export Members to Excel** flow. It
-writes to `MemberData.pending.csv`, validates the official schema and member
+writes to `pending\MemberData.csv`, validates the official schema and member
 population, and only then atomically replaces `MemberData.csv` used by Portal
 Sync.
 
@@ -13,9 +13,13 @@ Sync.
   confirms `paused` before opening export dialogs.
 - Existing Gym Assistant dialogs cause the run to stop without touching the
   current CSV.
+- Before opening Gym Assistant, it creates and verifies a temporary recovery
+  copy of the published CSV. If Gym Assistant unexpectedly changes that file,
+  the original is restored atomically and the candidate is rejected.
 - The export only counts as complete after Gym Assistant reports the exported
-  record count. The known `MemData.dat`/candidate overwrite confirmation is
-  handled only when the expected file name and overwrite wording both match.
+  record count. The known `MemData.dat`/candidate `MemberData.csv` overwrite
+  confirmation is handled only when the expected file name and overwrite
+  wording both match.
 - After a successful export, the runner closes the report, Special Commands,
   and the Gym Assistant information dialog through their named controls. An
   unexpected dialog fails the run and leaves the last valid CSV in place.

@@ -79,6 +79,14 @@ class PromotionResult:
     report: ValidationReport
 
 
+@dataclass(frozen=True)
+class PublishedTargetGuard:
+    target: Path
+    existed: bool
+    sha256: str | None
+    recovery_path: Path | None
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -89,6 +97,79 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def create_published_target_guard(target: Path, backup_dir: Path) -> PublishedTargetGuard:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        return PublishedTargetGuard(target=target, existed=False, sha256=None, recovery_path=None)
+    if not target.is_file():
+        raise RosterExportError(f"Het gepubliceerde ledenpad is geen bestand: {target}")
+
+    original_hash = sha256_file(target)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    recovery_path = backup_dir / (
+        f".{target.name}.{os.getpid()}.{time.time_ns()}.pre-export"
+    )
+    shutil.copy2(target, recovery_path)
+    with recovery_path.open("r+b") as handle:
+        os.fsync(handle.fileno())
+    if sha256_file(recovery_path) != original_hash:
+        recovery_path.unlink(missing_ok=True)
+        raise RosterExportError("De herstelkopie van de gepubliceerde ledenlijst is ongeldig.")
+    return PublishedTargetGuard(
+        target=target,
+        existed=True,
+        sha256=original_hash,
+        recovery_path=recovery_path,
+    )
+
+
+def published_target_matches_guard(guard: PublishedTargetGuard) -> bool:
+    if not guard.existed:
+        return not guard.target.exists()
+    return (
+        guard.target.is_file()
+        and guard.sha256 is not None
+        and sha256_file(guard.target) == guard.sha256
+    )
+
+
+def restore_published_target(guard: PublishedTargetGuard) -> None:
+    if published_target_matches_guard(guard):
+        return
+    if not guard.existed:
+        if guard.target.is_dir():
+            raise RosterExportError(
+                f"Onverwachte map kan niet als ledenbestand worden verwijderd: {guard.target}"
+            )
+        guard.target.unlink(missing_ok=True)
+        return
+    if (
+        guard.recovery_path is None
+        or not guard.recovery_path.is_file()
+        or guard.sha256 is None
+        or sha256_file(guard.recovery_path) != guard.sha256
+    ):
+        raise RosterExportError("De oorspronkelijke gepubliceerde ledenlijst kan niet worden hersteld.")
+
+    restore_path = guard.target.with_name(
+        f".{guard.target.name}.{os.getpid()}.{time.time_ns()}.restore"
+    )
+    try:
+        shutil.copy2(guard.recovery_path, restore_path)
+        with restore_path.open("r+b") as handle:
+            os.fsync(handle.fileno())
+        os.replace(restore_path, guard.target)
+    finally:
+        restore_path.unlink(missing_ok=True)
+    if sha256_file(guard.target) != guard.sha256:
+        raise RosterExportError("Hashcontrole na herstel van de ledenlijst is mislukt.")
+
+
+def release_published_target_guard(guard: PublishedTargetGuard | None) -> None:
+    if guard and guard.recovery_path:
+        guard.recovery_path.unlink(missing_ok=True)
 
 
 def atomic_write_json(path: Path, payload: dict) -> None:
@@ -1168,11 +1249,13 @@ def run_export(args: argparse.Namespace) -> dict:
         max_count_change_percent=args.max_count_change_percent,
     )
     started = utc_now()
+    target_guard: PublishedTargetGuard | None = None
     try:
         with NamedMutex(), pause_signup_bridge(
             Path(args.bridge_work_root).resolve() if args.bridge_work_root else None,
             timeout_seconds=args.bridge_timeout_seconds,
         ):
+            target_guard = create_published_target_guard(target, backup_dir)
             exporter = GymAssistantExporter(
                 executable=Path(args.gymassistant_exe).resolve(),
                 expected_data_path=args.expected_data_path,
@@ -1185,6 +1268,13 @@ def run_export(args: argparse.Namespace) -> dict:
             if datetime.fromtimestamp(candidate.stat().st_mtime, timezone.utc) < started:
                 candidate.unlink(missing_ok=True)
                 raise RosterExportError("Gym Assistant leverde geen nieuw kandidaatbestand op.")
+            if not published_target_matches_guard(target_guard):
+                restore_published_target(target_guard)
+                candidate.unlink(missing_ok=True)
+                raise RosterExportError(
+                    "Gym Assistant wijzigde onverwacht de bestaande gepubliceerde ledenlijst; "
+                    "de oorspronkelijke lijst is hersteld en de nieuwe export is afgewezen."
+                )
             promotion = promote_candidate(
                 candidate,
                 target,
@@ -1193,8 +1283,12 @@ def run_export(args: argparse.Namespace) -> dict:
                 policy=policy,
             )
     except CandidateRejectedError:
+        if target_guard:
+            restore_published_target(target_guard)
         raise
     except KeyboardInterrupt:
+        if target_guard:
+            restore_published_target(target_guard)
         candidate.unlink(missing_ok=True)
         atomic_write_json(
             state_path,
@@ -1207,6 +1301,15 @@ def run_export(args: argparse.Namespace) -> dict:
         )
         raise
     except Exception as exc:
+        failure: Exception = exc
+        if target_guard:
+            try:
+                restore_published_target(target_guard)
+            except Exception as restore_exc:
+                failure = RosterExportError(
+                    f"{exc} Aanvullende herstelfout: {restore_exc}"
+                )
+        candidate.unlink(missing_ok=True)
         atomic_write_json(
             state_path,
             {
@@ -1214,10 +1317,14 @@ def run_export(args: argparse.Namespace) -> dict:
                 "status": "failed",
                 "failed_at": utc_now().isoformat(),
                 "target": str(target),
-                "error": str(exc),
+                "error": str(failure),
             },
         )
-        raise
+        if failure is exc:
+            raise
+        raise failure from exc
+    finally:
+        release_published_target_guard(target_guard)
     return {
         "status": "published",
         "export": export_info,
