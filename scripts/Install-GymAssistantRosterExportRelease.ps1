@@ -16,16 +16,16 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 
-$releaseCommit = '4ac0fcdd96cd98271123ed33ac7e9636f5c539f4'
+$releaseCommit = '880b0a27544ff5439d702171895c093b0390af20'
 $repository = 'ronsoechit/dreamz_member_portal'
 $payload = @(
     @{ Relative = 'scripts/gymassistant_roster_export/__init__.py'; Hash = '2F9E71512491E6CC712A880E1C91D7A148EF3BF57BA9F108A8DC778CAA4F1026' },
     @{ Relative = 'scripts/gymassistant_roster_export/__main__.py'; Hash = '67BDF68DFF9DE7FC109A1B9220F47205CE47ABA7FCF2014693DEDEAE17EBB9F0' },
-    @{ Relative = 'scripts/gymassistant_roster_export/roster_export.py'; Hash = '9B177FDEC76625FFD951B39648410AF93771933090843E4F282644B31CCEB847' },
-    @{ Relative = 'scripts/gymassistant_roster_export/Run-GymAssistantRosterExport.ps1'; Hash = 'E309DAF60170F1677E4D0F6E4E6381CB8426BB9BCF7F10514BBBEFCDCDFA0894' },
+    @{ Relative = 'scripts/gymassistant_roster_export/roster_export.py'; Hash = '8DB13FB793377FDD912D2DAA7E596FC241E8488527295844E3648567F0F67B60' },
+    @{ Relative = 'scripts/gymassistant_roster_export/Run-GymAssistantRosterExport.ps1'; Hash = 'F8C9892A6AA4FA071C17A34899F55341D14C348E07F261E723AE57D7523E696E' },
     @{ Relative = 'scripts/gymassistant_roster_export/Install-GymAssistantRosterExportTask.ps1'; Hash = 'EAE42F96D17B4DE7404AA26A750D8BDB7E04D9D99D8D74D86F1200C4B5A9A080' },
     @{ Relative = 'scripts/gymassistant_roster_export/Get-GymAssistantRosterExportStatus.ps1'; Hash = '7B201E9EEAA90BDDA3BB0625B512F2ADF43855312A8B51BE7BD2940939423EFA' },
-    @{ Relative = 'scripts/gymassistant_roster_export/README.md'; Hash = '6ED1477FA29934FDAED3E0E36C26CBAE61A9B0BB6166C1ABB341A53C55AB5853' }
+    @{ Relative = 'scripts/gymassistant_roster_export/README.md'; Hash = '94C7DD5D24B4539B8861D4012BB10B023A773A24A692380B5BAF753A4F33BF87' }
 )
 
 function Assert-ContainedPath {
