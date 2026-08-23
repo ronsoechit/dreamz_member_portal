@@ -12,8 +12,12 @@ import unittest
 from unittest.mock import patch
 
 from scripts.gymassistant_roster_export.roster_export import (
+    GymAssistantExporter,
     RosterExportError,
     ValidationPolicy,
+    WindowInfo,
+    _classify_export_dialog,
+    _exported_record_count,
     pause_signup_bridge,
     promote_candidate,
     run_export,
@@ -70,7 +74,258 @@ def write_csv(path: Path, count: int, *, status: str = "ACTIVE", start: int = 1)
             )
 
 
+def window_info(
+    handle: int,
+    *,
+    text: str = "",
+    class_name: str = "#32770",
+    control_id: int = 0,
+    parent: int = 0,
+) -> WindowInfo:
+    return WindowInfo(
+        handle=handle,
+        parent=parent,
+        process_id=42,
+        control_id=control_id,
+        class_name=class_name,
+        text=text,
+        left=0,
+        top=0,
+        right=100,
+        bottom=30,
+        visible=True,
+        enabled=True,
+    )
+
+
+class PromptFlowUI:
+    def __init__(self) -> None:
+        self.stage = 0
+        self.clicked: list[str] = []
+        self.filename: str | None = None
+
+    def _controls(self) -> list[WindowInfo]:
+        parent = 100 + self.stage
+        definitions = (
+            (
+                ("Save file CSV or Tab-Delimited format?", "Static", 0),
+                ("CSV", "Button", 10),
+                ("Tab-Delimited", "Button", 11),
+            ),
+            (
+                ("Include financial and bank data?", "Static", 0),
+                ("Yes", "Button", 20),
+                ("No", "Button", 21),
+            ),
+            (
+                ("", "Edit", 1148),
+                ("Save", "Button", 1),
+                ("Cancel", "Button", 2),
+            ),
+            (
+                ("MemData.dat bestaat al. Wilt u het overschrijven?", "Static", 0),
+                ("Ja", "Button", 30),
+                ("Nee", "Button", 31),
+            ),
+            (
+                ("5,027 member records exported.", "Static", 0),
+                ("Close", "Button", 40),
+            ),
+        )
+        return [
+            window_info(
+                (self.stage + 1) * 1000 + index,
+                text=text,
+                class_name=class_name,
+                control_id=control_id,
+                parent=parent,
+            )
+            for index, (text, class_name, control_id) in enumerate(definitions[self.stage], start=1)
+        ]
+
+    def top_windows(self, process_id: int | None = None) -> list[WindowInfo]:
+        if self.stage >= 5:
+            return []
+        title = "Save As" if self.stage == 2 else ""
+        return [window_info(100 + self.stage, text=title)]
+
+    def children(self, parent: int) -> list[WindowInfo]:
+        return self._controls()
+
+    def button(self, parent: int, text: str) -> WindowInfo:
+        matches = [item for item in self._controls() if item.class_name == "Button" and item.text == text]
+        if len(matches) != 1:
+            raise RosterExportError(f"Button ontbreekt: {text}")
+        return matches[0]
+
+    def control_by_id(self, parent: int, control_id: int) -> WindowInfo:
+        matches = [item for item in self._controls() if item.control_id == control_id]
+        if len(matches) != 1:
+            raise RosterExportError(f"Control ontbreekt: {control_id}")
+        return matches[0]
+
+    def set_text(self, handle: int, value: str) -> None:
+        self.filename = value
+
+    def click(self, handle: int) -> None:
+        control = next(item for item in self._controls() if item.handle == handle)
+        self.clicked.append(control.text)
+        self.stage += 1
+
+    def wait_not_visible(self, handle: int, *, timeout_seconds: float = 5.0) -> None:
+        if self.stage < 5:
+            raise RosterExportError("Dialoog bleef zichtbaar.")
+
+
+class CleanupFlowUI:
+    def __init__(self) -> None:
+        self.report_open = True
+        self.phase = "special"
+        self.clicked: list[str] = []
+        self.closed: list[int] = []
+
+    def top_windows(self, process_id: int | None = None) -> list[WindowInfo]:
+        main = window_info(1, text="Gym Assistant", class_name="GymAssistant26Task")
+        if self.phase == "special":
+            return [main, window_info(2)]
+        if self.phase == "about":
+            return [main, window_info(3, text="About Gym Assistant")]
+        return [main]
+
+    def children(self, parent: int) -> list[WindowInfo]:
+        if parent == 1:
+            if not self.report_open:
+                return []
+            return [
+                window_info(
+                    10,
+                    text="Membership List [Dreamz Fitness Bonaire]",
+                    class_name="xGym Assistant1220doc9012",
+                    parent=1,
+                )
+            ]
+        if parent == 2:
+            return [
+                window_info(20, text="Special Commands", class_name="Static", parent=2),
+                window_info(21, text="Cancel", class_name="Button", parent=2),
+            ]
+        if parent == 3:
+            return [
+                window_info(30, text="Gym Assistant", class_name="Static", parent=3),
+                window_info(31, text="Deluxe 5,000 Edition / 5 workstations", class_name="Static", parent=3),
+                window_info(32, text="Revision Info...", class_name="Button", parent=3),
+                window_info(33, text="OK", class_name="Button", parent=3),
+            ]
+        return []
+
+    def button(self, parent: int, text: str) -> WindowInfo:
+        matches = [item for item in self.children(parent) if item.class_name == "Button" and item.text == text]
+        if len(matches) != 1:
+            raise RosterExportError(f"Button ontbreekt: {text}")
+        return matches[0]
+
+    def click(self, handle: int) -> None:
+        if handle == 21:
+            self.clicked.append("Cancel")
+            self.phase = "about"
+        elif handle == 33:
+            self.clicked.append("OK")
+            self.phase = "done"
+        else:
+            raise RosterExportError(f"Onverwachte klik: {handle}")
+
+    def close(self, handle: int) -> None:
+        self.closed.append(handle)
+        if handle == 10:
+            self.report_open = False
+
+
 class GymAssistantRosterExportTests(unittest.TestCase):
+    def test_export_prompt_classifier_recognizes_observed_dialogs(self) -> None:
+        candidate = Path(r"C:\DreamzPortalSync\exports\MemberData.pending.csv")
+        overwrite = window_info(1)
+        overwrite_children = [
+            window_info(
+                2,
+                text="MemData.dat bestaat al. Wilt u het overschrijven?",
+                class_name="Static",
+                parent=1,
+            )
+        ]
+        success = window_info(3)
+        success_children = [
+            window_info(
+                4,
+                text="5,027 member records exported.",
+                class_name="Static",
+                parent=3,
+            )
+        ]
+        unrelated = window_info(5)
+        unrelated_children = [
+            window_info(
+                6,
+                text="unrelated.dat bestaat al. Wilt u het overschrijven?",
+                class_name="Static",
+                parent=5,
+            )
+        ]
+        special = window_info(7)
+        special_children = [
+            window_info(8, text="Special Commands", class_name="Static", parent=7),
+            window_info(9, text="BankInfo Editor", class_name="ListBox", parent=7),
+            window_info(10, text="Cancel", class_name="Button", parent=7),
+        ]
+
+        self.assertEqual(_classify_export_dialog(overwrite, overwrite_children, candidate), "overwrite")
+        self.assertEqual(_classify_export_dialog(success, success_children, candidate), "success")
+        self.assertEqual(_classify_export_dialog(special, special_children, candidate), "special_commands")
+        self.assertEqual(_exported_record_count("5,027 member records exported."), 5027)
+        self.assertIsNone(_classify_export_dialog(unrelated, unrelated_children, candidate))
+
+    def test_export_prompts_wait_for_overwrite_and_explicit_success(self) -> None:
+        ui = PromptFlowUI()
+        candidate = Path(r"C:\DreamzPortalSync\exports\MemberData.pending.csv")
+        exporter = GymAssistantExporter(
+            executable=Path(r"C:\Gym Assistant 2.6\Gym Assistant 26.exe"),
+            expected_data_path=r"C:\Gym Assistant 2.6\Data",
+            candidate_path=candidate,
+            credential_path=Path(r"C:\state\master-access.dpapi"),
+            ui_timeout_seconds=1.0,
+            ui=ui,  # type: ignore[arg-type]
+        )
+
+        with patch("scripts.gymassistant_roster_export.roster_export.time.sleep"):
+            count = exporter._answer_export_prompts(42)
+
+        self.assertEqual(count, 5027)
+        self.assertEqual(ui.filename, str(candidate))
+        self.assertEqual(ui.clicked, ["CSV", "Yes", "Save", "Ja", "Close"])
+
+    def test_cleanup_returns_through_special_commands_and_about_dialog(self) -> None:
+        ui = CleanupFlowUI()
+        exporter = GymAssistantExporter(
+            executable=Path(r"C:\Gym Assistant 2.6\Gym Assistant 26.exe"),
+            expected_data_path=r"C:\Gym Assistant 2.6\Data",
+            candidate_path=Path(r"C:\DreamzPortalSync\exports\MemberData.pending.csv"),
+            credential_path=Path(r"C:\state\master-access.dpapi"),
+            ui_timeout_seconds=1.0,
+            ui=ui,  # type: ignore[arg-type]
+        )
+        clock = iter(range(100, 140))
+
+        with (
+            patch("scripts.gymassistant_roster_export.roster_export.time.monotonic", side_effect=clock),
+            patch("scripts.gymassistant_roster_export.roster_export.time.sleep"),
+        ):
+            exporter._cleanup_export_windows(
+                window_info(1, text="Gym Assistant", class_name="GymAssistant26Task")
+            )
+
+        self.assertIn(10, ui.closed)
+        self.assertEqual(ui.clicked, ["Cancel", "OK"])
+        self.assertEqual(ui.phase, "done")
+
     def test_valid_candidate_passes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "candidate.csv"

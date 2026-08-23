@@ -35,6 +35,9 @@ foreach ($directory in @($ExportRoot, $backupDir, $StateRoot, $logDir)) {
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $logPath = Join-Path $logDir "roster-export-$stamp.log"
+New-Item -ItemType File -Path $logPath -Force | Out-Null
+"$(Get-Date -Format o) Gym Assistant roster export started." |
+    Add-Content -LiteralPath $logPath -Encoding UTF8
 
 try {
     & $PythonExe $runner export `
@@ -48,10 +51,16 @@ try {
         --bridge-work-root $BridgeWorkRoot `
         --minimum-members $MinimumMembers `
         --max-count-change-percent $MaxCountChangePercent *>&1 |
-        Tee-Object -FilePath $logPath
+        Tee-Object -FilePath $logPath -Append
     if ($LASTEXITCODE -ne 0) {
         throw "De officiele ledenexport is veilig gestopt (exitcode $LASTEXITCODE)."
     }
+    "$(Get-Date -Format o) Gym Assistant roster export completed successfully." |
+        Add-Content -LiteralPath $logPath -Encoding UTF8
+} catch {
+    "$(Get-Date -Format o) Gym Assistant roster export failed: $($_.Exception.Message)" |
+        Add-Content -LiteralPath $logPath -Encoding UTF8
+    throw
 } finally {
     Get-ChildItem -LiteralPath $logDir -Filter 'roster-export-*.log' -File -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending |

@@ -13,6 +13,12 @@ Sync.
   confirms `paused` before opening export dialogs.
 - Existing Gym Assistant dialogs cause the run to stop without touching the
   current CSV.
+- The export only counts as complete after Gym Assistant reports the exported
+  record count. The known `MemData.dat`/candidate overwrite confirmation is
+  handled only when the expected file name and overwrite wording both match.
+- After a successful export, the runner closes the report, Special Commands,
+  and the Gym Assistant information dialog through their named controls. An
+  unexpected dialog fails the run and leaves the last valid CSV in place.
 - Missing headers, critical parser issues, unknown statuses, duplicate IDs, a
   low member count, or a population jump over the configured threshold reject
   the candidate.
@@ -68,4 +74,5 @@ Example for the frontdesk profile:
 ```
 
 Use `Get-GymAssistantRosterExportStatus.ps1` to inspect the task, published CSV,
-last sanitized state, and recent logs without opening Gym Assistant.
+last sanitized state, and recent logs without opening Gym Assistant. Every task
+attempt creates a log, including runs that fail before the exporter writes output.

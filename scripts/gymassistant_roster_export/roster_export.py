@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -528,6 +529,8 @@ class Win32UI:
         self.user32.IsWindowVisible.restype = wintypes.BOOL
         self.user32.IsWindowEnabled.argtypes = (wintypes.HWND,)
         self.user32.IsWindowEnabled.restype = wintypes.BOOL
+        self.user32.IsWindow.argtypes = (wintypes.HWND,)
+        self.user32.IsWindow.restype = wintypes.BOOL
         self.user32.SendMessageW.argtypes = (
             wintypes.HWND,
             wintypes.UINT,
@@ -659,6 +662,14 @@ class Win32UI:
     def close(self, handle: int) -> None:
         self.post(handle, self.WM_CLOSE)
 
+    def wait_not_visible(self, handle: int, *, timeout_seconds: float = 5.0) -> None:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if not self.user32.IsWindow(handle) or not self.user32.IsWindowVisible(handle):
+                return
+            time.sleep(0.1)
+        raise RosterExportError("Gym Assistant sloot het verwachte venster niet tijdig.")
+
     def set_text(self, handle: int, value: str) -> None:
         buffer = ctypes.create_unicode_buffer(value)
         pointer = ctypes.cast(buffer, ctypes.c_void_p).value or 0
@@ -752,6 +763,77 @@ def _normalize_text(value: str) -> str:
     return " ".join(str(value or "").replace("&", "").split()).casefold().rstrip(":")
 
 
+def _dialog_text(window: WindowInfo, children: Sequence[WindowInfo]) -> str:
+    return _normalize_text(" ".join([window.text, *(child.text for child in children if child.text)]))
+
+
+def _exported_record_count(value: str) -> int | None:
+    match = re.search(r"\b([\d,.]+)\s+member records exported\b", value, flags=re.IGNORECASE)
+    if not match:
+        return None
+    digits = re.sub(r"\D", "", match.group(1))
+    return int(digits) if digits else None
+
+
+def _is_expected_overwrite_prompt(value: str, candidate_path: Path) -> bool:
+    normalized = _normalize_text(value)
+    mentions_existing = any(
+        marker in normalized
+        for marker in ("already exists", "bestaat al", "bestaat reeds")
+    )
+    asks_to_replace = any(
+        marker in normalized
+        for marker in ("overwrite", "replace", "overschrijven", "vervangen")
+    )
+    expected_names = {
+        candidate_path.name.casefold(),
+        "memdata.dat",
+    }
+    return mentions_existing and asks_to_replace and any(name in normalized for name in expected_names)
+
+
+def _classify_export_dialog(
+    window: WindowInfo,
+    children: Sequence[WindowInfo],
+    candidate_path: Path,
+) -> str | None:
+    text = _dialog_text(window, children)
+    title = _normalize_text(window.text)
+    child_texts = {_normalize_text(child.text) for child in children if child.text}
+    button_texts = {
+        _normalize_text(child.text)
+        for child in children
+        if child.class_name.casefold() == "button" and child.text
+    }
+
+    if _exported_record_count(text) is not None:
+        return "success"
+    if _is_expected_overwrite_prompt(text, candidate_path):
+        return "overwrite"
+    if "csv" in text and "tab-delimited" in text:
+        return "format"
+    if (
+        ("save" in title and "as" in title)
+        or ("opslaan" in title and "als" in title)
+        or any(child.control_id == 1148 for child in children)
+    ):
+        return "save_as"
+    if "special commands" in child_texts:
+        return "special_commands"
+    if window.text == "Export Member Data":
+        return "export_member_data"
+    if window.text == "Password":
+        return "password"
+    if "deluxe 5,000 edition" in text and "revision info" in text:
+        return "about"
+    if (
+        ("financial" in text or "bank" in text or "credit card" in text)
+        and bool(button_texts.intersection({"yes", "ja"}))
+    ):
+        return "financial"
+    return None
+
+
 def _find_gymassistant_main(ui: Win32UI, expected_data_path: str) -> WindowInfo | None:
     expected = str(Path(expected_data_path)).rstrip("\\/").casefold()
     matches = [
@@ -800,6 +882,7 @@ class GymAssistantExporter:
         credential_path: Path,
         ui_timeout_seconds: float = DEFAULT_UI_TIMEOUT_SECONDS,
         manual_auth: bool = False,
+        ui: Win32UI | None = None,
     ) -> None:
         self.executable = executable
         self.expected_data_path = expected_data_path
@@ -807,7 +890,7 @@ class GymAssistantExporter:
         self.credential_path = credential_path
         self.ui_timeout_seconds = ui_timeout_seconds
         self.manual_auth = manual_auth
-        self.ui = Win32UI()
+        self.ui = ui or Win32UI()
 
     def _main_window(self) -> WindowInfo:
         main = _find_gymassistant_main(self.ui, self.expected_data_path)
@@ -912,38 +995,57 @@ class GymAssistantExporter:
             timeout_seconds=self.ui_timeout_seconds,
         )
 
-    def _answer_export_prompts(self, process_id: int) -> None:
+    def _click_button(self, dialog: WindowInfo, *labels: str) -> None:
+        errors: list[str] = []
+        for label in labels:
+            try:
+                self.ui.click(self.ui.button(dialog.handle, label).handle)
+                return
+            except RosterExportError as exc:
+                errors.append(str(exc))
+        raise RosterExportError(
+            f"Geen verwachte knop gevonden in Gym Assistant ({', '.join(labels)}): "
+            + "; ".join(errors)
+        )
+
+    def _answer_export_prompts(self, process_id: int) -> int:
         deadline = time.monotonic() + self.ui_timeout_seconds
-        saved = False
-        while time.monotonic() < deadline and not saved:
+        handled: set[tuple[int, str]] = set()
+        last_dialogs: list[str] = []
+        while time.monotonic() < deadline:
             dialogs = [
                 window
                 for window in self.ui.top_windows(process_id)
                 if window.class_name == "#32770"
             ]
+            last_dialogs = [window.text or window.class_name for window in dialogs]
+            acted = False
             for dialog in dialogs:
-                child_text = " ".join(child.text for child in self.ui.children(dialog.handle))
-                normalized = _normalize_text(child_text)
-                if "csv" in normalized and "tab-delimited" in normalized:
-                    self.ui.click(self.ui.button(dialog.handle, "CSV").handle)
-                    time.sleep(0.2)
-                    break
-                if "financial" in normalized or "bank" in normalized or "credit card" in normalized:
-                    self.ui.click(self.ui.button(dialog.handle, "Yes").handle)
-                    time.sleep(0.2)
-                    break
-                dialog_title = _normalize_text(dialog.text)
-                if (
-                    ("save" in dialog_title and "as" in dialog_title)
-                    or any(
-                        child.control_id == 1148
-                        for child in self.ui.children(dialog.handle)
-                    )
-                ):
+                children = self.ui.children(dialog.handle)
+                kind = _classify_export_dialog(dialog, children, self.candidate_path)
+                if kind is None:
+                    continue
+                key = (dialog.handle, kind)
+                if kind == "success":
+                    count = _exported_record_count(_dialog_text(dialog, children))
+                    if count is None:
+                        raise RosterExportError("De exportsuccesmelding bevat geen geldig recordaantal.")
+                    self._click_button(dialog, "Close", "Sluiten")
+                    self.ui.wait_not_visible(dialog.handle)
+                    return count
+                if key in handled:
+                    continue
+                if kind == "format":
+                    self._click_button(dialog, "CSV")
+                elif kind == "financial":
+                    self._click_button(dialog, "Yes", "Ja")
+                elif kind == "overwrite":
+                    self._click_button(dialog, "Yes", "Ja")
+                elif kind == "save_as":
                     filename = next(
                         (
                             child
-                            for child in self.ui.children(dialog.handle)
+                            for child in children
                             if child.control_id == 1148 or child.class_name.casefold() == "edit"
                         ),
                         None,
@@ -952,55 +1054,81 @@ class GymAssistantExporter:
                         raise RosterExportError("Bestandsnaamveld in Opslaan als ontbreekt.")
                     self.ui.set_text(filename.handle, str(self.candidate_path))
                     self.ui.click(self.ui.control_by_id(dialog.handle, 1).handle)
-                    saved = True
-                    break
-            else:
+                else:
+                    continue
+                handled.add(key)
+                acted = True
                 time.sleep(0.2)
-                continue
-        if not saved:
-            raise RosterExportError("De Gym Assistant-exportdialoog bereikte Opslaan als niet.")
+                break
+            if not acted:
+                time.sleep(0.2)
+        visible = ", ".join(repr(title) for title in last_dialogs) or "geen"
+        raise RosterExportError(
+            "Gym Assistant bevestigde de voltooide ledenexport niet tijdig. "
+            f"Zichtbare dialoogvensters: {visible}."
+        )
+
+    def _dismiss_known_dialog(self, window: WindowInfo, kind: str) -> None:
+        try:
+            if kind == "success":
+                self._click_button(window, "Close", "Sluiten")
+            elif kind == "overwrite":
+                self._click_button(window, "No", "Nee")
+            elif kind == "financial":
+                self._click_button(window, "No", "Nee", "Cancel", "Annuleren")
+            elif kind in {"format", "save_as", "special_commands", "export_member_data", "password"}:
+                self._click_button(window, "Cancel", "Annuleren")
+            elif kind == "about":
+                self._click_button(window, "OK")
+            else:
+                raise RosterExportError(f"Onbekend Gym Assistant-venstertype: {kind}")
+        except RosterExportError:
+            self.ui.close(window.handle)
 
     def _cleanup_export_windows(self, main: WindowInfo) -> None:
-        deadline = time.monotonic() + 8.0
+        deadline = time.monotonic() + 12.0
         quiet_since: float | None = None
+        remaining: list[str] = []
         while time.monotonic() < deadline:
             closed_any = False
+            report_open = False
             for child in self.ui.children(main.handle):
                 if (
                     child.class_name == "xGym Assistant1220doc9012"
                     and "Membership List" in child.text
                 ):
+                    report_open = True
                     self.ui.close(child.handle)
                     closed_any = True
 
+            remaining = []
             for window in self.ui.top_windows(main.process_id):
                 if window.handle == main.handle:
                     continue
-                child_texts = {
-                    _normalize_text(child.text)
-                    for child in self.ui.children(window.handle)
-                    if child.text
-                }
-                title = _normalize_text(window.text)
-                known = (
-                    window.text in {"Export Member Data", "Password"}
-                    or "special commands" in child_texts
-                    or any("member records exported" in text for text in child_texts)
-                    or any("save file csv or tab-delimited" in text for text in child_texts)
-                    or ("save" in title and "as" in title)
+                kind = _classify_export_dialog(
+                    window,
+                    self.ui.children(window.handle),
+                    self.candidate_path,
                 )
-                if known:
-                    self.ui.close(window.handle)
+                if kind:
+                    self._dismiss_known_dialog(window, kind)
                     closed_any = True
+                else:
+                    remaining.append(window.text or window.class_name)
 
             if closed_any:
                 quiet_since = None
                 time.sleep(0.3)
                 continue
             quiet_since = quiet_since or time.monotonic()
-            if time.monotonic() - quiet_since >= 3.0:
+            if not report_open and not remaining and time.monotonic() - quiet_since >= 3.0:
                 return
             time.sleep(0.2)
+        visible = ", ".join(repr(title) for title in remaining) or "onbekend intern venster"
+        raise RosterExportError(
+            "Gym Assistant kon na de export niet veilig naar het hoofdscherm terugkeren. "
+            f"Achtergebleven venster(s): {visible}."
+        )
 
     def run(self) -> dict:
         main = self._main_window()
@@ -1014,11 +1142,12 @@ class GymAssistantExporter:
             export_dialog = self._choose_export_command(special)
             report_window = self._configure_filters(export_dialog)
             self.ui.click(self.ui.button(report_window.handle, "Export").handle)
-            self._answer_export_prompts(main.process_id)
+            exported_records = self._answer_export_prompts(main.process_id)
             wait_for_stable_file(self.candidate_path)
             return {
                 "status": "exported",
                 "candidate": str(self.candidate_path),
+                "records_exported": exported_records,
                 "size_bytes": self.candidate_path.stat().st_size,
                 "sha256": sha256_file(self.candidate_path),
             }
