@@ -18,6 +18,7 @@ from scripts.gymassistant_roster_export.roster_export import (
     WindowInfo,
     _classify_export_dialog,
     _exported_record_count,
+    invoke_uia_dialog_button,
     pause_signup_bridge,
     promote_candidate,
     run_export,
@@ -173,7 +174,7 @@ class PromptFlowUI:
         self.stage += 1
 
     def wait_not_visible(self, handle: int, *, timeout_seconds: float = 5.0) -> None:
-        if self.stage < 5:
+        if self.stage < 5 and handle == 100 + self.stage:
             raise RosterExportError("Dialoog bleef zichtbaar.")
 
 
@@ -239,6 +240,34 @@ class CleanupFlowUI:
         if handle == 10:
             self.report_open = False
 
+    def wait_not_visible(self, handle: int, *, timeout_seconds: float = 5.0) -> None:
+        visible_handles = {window.handle for window in self.top_windows()}
+        if handle in visible_handles:
+            raise RosterExportError("Dialoog bleef zichtbaar.")
+
+
+class ModernConfirmUI:
+    def __init__(self) -> None:
+        self.visible = True
+        self.legacy_clicks: list[int] = []
+
+    def button(self, parent: int, text: str) -> WindowInfo:
+        if parent != 70 or text not in {"Yes", "No"}:
+            raise RosterExportError(f"Button ontbreekt: {text}")
+        return window_info(
+            71 if text == "Yes" else 72,
+            text=f"&{text}",
+            class_name="Button",
+            parent=70,
+        )
+
+    def click(self, handle: int) -> None:
+        self.legacy_clicks.append(handle)
+
+    def wait_not_visible(self, handle: int, *, timeout_seconds: float = 5.0) -> None:
+        if self.visible:
+            raise RosterExportError("Dialoog bleef zichtbaar.")
+
 
 class GymAssistantRosterExportTests(unittest.TestCase):
     def test_export_prompt_classifier_recognizes_observed_dialogs(self) -> None:
@@ -260,6 +289,11 @@ class GymAssistantRosterExportTests(unittest.TestCase):
                 class_name="Static",
                 parent=11,
             )
+        ]
+        confirm_save_as = window_info(13, text="Confirm Save As")
+        confirm_save_as_children = [
+            window_info(14, text="&Yes", class_name="Button", parent=13),
+            window_info(15, text="&No", class_name="Button", parent=13),
         ]
         success = window_info(3)
         success_children = [
@@ -291,6 +325,10 @@ class GymAssistantRosterExportTests(unittest.TestCase):
             _classify_export_dialog(internal_overwrite, internal_overwrite_children, candidate),
             "overwrite",
         )
+        self.assertEqual(
+            _classify_export_dialog(confirm_save_as, confirm_save_as_children, candidate),
+            "overwrite",
+        )
         self.assertEqual(_classify_export_dialog(success, success_children, candidate), "success")
         self.assertEqual(_classify_export_dialog(special, special_children, candidate), "special_commands")
         self.assertEqual(_exported_record_count("5,027 member records exported."), 5027)
@@ -314,6 +352,70 @@ class GymAssistantRosterExportTests(unittest.TestCase):
         self.assertEqual(count, 5027)
         self.assertEqual(ui.filename, str(candidate))
         self.assertEqual(ui.clicked, ["CSV", "Yes", "Save", "Yes", "Close"])
+
+    def test_confirm_save_as_uses_uia_without_legacy_click(self) -> None:
+        ui = ModernConfirmUI()
+        invocations: list[tuple[int, str]] = []
+
+        def invoke(dialog: WindowInfo, label: str) -> None:
+            invocations.append((dialog.handle, label))
+            ui.visible = False
+
+        exporter = GymAssistantExporter(
+            executable=Path(r"C:\Gym Assistant 2.6\Gym Assistant 26.exe"),
+            expected_data_path=r"C:\Gym Assistant 2.6\Data",
+            candidate_path=Path(r"C:\DreamzPortalSync\exports\pending\MemberData.csv"),
+            credential_path=Path(r"C:\state\master-access.dpapi"),
+            ui_timeout_seconds=1.0,
+            ui=ui,  # type: ignore[arg-type]
+            uia_button_invoker=invoke,
+        )
+
+        exporter._click_modal_button(window_info(70, text="Confirm Save As"), "Yes")
+
+        self.assertEqual(invocations, [(70, "Yes")])
+        self.assertEqual(ui.legacy_clicks, [])
+
+    def test_uia_invoker_requires_auditable_success_response(self) -> None:
+        dialog = window_info(70, text="Confirm Save As")
+        completed = SimpleNamespace(returncode=0, stdout='{"status":"invoked"}\n', stderr="")
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch(
+                "scripts.gymassistant_roster_export.roster_export.subprocess.run",
+                return_value=completed,
+            ) as run,
+        ):
+            helper = Path(directory) / "Invoke-GymAssistantDialogButton.ps1"
+            helper.write_text("# test helper", encoding="ascii")
+            invoke_uia_dialog_button(dialog, "No", helper_path=helper)
+
+        command = run.call_args.args[0]
+        self.assertIn("-ExpectedProcessId", command)
+        self.assertIn("42", command)
+        self.assertIn("-WindowHandle", command)
+        self.assertIn("70", command)
+        self.assertIn("-ExpectedTitle", command)
+        self.assertIn("Confirm Save As", command)
+        self.assertIn("-ButtonLabel", command)
+        self.assertIn("No", command)
+
+    def test_uia_invoker_rejects_missing_confirmation(self) -> None:
+        dialog = window_info(70, text="Confirm Save As")
+        completed = SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch(
+                "scripts.gymassistant_roster_export.roster_export.subprocess.run",
+                return_value=completed,
+            ),
+        ):
+            helper = Path(directory) / "Invoke-GymAssistantDialogButton.ps1"
+            helper.write_text("# test helper", encoding="ascii")
+            with self.assertRaisesRegex(RosterExportError, "geen controleerbaar resultaat"):
+                invoke_uia_dialog_button(dialog, "No", helper_path=helper)
 
     def test_cleanup_returns_through_special_commands_and_about_dialog(self) -> None:
         ui = CleanupFlowUI()

@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Iterator, Sequence
+from typing import Callable, Iterator, Sequence
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -42,6 +42,7 @@ SPECIAL_FEATURES_COMMAND_ID = 5020
 EXPORT_COMMAND = "Export Members to Excel"
 EXPORT_MUTEX_NAME = "Local\\DreamzGymAssistantRosterExport"
 DPAPI_ENTROPY = b"DreamzGymAssistantRosterExport:v1"
+UIA_BUTTON_HELPER = SCRIPT_DIR / "Invoke-GymAssistantDialogButton.ps1"
 
 
 class RosterExportError(RuntimeError):
@@ -891,6 +892,8 @@ def _classify_export_dialog(
         return "success"
     if _is_expected_overwrite_prompt(text, candidate_path):
         return "overwrite"
+    if title == "confirm save as" and {"yes", "no"}.issubset(button_texts):
+        return "overwrite"
     if "csv" in text and "tab-delimited" in text:
         return "format"
     if (
@@ -953,6 +956,71 @@ def _dump_ui(ui: Win32UI, process_id: int) -> list[dict]:
     return payload
 
 
+def invoke_uia_dialog_button(
+    dialog: WindowInfo,
+    button_label: str,
+    *,
+    helper_path: Path = UIA_BUTTON_HELPER,
+) -> None:
+    if os.name != "nt":
+        raise RosterExportError("Windows UI Automation is alleen op Windows beschikbaar.")
+    if not helper_path.is_file():
+        raise RosterExportError(f"Windows UI Automation-helper ontbreekt: {helper_path}")
+
+    command = [
+        "powershell.exe",
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-WindowStyle",
+        "Hidden",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(helper_path),
+        "-ExpectedProcessId",
+        str(dialog.process_id),
+        "-WindowHandle",
+        str(dialog.handle),
+        "-ExpectedTitle",
+        dialog.text,
+        "-ButtonLabel",
+        button_label,
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15.0,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RosterExportError(
+            f"Windows UI Automation reageerde niet tijdig op knop '{button_label}'."
+        ) from exc
+
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "onbekende fout").strip()
+        raise RosterExportError(
+            f"Windows UI Automation kon knop '{button_label}' niet veilig activeren: {detail}"
+        )
+    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    try:
+        result = json.loads(lines[-1].lstrip("\ufeff"))
+    except (IndexError, json.JSONDecodeError) as exc:
+        raise RosterExportError(
+            f"Windows UI Automation gaf geen controleerbaar resultaat voor knop '{button_label}'."
+        ) from exc
+    if result.get("status") != "invoked":
+        raise RosterExportError(
+            f"Windows UI Automation bevestigde knop '{button_label}' niet."
+        )
+
+
 class GymAssistantExporter:
     def __init__(
         self,
@@ -964,6 +1032,7 @@ class GymAssistantExporter:
         ui_timeout_seconds: float = DEFAULT_UI_TIMEOUT_SECONDS,
         manual_auth: bool = False,
         ui: Win32UI | None = None,
+        uia_button_invoker: Callable[[WindowInfo, str], None] | None = None,
     ) -> None:
         self.executable = executable
         self.expected_data_path = expected_data_path
@@ -972,6 +1041,7 @@ class GymAssistantExporter:
         self.ui_timeout_seconds = ui_timeout_seconds
         self.manual_auth = manual_auth
         self.ui = ui or Win32UI()
+        self.uia_button_invoker = uia_button_invoker or invoke_uia_dialog_button
 
     def _main_window(self) -> WindowInfo:
         main = _find_gymassistant_main(self.ui, self.expected_data_path)
@@ -1076,18 +1146,29 @@ class GymAssistantExporter:
             timeout_seconds=self.ui_timeout_seconds,
         )
 
-    def _click_button(self, dialog: WindowInfo, *labels: str) -> None:
+    def _click_modal_button(self, dialog: WindowInfo, *labels: str) -> None:
+        button: WindowInfo | None = None
+        selected_label: str | None = None
         errors: list[str] = []
         for label in labels:
             try:
-                self.ui.click(self.ui.button(dialog.handle, label).handle)
-                return
+                button = self.ui.button(dialog.handle, label)
+                selected_label = label
+                break
             except RosterExportError as exc:
                 errors.append(str(exc))
-        raise RosterExportError(
-            f"Geen verwachte knop gevonden in Gym Assistant ({', '.join(labels)}): "
-            + "; ".join(errors)
-        )
+        if button is None or selected_label is None:
+            raise RosterExportError(
+                f"Geen verwachte knop gevonden in Gym Assistant ({', '.join(labels)}): "
+                + "; ".join(errors)
+            )
+
+        prefer_uia = _normalize_text(dialog.text) == "confirm save as"
+        if prefer_uia:
+            self.uia_button_invoker(dialog, selected_label)
+        else:
+            self.ui.click(button.handle)
+        self.ui.wait_not_visible(dialog.handle, timeout_seconds=5.0)
 
     def _answer_export_prompts(self, process_id: int) -> int:
         deadline = time.monotonic() + self.ui_timeout_seconds
@@ -1111,17 +1192,16 @@ class GymAssistantExporter:
                     count = _exported_record_count(_dialog_text(dialog, children))
                     if count is None:
                         raise RosterExportError("De exportsuccesmelding bevat geen geldig recordaantal.")
-                    self._click_button(dialog, "Close", "Sluiten")
-                    self.ui.wait_not_visible(dialog.handle)
+                    self._click_modal_button(dialog, "Close", "Sluiten")
                     return count
                 if key in handled:
                     continue
                 if kind == "format":
-                    self._click_button(dialog, "CSV")
+                    self._click_modal_button(dialog, "CSV")
                 elif kind == "financial":
-                    self._click_button(dialog, "Yes", "Ja")
+                    self._click_modal_button(dialog, "Yes", "Ja")
                 elif kind == "overwrite":
-                    self._click_button(dialog, "Yes", "Ja")
+                    self._click_modal_button(dialog, "Yes", "Ja")
                 elif kind == "save_as":
                     filename = next(
                         (
@@ -1135,6 +1215,7 @@ class GymAssistantExporter:
                         raise RosterExportError("Bestandsnaamveld in Opslaan als ontbreekt.")
                     self.ui.set_text(filename.handle, str(self.candidate_path))
                     self.ui.click(self.ui.control_by_id(dialog.handle, 1).handle)
+                    self.ui.wait_not_visible(dialog.handle, timeout_seconds=5.0)
                 else:
                     continue
                 handled.add(key)
@@ -1152,19 +1233,27 @@ class GymAssistantExporter:
     def _dismiss_known_dialog(self, window: WindowInfo, kind: str) -> None:
         try:
             if kind == "success":
-                self._click_button(window, "Close", "Sluiten")
+                self._click_modal_button(window, "Close", "Sluiten")
             elif kind == "overwrite":
-                self._click_button(window, "No", "Nee")
+                self._click_modal_button(window, "No", "Nee")
             elif kind == "financial":
-                self._click_button(window, "No", "Nee", "Cancel", "Annuleren")
+                self._click_modal_button(window, "No", "Nee", "Cancel", "Annuleren")
             elif kind in {"format", "save_as", "special_commands", "export_member_data", "password"}:
-                self._click_button(window, "Cancel", "Annuleren")
+                self._click_modal_button(window, "Cancel", "Annuleren")
             elif kind == "about":
-                self._click_button(window, "OK")
+                self._click_modal_button(window, "OK")
             else:
                 raise RosterExportError(f"Onbekend Gym Assistant-venstertype: {kind}")
-        except RosterExportError:
+        except RosterExportError as click_error:
             self.ui.close(window.handle)
+            try:
+                self.ui.wait_not_visible(window.handle, timeout_seconds=3.0)
+            except RosterExportError as close_error:
+                title = window.text or window.class_name
+                raise RosterExportError(
+                    f"Gym Assistant-venster '{title}' ({kind}) kon niet veilig worden gesloten: "
+                    f"{click_error}"
+                ) from close_error
 
     def _cleanup_export_windows(self, main: WindowInfo) -> None:
         deadline = time.monotonic() + 12.0
