@@ -20,10 +20,12 @@ Sync.
   record count. The known `MemData.dat`/candidate `MemberData.csv` overwrite
   confirmation is handled only when the expected file name and overwrite
   wording both match.
-- Windows' modern `Confirm Save As` dialog is handled through a bundled UI
-  Automation helper. It is restricted to the exact Gym Assistant process,
-  window handle, window title, and one named button; it never uses mouse,
-  keyboard, coordinates, or foreground focus. The dialog must then be proven
+- Windows' modern `Confirm Save As` dialog is handled through a bundled
+  Microsoft Active Accessibility helper. It uses the exact Win32 button handle
+  already identified by the exporter and verifies the Gym Assistant process,
+  dialog handle/title, parent-child relation, native button label, accessible
+  button role/label, default action and enabled state. It never uses mouse,
+  keyboard, coordinates or foreground focus. The dialog must then be proven
   closed before the export can continue.
 - After a successful export, the runner closes the report, Special Commands,
   and the Gym Assistant information dialog through their named controls. An

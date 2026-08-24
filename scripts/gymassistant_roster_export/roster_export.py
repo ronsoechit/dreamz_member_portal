@@ -42,7 +42,7 @@ SPECIAL_FEATURES_COMMAND_ID = 5020
 EXPORT_COMMAND = "Export Members to Excel"
 EXPORT_MUTEX_NAME = "Local\\DreamzGymAssistantRosterExport"
 DPAPI_ENTROPY = b"DreamzGymAssistantRosterExport:v1"
-UIA_BUTTON_HELPER = SCRIPT_DIR / "Invoke-GymAssistantDialogButton.ps1"
+ACCESSIBLE_BUTTON_HELPER = SCRIPT_DIR / "Invoke-GymAssistantDialogButton.ps1"
 
 
 class RosterExportError(RuntimeError):
@@ -956,16 +956,19 @@ def _dump_ui(ui: Win32UI, process_id: int) -> list[dict]:
     return payload
 
 
-def invoke_uia_dialog_button(
+def invoke_accessible_dialog_button(
     dialog: WindowInfo,
+    button: WindowInfo,
     button_label: str,
     *,
-    helper_path: Path = UIA_BUTTON_HELPER,
+    helper_path: Path = ACCESSIBLE_BUTTON_HELPER,
 ) -> None:
     if os.name != "nt":
-        raise RosterExportError("Windows UI Automation is alleen op Windows beschikbaar.")
+        raise RosterExportError(
+            "Windows-toegankelijkheidsbediening is alleen op Windows beschikbaar."
+        )
     if not helper_path.is_file():
-        raise RosterExportError(f"Windows UI Automation-helper ontbreekt: {helper_path}")
+        raise RosterExportError(f"Windows-toegankelijkheidshelper ontbreekt: {helper_path}")
 
     command = [
         "powershell.exe",
@@ -982,6 +985,8 @@ def invoke_uia_dialog_button(
         str(dialog.process_id),
         "-WindowHandle",
         str(dialog.handle),
+        "-ButtonHandle",
+        str(button.handle),
         "-ExpectedTitle",
         dialog.text,
         "-ButtonLabel",
@@ -1000,24 +1005,34 @@ def invoke_uia_dialog_button(
         )
     except subprocess.TimeoutExpired as exc:
         raise RosterExportError(
-            f"Windows UI Automation reageerde niet tijdig op knop '{button_label}'."
+            f"Windows-toegankelijkheidsbediening reageerde niet tijdig op knop '{button_label}'."
         ) from exc
 
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "onbekende fout").strip()
         raise RosterExportError(
-            f"Windows UI Automation kon knop '{button_label}' niet veilig activeren: {detail}"
+            f"Windows-toegankelijkheidsbediening kon knop '{button_label}' "
+            f"niet veilig activeren: {detail}"
         )
     lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
     try:
         result = json.loads(lines[-1].lstrip("\ufeff"))
     except (IndexError, json.JSONDecodeError) as exc:
         raise RosterExportError(
-            f"Windows UI Automation gaf geen controleerbaar resultaat voor knop '{button_label}'."
+            "Windows-toegankelijkheidsbediening gaf geen controleerbaar "
+            f"resultaat voor knop '{button_label}'."
         ) from exc
-    if result.get("status") != "invoked":
+    if (
+        result.get("status") != "invoked"
+        or result.get("process_id") != dialog.process_id
+        or result.get("window_handle") != dialog.handle
+        or result.get("button_handle") != button.handle
+        or result.get("button") != button_label
+        or result.get("accessible_role") != 43
+        or result.get("method") != "MSAA.accDoDefaultAction"
+    ):
         raise RosterExportError(
-            f"Windows UI Automation bevestigde knop '{button_label}' niet."
+            f"Windows-toegankelijkheidsbediening bevestigde knop '{button_label}' niet."
         )
 
 
@@ -1032,7 +1047,7 @@ class GymAssistantExporter:
         ui_timeout_seconds: float = DEFAULT_UI_TIMEOUT_SECONDS,
         manual_auth: bool = False,
         ui: Win32UI | None = None,
-        uia_button_invoker: Callable[[WindowInfo, str], None] | None = None,
+        accessible_button_invoker: Callable[[WindowInfo, WindowInfo, str], None] | None = None,
     ) -> None:
         self.executable = executable
         self.expected_data_path = expected_data_path
@@ -1041,7 +1056,9 @@ class GymAssistantExporter:
         self.ui_timeout_seconds = ui_timeout_seconds
         self.manual_auth = manual_auth
         self.ui = ui or Win32UI()
-        self.uia_button_invoker = uia_button_invoker or invoke_uia_dialog_button
+        self.accessible_button_invoker = (
+            accessible_button_invoker or invoke_accessible_dialog_button
+        )
 
     def _main_window(self) -> WindowInfo:
         main = _find_gymassistant_main(self.ui, self.expected_data_path)
@@ -1163,9 +1180,9 @@ class GymAssistantExporter:
                 + "; ".join(errors)
             )
 
-        prefer_uia = _normalize_text(dialog.text) == "confirm save as"
-        if prefer_uia:
-            self.uia_button_invoker(dialog, selected_label)
+        prefer_accessibility = _normalize_text(dialog.text) == "confirm save as"
+        if prefer_accessibility:
+            self.accessible_button_invoker(dialog, button, selected_label)
         else:
             self.ui.click(button.handle)
         self.ui.wait_not_visible(dialog.handle, timeout_seconds=5.0)

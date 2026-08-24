@@ -18,7 +18,7 @@ from scripts.gymassistant_roster_export.roster_export import (
     WindowInfo,
     _classify_export_dialog,
     _exported_record_count,
-    invoke_uia_dialog_button,
+    invoke_accessible_dialog_button,
     pause_signup_bridge,
     promote_candidate,
     run_export,
@@ -353,12 +353,12 @@ class GymAssistantRosterExportTests(unittest.TestCase):
         self.assertEqual(ui.filename, str(candidate))
         self.assertEqual(ui.clicked, ["CSV", "Yes", "Save", "Yes", "Close"])
 
-    def test_confirm_save_as_uses_uia_without_legacy_click(self) -> None:
+    def test_confirm_save_as_uses_accessibility_without_legacy_click(self) -> None:
         ui = ModernConfirmUI()
-        invocations: list[tuple[int, str]] = []
+        invocations: list[tuple[int, int, str]] = []
 
-        def invoke(dialog: WindowInfo, label: str) -> None:
-            invocations.append((dialog.handle, label))
+        def invoke(dialog: WindowInfo, button: WindowInfo, label: str) -> None:
+            invocations.append((dialog.handle, button.handle, label))
             ui.visible = False
 
         exporter = GymAssistantExporter(
@@ -368,17 +368,26 @@ class GymAssistantRosterExportTests(unittest.TestCase):
             credential_path=Path(r"C:\state\master-access.dpapi"),
             ui_timeout_seconds=1.0,
             ui=ui,  # type: ignore[arg-type]
-            uia_button_invoker=invoke,
+            accessible_button_invoker=invoke,
         )
 
         exporter._click_modal_button(window_info(70, text="Confirm Save As"), "Yes")
 
-        self.assertEqual(invocations, [(70, "Yes")])
+        self.assertEqual(invocations, [(70, 71, "Yes")])
         self.assertEqual(ui.legacy_clicks, [])
 
-    def test_uia_invoker_requires_auditable_success_response(self) -> None:
+    def test_accessible_invoker_requires_auditable_success_response(self) -> None:
         dialog = window_info(70, text="Confirm Save As")
-        completed = SimpleNamespace(returncode=0, stdout='{"status":"invoked"}\n', stderr="")
+        button = window_info(72, text="&No", class_name="Button", parent=70)
+        completed = SimpleNamespace(
+            returncode=0,
+            stdout=(
+                '{"status":"invoked","process_id":42,"window_handle":70,'
+                '"button_handle":72,"button":"No","accessible_role":43,'
+                '"method":"MSAA.accDoDefaultAction"}\n'
+            ),
+            stderr="",
+        )
 
         with (
             tempfile.TemporaryDirectory() as directory,
@@ -389,20 +398,23 @@ class GymAssistantRosterExportTests(unittest.TestCase):
         ):
             helper = Path(directory) / "Invoke-GymAssistantDialogButton.ps1"
             helper.write_text("# test helper", encoding="ascii")
-            invoke_uia_dialog_button(dialog, "No", helper_path=helper)
+            invoke_accessible_dialog_button(dialog, button, "No", helper_path=helper)
 
         command = run.call_args.args[0]
         self.assertIn("-ExpectedProcessId", command)
         self.assertIn("42", command)
         self.assertIn("-WindowHandle", command)
         self.assertIn("70", command)
+        self.assertIn("-ButtonHandle", command)
+        self.assertIn("72", command)
         self.assertIn("-ExpectedTitle", command)
         self.assertIn("Confirm Save As", command)
         self.assertIn("-ButtonLabel", command)
         self.assertIn("No", command)
 
-    def test_uia_invoker_rejects_missing_confirmation(self) -> None:
+    def test_accessible_invoker_rejects_missing_confirmation(self) -> None:
         dialog = window_info(70, text="Confirm Save As")
+        button = window_info(72, text="&No", class_name="Button", parent=70)
         completed = SimpleNamespace(returncode=0, stdout="", stderr="")
 
         with (
@@ -415,7 +427,32 @@ class GymAssistantRosterExportTests(unittest.TestCase):
             helper = Path(directory) / "Invoke-GymAssistantDialogButton.ps1"
             helper.write_text("# test helper", encoding="ascii")
             with self.assertRaisesRegex(RosterExportError, "geen controleerbaar resultaat"):
-                invoke_uia_dialog_button(dialog, "No", helper_path=helper)
+                invoke_accessible_dialog_button(dialog, button, "No", helper_path=helper)
+
+    def test_accessible_invoker_rejects_wrong_button_handle_confirmation(self) -> None:
+        dialog = window_info(70, text="Confirm Save As")
+        button = window_info(72, text="&No", class_name="Button", parent=70)
+        completed = SimpleNamespace(
+            returncode=0,
+            stdout=(
+                '{"status":"invoked","process_id":42,"window_handle":70,'
+                '"button_handle":73,"button":"No","accessible_role":43,'
+                '"method":"MSAA.accDoDefaultAction"}\n'
+            ),
+            stderr="",
+        )
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch(
+                "scripts.gymassistant_roster_export.roster_export.subprocess.run",
+                return_value=completed,
+            ),
+        ):
+            helper = Path(directory) / "Invoke-GymAssistantDialogButton.ps1"
+            helper.write_text("# test helper", encoding="ascii")
+            with self.assertRaisesRegex(RosterExportError, "bevestigde knop"):
+                invoke_accessible_dialog_button(dialog, button, "No", helper_path=helper)
 
     def test_cleanup_returns_through_special_commands_and_about_dialog(self) -> None:
         ui = CleanupFlowUI()
