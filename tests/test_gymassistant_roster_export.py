@@ -16,6 +16,7 @@ from scripts.gymassistant_roster_export.roster_export import (
     RosterExportError,
     ValidationPolicy,
     WindowInfo,
+    Win32UI,
     _classify_export_dialog,
     _exported_record_count,
     invoke_accessible_dialog_button,
@@ -104,9 +105,11 @@ class PromptFlowUI:
         self.stage = 0
         self.clicked: list[str] = []
         self.filename: str | None = None
+        self.save_as_visible_behind_confirmation = False
 
-    def _controls(self) -> list[WindowInfo]:
-        parent = 100 + self.stage
+    def _controls(self, stage: int | None = None) -> list[WindowInfo]:
+        selected_stage = self.stage if stage is None else stage
+        parent = 100 + selected_stage
         definitions = (
             (
                 ("Save file CSV or Tab-Delimited format?", "Static", 0),
@@ -135,32 +138,45 @@ class PromptFlowUI:
         )
         return [
             window_info(
-                (self.stage + 1) * 1000 + index,
+                (selected_stage + 1) * 1000 + index,
                 text=text,
                 class_name=class_name,
                 control_id=control_id,
                 parent=parent,
             )
-            for index, (text, class_name, control_id) in enumerate(definitions[self.stage], start=1)
+            for index, (text, class_name, control_id) in enumerate(
+                definitions[selected_stage], start=1
+            )
         ]
 
     def top_windows(self, process_id: int | None = None) -> list[WindowInfo]:
         if self.stage >= 5:
             return []
         title = "Save As" if self.stage == 2 else ""
-        return [window_info(100 + self.stage, text=title)]
+        current = window_info(100 + self.stage, text=title)
+        if self.stage == 3:
+            self.save_as_visible_behind_confirmation = True
+            return [window_info(102, text="Save As"), current]
+        return [current]
 
     def children(self, parent: int) -> list[WindowInfo]:
-        return self._controls()
+        stage = parent - 100
+        if 0 <= stage < 5:
+            return self._controls(stage)
+        return []
 
     def button(self, parent: int, text: str) -> WindowInfo:
-        matches = [item for item in self._controls() if item.class_name == "Button" and item.text == text]
+        matches = [
+            item
+            for item in self.children(parent)
+            if item.class_name == "Button" and item.text == text
+        ]
         if len(matches) != 1:
             raise RosterExportError(f"Button ontbreekt: {text}")
         return matches[0]
 
     def control_by_id(self, parent: int, control_id: int) -> WindowInfo:
-        matches = [item for item in self._controls() if item.control_id == control_id]
+        matches = [item for item in self.children(parent) if item.control_id == control_id]
         if len(matches) != 1:
             raise RosterExportError(f"Control ontbreekt: {control_id}")
         return matches[0]
@@ -169,13 +185,32 @@ class PromptFlowUI:
         self.filename = value
 
     def click(self, handle: int) -> None:
-        control = next(item for item in self._controls() if item.handle == handle)
+        controls = [
+            child
+            for window in self.top_windows()
+            for child in self.children(window.handle)
+        ]
+        control = next(item for item in controls if item.handle == handle)
         self.clicked.append(control.text)
         self.stage += 1
 
-    def wait_not_visible(self, handle: int, *, timeout_seconds: float = 5.0) -> None:
-        if self.stage < 5 and handle == 100 + self.stage:
-            raise RosterExportError("Dialoog bleef zichtbaar.")
+    def wait_not_visible(
+        self,
+        handle: int,
+        *,
+        timeout_seconds: float = 5.0,
+        expected_window: WindowInfo | None = None,
+    ) -> None:
+        current = next((window for window in self.top_windows() if window.handle == handle), None)
+        if current is None:
+            return
+        if expected_window and (
+            current.process_id != expected_window.process_id
+            or current.class_name != expected_window.class_name
+            or current.text != expected_window.text
+        ):
+            return
+        raise RosterExportError("Dialoog bleef zichtbaar.")
 
 
 class CleanupFlowUI:
@@ -240,7 +275,13 @@ class CleanupFlowUI:
         if handle == 10:
             self.report_open = False
 
-    def wait_not_visible(self, handle: int, *, timeout_seconds: float = 5.0) -> None:
+    def wait_not_visible(
+        self,
+        handle: int,
+        *,
+        timeout_seconds: float = 5.0,
+        expected_window: WindowInfo | None = None,
+    ) -> None:
         visible_handles = {window.handle for window in self.top_windows()}
         if handle in visible_handles:
             raise RosterExportError("Dialoog bleef zichtbaar.")
@@ -264,9 +305,36 @@ class ModernConfirmUI:
     def click(self, handle: int) -> None:
         self.legacy_clicks.append(handle)
 
-    def wait_not_visible(self, handle: int, *, timeout_seconds: float = 5.0) -> None:
+    def wait_not_visible(
+        self,
+        handle: int,
+        *,
+        timeout_seconds: float = 5.0,
+        expected_window: WindowInfo | None = None,
+    ) -> None:
         if self.visible:
             raise RosterExportError("Dialoog bleef zichtbaar.")
+
+
+class CleanStartUI:
+    def __init__(self, *, user_notice: bool) -> None:
+        self.main = window_info(1, text="Gym Assistant", class_name="GymAssistant26Task")
+        self.user_notice = user_notice
+
+    def top_windows(self, process_id: int | None = None) -> list[WindowInfo]:
+        return [self.main]
+
+    def children(self, parent: int) -> list[WindowInfo]:
+        if parent != self.main.handle or not self.user_notice:
+            return []
+        return [
+            window_info(
+                2,
+                text="Gym Assistant User Notice",
+                class_name="xGym Assistant1220child0",
+                parent=self.main.handle,
+            )
+        ]
 
 
 class GymAssistantRosterExportTests(unittest.TestCase):
@@ -352,6 +420,39 @@ class GymAssistantRosterExportTests(unittest.TestCase):
         self.assertEqual(count, 5027)
         self.assertEqual(ui.filename, str(candidate))
         self.assertEqual(ui.clicked, ["CSV", "Yes", "Save", "Yes", "Close"])
+        self.assertTrue(ui.save_as_visible_behind_confirmation)
+
+    def test_clean_start_rejects_existing_user_notice(self) -> None:
+        ui = CleanStartUI(user_notice=True)
+        exporter = GymAssistantExporter(
+            executable=Path(r"C:\Gym Assistant 2.6\Gym Assistant 26.exe"),
+            expected_data_path=r"C:\Gym Assistant 2.6\Data",
+            candidate_path=Path(r"C:\DreamzPortalSync\exports\pending\MemberData.csv"),
+            credential_path=Path(r"C:\state\master-access.dpapi"),
+            ui=ui,  # type: ignore[arg-type]
+        )
+
+        with self.assertRaisesRegex(RosterExportError, "User Notice"):
+            exporter._assert_clean_start(ui.main)
+
+    def test_wait_not_visible_accepts_reused_window_handle(self) -> None:
+        expected = window_info(70, text="Confirm Save As")
+        replacement = window_info(70, text="Export complete")
+
+        class VisibleWindowApi:
+            @staticmethod
+            def IsWindow(handle: int) -> bool:
+                return True
+
+            @staticmethod
+            def IsWindowVisible(handle: int) -> bool:
+                return True
+
+        ui = object.__new__(Win32UI)
+        ui.user32 = VisibleWindowApi()
+        ui._info = lambda handle: replacement  # type: ignore[method-assign]
+
+        ui.wait_not_visible(70, timeout_seconds=0.1, expected_window=expected)
 
     def test_confirm_save_as_uses_accessibility_without_legacy_click(self) -> None:
         ui = ModernConfirmUI()

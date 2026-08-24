@@ -11,8 +11,8 @@ Sync.
 - It refuses to run while another export is active.
 - On the frontdesk it pauses the Signup Bridge and waits until the bridge
   confirms `paused` before opening export dialogs.
-- Existing Gym Assistant dialogs cause the run to stop without touching the
-  current CSV.
+- Existing Gym Assistant dialogs, Membership List reports, and internal User
+  Notices cause the run to stop without touching the current CSV.
 - Before opening Gym Assistant, it creates and verifies a temporary recovery
   copy of the published CSV. If Gym Assistant unexpectedly changes that file,
   the original is restored atomically and the candidate is rejected.
@@ -27,6 +27,9 @@ Sync.
   button role/label, default action and enabled state. It never uses mouse,
   keyboard, coordinates or foreground focus. The dialog must then be proven
   closed before the export can continue.
+- Windows may keep the parent `Save As` window visible while `Confirm Save As`
+  is open. The runner treats that as the expected nested-dialog sequence and
+  only continues after the exact confirmation has been handled.
 - After a successful export, the runner closes the report, Special Commands,
   and the Gym Assistant information dialog through their named controls. An
   unexpected dialog fails the run and leaves the last valid CSV in place.

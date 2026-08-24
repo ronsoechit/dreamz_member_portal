@@ -744,13 +744,33 @@ class Win32UI:
     def close(self, handle: int) -> None:
         self.post(handle, self.WM_CLOSE)
 
-    def wait_not_visible(self, handle: int, *, timeout_seconds: float = 5.0) -> None:
+    def wait_not_visible(
+        self,
+        handle: int,
+        *,
+        timeout_seconds: float = 5.0,
+        expected_window: WindowInfo | None = None,
+    ) -> None:
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
             if not self.user32.IsWindow(handle) or not self.user32.IsWindowVisible(handle):
                 return
+            if expected_window is not None:
+                current = self._info(handle)
+                if (
+                    current.process_id != expected_window.process_id
+                    or current.class_name != expected_window.class_name
+                    or current.text != expected_window.text
+                ):
+                    return
             time.sleep(0.1)
-        raise RosterExportError("Gym Assistant sloot het verwachte venster niet tijdig.")
+        current = self._info(handle) if self.user32.IsWindow(handle) else None
+        current_title = current.text if current else "niet meer aanwezig"
+        expected_title = expected_window.text if expected_window else "onbekend"
+        raise RosterExportError(
+            "Gym Assistant sloot het verwachte venster niet tijdig: "
+            f"handle={handle}, verwacht={expected_title!r}, huidig={current_title!r}."
+        )
 
     def set_text(self, handle: int, value: str) -> None:
         buffer = ctypes.create_unicode_buffer(value)
@@ -1075,9 +1095,22 @@ class GymAssistantExporter:
             raise RosterExportError(
                 "Gym Assistant heeft al een dialoog of ledenvenster open; export uitgesteld: " + titles
             )
+        descendants = self.ui.children(main.handle)
+        user_notices = [
+            child
+            for child in descendants
+            if child.visible
+            and child.class_name == "xGym Assistant1220child0"
+            and _normalize_text(child.text) == "gym assistant user notice"
+        ]
+        if user_notices:
+            raise RosterExportError(
+                "Gym Assistant toont al een User Notice; export veilig uitgesteld. "
+                "Sluit de melding in Gym Assistant en probeer daarna opnieuw."
+            )
         stale_reports = [
             child
-            for child in self.ui.children(main.handle)
+            for child in descendants
             if child.visible and "membership list" in child.text.casefold()
         ]
         if stale_reports:
@@ -1185,7 +1218,17 @@ class GymAssistantExporter:
             self.accessible_button_invoker(dialog, button, selected_label)
         else:
             self.ui.click(button.handle)
-        self.ui.wait_not_visible(dialog.handle, timeout_seconds=5.0)
+        try:
+            self.ui.wait_not_visible(
+                dialog.handle,
+                timeout_seconds=5.0,
+                expected_window=dialog,
+            )
+        except RosterExportError as exc:
+            title = dialog.text or dialog.class_name
+            raise RosterExportError(
+                f"Gym Assistant-venster {title!r} bleef open na knop {selected_label!r}: {exc}"
+            ) from exc
 
     def _answer_export_prompts(self, process_id: int) -> int:
         deadline = time.monotonic() + self.ui_timeout_seconds
@@ -1232,7 +1275,9 @@ class GymAssistantExporter:
                         raise RosterExportError("Bestandsnaamveld in Opslaan als ontbreekt.")
                     self.ui.set_text(filename.handle, str(self.candidate_path))
                     self.ui.click(self.ui.control_by_id(dialog.handle, 1).handle)
-                    self.ui.wait_not_visible(dialog.handle, timeout_seconds=5.0)
+                    # Windows keeps Save As visible while Confirm Save As is modal.
+                    # Mark this dialog handled and let the next loop process that
+                    # confirmation before requiring the parent to disappear.
                 else:
                     continue
                 handled.add(key)
@@ -1264,7 +1309,11 @@ class GymAssistantExporter:
         except RosterExportError as click_error:
             self.ui.close(window.handle)
             try:
-                self.ui.wait_not_visible(window.handle, timeout_seconds=3.0)
+                self.ui.wait_not_visible(
+                    window.handle,
+                    timeout_seconds=3.0,
+                    expected_window=window,
+                )
             except RosterExportError as close_error:
                 title = window.text or window.class_name
                 raise RosterExportError(
