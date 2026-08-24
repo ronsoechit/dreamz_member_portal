@@ -317,15 +317,24 @@ class ModernConfirmUI:
 
 
 class CleanStartUI:
-    def __init__(self, *, user_notice: bool) -> None:
+    def __init__(
+        self,
+        *,
+        embedded_user_notice: bool = False,
+        top_window: WindowInfo | None = None,
+    ) -> None:
         self.main = window_info(1, text="Gym Assistant", class_name="GymAssistant26Task")
-        self.user_notice = user_notice
+        self.embedded_user_notice = embedded_user_notice
+        self.top_window = top_window
 
     def top_windows(self, process_id: int | None = None) -> list[WindowInfo]:
-        return [self.main]
+        windows = [self.main]
+        if self.top_window is not None:
+            windows.append(self.top_window)
+        return windows
 
     def children(self, parent: int) -> list[WindowInfo]:
-        if parent != self.main.handle or not self.user_notice:
+        if parent != self.main.handle or not self.embedded_user_notice:
             return []
         return [
             window_info(
@@ -422,8 +431,8 @@ class GymAssistantRosterExportTests(unittest.TestCase):
         self.assertEqual(ui.clicked, ["CSV", "Yes", "Save", "Yes", "Close"])
         self.assertTrue(ui.save_as_visible_behind_confirmation)
 
-    def test_clean_start_rejects_existing_user_notice(self) -> None:
-        ui = CleanStartUI(user_notice=True)
+    def test_clean_start_allows_embedded_user_notice_status_control(self) -> None:
+        ui = CleanStartUI(embedded_user_notice=True)
         exporter = GymAssistantExporter(
             executable=Path(r"C:\Gym Assistant 2.6\Gym Assistant 26.exe"),
             expected_data_path=r"C:\Gym Assistant 2.6\Data",
@@ -432,7 +441,24 @@ class GymAssistantRosterExportTests(unittest.TestCase):
             ui=ui,  # type: ignore[arg-type]
         )
 
-        with self.assertRaisesRegex(RosterExportError, "User Notice"):
+        exporter._assert_clean_start(ui.main)
+
+    def test_clean_start_rejects_separate_visible_user_notice_window(self) -> None:
+        notice = window_info(
+            2,
+            text="Gym Assistant User Notice",
+            class_name="xGym Assistant1220child0",
+        )
+        ui = CleanStartUI(top_window=notice)
+        exporter = GymAssistantExporter(
+            executable=Path(r"C:\Gym Assistant 2.6\Gym Assistant 26.exe"),
+            expected_data_path=r"C:\Gym Assistant 2.6\Data",
+            candidate_path=Path(r"C:\DreamzPortalSync\exports\pending\MemberData.csv"),
+            credential_path=Path(r"C:\state\master-access.dpapi"),
+            ui=ui,  # type: ignore[arg-type]
+        )
+
+        with self.assertRaisesRegex(RosterExportError, "dialoog of ledenvenster"):
             exporter._assert_clean_start(ui.main)
 
     def test_wait_not_visible_accepts_reused_window_handle(self) -> None:

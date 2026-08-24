@@ -11,8 +11,10 @@ Sync.
 - It refuses to run while another export is active.
 - On the frontdesk it pauses the Signup Bridge and waits until the bridge
   confirms `paused` before opening export dialogs.
-- Existing Gym Assistant dialogs, Membership List reports, and internal User
-  Notices cause the run to stop without touching the current CSV.
+- Existing separate Gym Assistant dialogs or member windows and open Membership
+  List reports cause the run to stop without touching the current CSV. The
+  embedded `Gym Assistant User Notice` status-bar control is non-blocking and
+  does not stop an export; a separate visible User Notice window still does.
 - Before opening Gym Assistant, it creates and verifies a temporary recovery
   copy of the published CSV. If Gym Assistant unexpectedly changes that file,
   the original is restored atomically and the candidate is rejected.

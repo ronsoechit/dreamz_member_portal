@@ -1095,19 +1095,10 @@ class GymAssistantExporter:
             raise RosterExportError(
                 "Gym Assistant heeft al een dialoog of ledenvenster open; export uitgesteld: " + titles
             )
+        # Gym Assistant exposes its non-blocking status bar as an embedded
+        # "Gym Assistant User Notice" child. A blocking notice is a separate
+        # top-level window and is already rejected by the guard above.
         descendants = self.ui.children(main.handle)
-        user_notices = [
-            child
-            for child in descendants
-            if child.visible
-            and child.class_name == "xGym Assistant1220child0"
-            and _normalize_text(child.text) == "gym assistant user notice"
-        ]
-        if user_notices:
-            raise RosterExportError(
-                "Gym Assistant toont al een User Notice; export veilig uitgesteld. "
-                "Sluit de melding in Gym Assistant en probeer daarna opnieuw."
-            )
         stale_reports = [
             child
             for child in descendants
