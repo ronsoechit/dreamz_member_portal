@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="{{ current_language }}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f7b500">
+  <title>{{ t('email_correction_page_title') }} | Dreamz Fitness</title>
+  <link href="{{ url_for('static', filename='css/premium.css', v=static_asset_version('css/premium.css')) }}" rel="stylesheet">
+  <style>
+    body { margin: 0; }
+    .access-shell { min-height: 100vh; display: grid; place-items: center; padding: 2rem 1rem; box-sizing: border-box; }
+    .access-card { width: min(100%, 32rem); box-sizing: border-box; }
+    .access-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+    .access-logo { height: 4rem; max-width: 100%; }
+    .language-form { text-align: right; font-size: .75rem; }
+    .language-label { display: block; margin-bottom: .3rem; color: #9ca3af; font-weight: 700; }
+    .language-controls { display: flex; align-items: stretch; gap: .35rem; }
+    .language-select { border: 1px solid #374151; border-radius: .4rem; background: #030712; color: #fff; padding: .4rem .55rem; }
+    .language-submit { border: 1px solid #f7b500; border-radius: .4rem; background: transparent; color: #fde68a; padding: .4rem .6rem; font-weight: 700; cursor: pointer; }
+    .access-title { margin: 1.5rem 0 .5rem; font-size: 1.65rem; }
+    .access-copy, .field-help { color: #d1d5db; font-size: .9rem; line-height: 1.6; }
+    .success-panel { margin-top: 1.5rem; border: 1px solid rgba(34,197,94,.4); border-radius: .75rem; background: rgba(34,197,94,.1); padding: 1rem; color: #dcfce7; }
+    .success-panel h2 { margin: 0; font-size: 1rem !important; }
+    .success-panel p { margin: .35rem 0 0; font-size: .9rem; line-height: 1.6; }
+    .access-form { display: grid; gap: 1rem; margin-top: 1.5rem; }
+    .field label { display: block; margin-bottom: .35rem; font-weight: 600; }
+    .field input { width: 100%; box-sizing: border-box; border: 1px solid #374151; border-radius: .5rem; background: #1f2937; color: #fff; padding: .7rem .75rem; font: inherit; }
+    .field input:focus, .language-select:focus { outline: 2px solid #f7b500; outline-offset: 2px; }
+    .field-help { margin: .4rem 0 0; color: #9ca3af; font-size: .75rem; }
+    .access-submit { width: 100%; border: 0; border-radius: .5rem; background: #f7b500; color: #05070d; padding: .8rem 1rem; font-weight: 800; cursor: pointer; }
+    .access-submit:hover { background: #facc15; }
+    .access-back { display: inline-flex; margin-top: 1.5rem; color: #fde68a; font-size: .9rem; font-weight: 700; text-decoration: none; }
+    .access-back:hover { color: #fef3c7; }
+    @media (max-width: 32rem) {
+      .access-header { align-items: stretch; flex-direction: column; }
+      .language-form { text-align: left; }
+    }
+  </style>
+</head>
+<body class="auth-body">
+  <div class="access-shell">
+  <main class="auth-card access-card">
+    <div class="access-header">
+      <div class="auth-logo-frame">
+        <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Dreamz Fitness" class="auth-logo access-logo">
+      </div>
+      <form class="language-form" action="{{ url_for('set_language') }}" method="get">
+        <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
+        <label class="language-label" for="access-help-language">{{ t('language') }}</label>
+        <div class="language-controls">
+          <select id="access-help-language" name="lang" class="language-select">
+            {% for code, label in available_languages.items() %}
+              <option value="{{ code }}" {% if current_language == code %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="language-submit">{{ t('apply') }}</button>
+        </div>
+      </form>
+    </div>
+
+    <h1 class="access-title">{{ t('email_correction_page_title') }}</h1>
+    <p class="access-copy">{{ t('email_correction_page_intro') }}</p>
+
+    {% if submitted %}
+      <section class="success-panel">
+        <h2>{{ t('email_correction_submitted_title') }}</h2>
+        <p>{{ t('email_correction_submitted_body') }}</p>
+      </section>
+    {% else %}
+      <form method="post" class="access-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="field">
+          <label for="member-number">{{ t('member_id') }}</label>
+          <input id="member-number" name="member_number" type="text" inputmode="numeric" maxlength="12" autocomplete="off" required>
+        </div>
+        <div class="field">
+          <label for="full-name">{{ t('email_correction_full_name') }}</label>
+          <input id="full-name" name="full_name" type="text" maxlength="255" autocomplete="name" required>
+        </div>
+        <div class="field">
+          <label for="birthdate">{{ t('email_correction_birthdate') }}</label>
+          <input id="birthdate" name="birthdate" type="date" autocomplete="bday" required>
+          <p class="field-help">{{ t('email_correction_birthdate_help') }}</p>
+        </div>
+        <div class="field">
+          <label for="requested-email">{{ t('email_correction_requested_email') }}</label>
+          <input id="requested-email" name="requested_email" type="email" maxlength="254" autocomplete="email" required>
+          <p class="field-help">{{ t('email_correction_requested_email_help') }}</p>
+        </div>
+        <button type="submit" class="access-submit">{{ t('email_correction_submit') }}</button>
+      </form>
+    {% endif %}
+
+    <a href="{{ url_for('login') }}" class="access-back">{{ t('email_correction_back_to_login') }}</a>
+  </main>
+  </div>
+</body>
+</html>

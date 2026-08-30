@@ -39,6 +39,23 @@
   </a>
 </div>
 
+{% if email_correction_review_count %}
+  <section class="mb-6 rounded border border-yellow-500/50 bg-yellow-950/20 p-4">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <div>
+        <h3 class="text-lg font-semibold text-yellow-100">{{ t('email_correction_queue_title') }}</h3>
+        <p class="mt-1 text-sm text-yellow-100/80">
+          {{ t('email_correction_queue_intro') }}
+        </p>
+      </div>
+      <span class="rounded bg-yellow-500 px-3 py-1 text-sm font-bold text-black">{{ email_correction_review_count }}</span>
+    </div>
+    <a class="mt-4 inline-flex rounded bg-yellow-500 px-3 py-2 text-sm font-semibold text-black hover:bg-yellow-400" href="{{ url_for('staff_email_corrections') }}">
+      {{ t('email_correction_queue_nav') }}
+    </a>
+  </section>
+{% endif %}
+
 <div class="space-y-3">
   {% for email in logs %}
     {% set requires_review = email_log_requires_review(email) %}

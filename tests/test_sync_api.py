@@ -70,6 +70,29 @@ class SyncApiTests(unittest.TestCase):
             "Authorization": f"Bearer {token}",
         }
 
+    def test_member_sync_schedules_reconciliation_without_direct_smtp_work(self):
+        scheduled = {
+            "portal_invitations": {"status": "scheduled"},
+            "member_email_corrections": {"status": "scheduled"},
+        }
+        with (
+            patch("dreamz_portal.schedule_post_sync_reconciliation", return_value=scheduled) as schedule,
+            patch("dreamz_portal.reconcile_pending_portal_invitations") as invitations,
+            patch("dreamz_portal.reconcile_pending_member_email_corrections") as corrections,
+        ):
+            response = self.client.post(
+                "/api/sync/members",
+                json={"source": "async-reconciliation-test", "members": []},
+                headers={"X-Sync-Token": "sync-test-token"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["portal_invitations"]["status"], "scheduled")
+        self.assertEqual(response.json["member_email_corrections"]["status"], "scheduled")
+        schedule.assert_called_once_with()
+        invitations.assert_not_called()
+        corrections.assert_not_called()
+
     def add_direct_debit_member(self, **overrides):
         data = {
             "member_id": "34203",

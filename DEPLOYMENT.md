@@ -42,6 +42,13 @@ EXISTING_MEMBER_JOURNAL_EVIDENCE_PORTAL_SIGNING_KEY_ID=
 EXISTING_MEMBER_JOURNAL_EVIDENCE_PORTAL_PRIVATE_KEY=
 EXISTING_MEMBER_JOURNAL_EVIDENCE_CLAIM_SECONDS=120
 MEMBER_PORTAL_PUBLIC_URL=https://dreamzfitness.app
+MEMBER_EMAIL_CORRECTION_TOKEN_TTL_HOURS=24
+MEMBER_EMAIL_CORRECTION_MAX_PER_IP_HOUR=5
+MEMBER_EMAIL_CORRECTION_MAX_PER_MEMBER_DAY=3
+MEMBER_EMAIL_CORRECTION_SYNC_TTL_HOURS=168
+MEMBER_EMAIL_CORRECTION_DELIVERY_STALE_MINUTES=15
+MEMBER_EMAIL_CORRECTION_FRONTDESK_EMAIL=<frontdesk mailbox, optional settings override>
+MEMBER_EMAIL_CORRECTION_TRUSTED_PROXY_HOPS=0
 WORDPRESS_SCHEDULE_WEBHOOK_URL=https://dreamzfitness.com/wp-json/dreamz/v1/group-class-schedule
 WORDPRESS_SCHEDULE_WEBHOOK_TOKEN=<shared random token used only for schedule publication>
 SYNC_STALE_AFTER_MINUTES=30
@@ -111,6 +118,150 @@ Existing signups are marked for legacy reconciliation and do not receive a bulk
 activation email. Existing members entered manually in GymAssistant can request a
 normal one-time login code from the portal after the sync has imported their
 unique email address.
+
+### Member access and Gym Assistant e-mail correction
+
+Members who have not activated the portal, or whose e-mail address is missing
+or incorrect in Gym Assistant, start at `/access-help`. The public form asks for
+the Gym Assistant member number, exact full name, date of birth, and the e-mail
+address the member wants to use. Its response is deliberately identical for
+matching and non-matching requests and returns immediately without waiting for
+SMTP. Every request consumes the per-IP rate limit. The per-member rate limit is
+consumed only after the exact member-number/name/date-of-birth proof succeeds,
+so incorrect identity attempts cannot exhaust a member's daily allowance. An
+exact proof creates a durable `verification_queued` request; the normal
+background reconciliation cycle claims it and sends the verification message.
+The identity-proof form loads only same-origin static assets, permits no script
+execution through its CSP, and is returned `private, no-store`/`no-referrer`;
+no third-party executable code can read the submitted fields.
+
+The neutral HTTP response prevents direct response-based enumeration, but the
+arrival of a verification message at the candidate inbox remains an
+out-of-band indication that the submitted member number, exact name and date of
+birth matched. This is an explicitly accepted, rate-limited residual risk—not a
+claim of complete enumeration resistance. It cannot update Gym Assistant or
+grant portal access: the candidate inbox must still be confirmed, and the
+frontdesk must independently verify identity before manually updating the exact
+Gym Assistant member. A stricter future design would require an already-verified
+channel or carefully controlled decoy delivery.
+
+On Railway, the portal recognizes the Railway-provided `RAILWAY_SERVICE_ID` and
+uses the platform edge's documented `X-Real-IP` header for the per-IP limit. It
+does not infer trust from a request header alone. Outside Railway,
+`MEMBER_EMAIL_CORRECTION_TRUSTED_PROXY_HOPS` is the explicit count of trusted
+reverse-proxy hops used to select the client address from `X-Forwarded-For`. Its
+safe default is `0`, which ignores that header and uses the direct peer address.
+Set it to `1` only after verifying that production has exactly one trusted edge
+which appends the rightmost forwarded address; use the exact verified number if
+the topology differs. Do not replace this with broad private-network or proxy
+CIDR trust.
+
+The requested inbox receives a confirmation link first. Opening that link with
+`GET` is read-only: mail-security scanners and link-preview services cannot
+confirm the request. Confirmation requires the explicit form `POST` with a
+valid CSRF token. The bearer token is placed in the URL fragment, which is not
+sent to the web server or ingress access log; same-origin inline code copies it
+to the POST body and immediately removes the fragment from browser history. The
+confirmation response is `no-store`/`no-referrer`, uses a restrictive CSP and
+loads no third-party script. The token is redacted from the protected e-mail
+log. The value used later to validate confirmation is stored only as a hash.
+While a verification message is still queued, the
+one-time dispatch copy is stored only as authenticated ciphertext; it is cleared
+after the delivery state is resolved. The token is single use and expires according to
+`MEMBER_EMAIL_CORRECTION_TOKEN_TTL_HOURS` (default `24`). Every delivery phase
+requires the exact SMTP result `sent`; `logged`, failed, stale, or ambiguous
+outcomes fail closed. Durable send states and unique message references allow a
+restart to reconcile a proven sent message without sending it again. Request
+creation is limited by
+`MEMBER_EMAIL_CORRECTION_MAX_PER_IP_HOUR` (default `5`) and
+`MEMBER_EMAIL_CORRECTION_MAX_PER_MEMBER_DAY` (default `3`, verified proofs only).
+PostgreSQL advisory locks make the count-and-insert decision atomic across
+Railway workers. A unique open-request key permits only one non-terminal request
+per member.
+
+Configure the recipients under **Staff > Settings** as follows:
+
+```text
+notification_to=<frontdesk mailbox>
+admin_email=<Ron's admin mailbox>
+always_cc_admin=1
+```
+
+After the member confirms the requested inbox, a missing or different Gym
+Assistant address generates a notification to `notification_to`. With
+`always_cc_admin=1`, the configured `admin_email` (Ron) is always copied unless
+that address is already a direct recipient. This message is deliberately
+non-actionable: it does not disclose the requested or current member e-mail and
+does not instruct the recipient to edit Gym Assistant. It links only to the
+dedicated authenticated `/staff/email-corrections` queue. Managers can read
+that queue but cannot close quarantined records or read the broader e-mail log;
+administrators retain those controls. An old or forwarded notification is
+therefore never sufficient authority to change a member record.
+The queue response is marked `private, no-store` so its member data is not left
+in a shared frontdesk browser cache after logout or back-button navigation.
+
+The protected queue is the current source of truth. It shows both active
+`waiting_for_gym_assistant_email` requests and quarantined `manual_review`
+requests, plus non-actionable processing states while a persisted delivery is
+being recovered. Staff may process only an active request shown there. For an active
+request, the frontdesk employee must first verify the member's identity using
+the normal frontdesk procedure, check that the confirmed address is not assigned
+to another member, open the exact displayed member number in Gym Assistant, and
+manually update only that member's e-mail address. A delivery failure before the
+member confirms the new inbox never displays the unconfirmed name/address as
+verified. Manual-review records show no action instruction and only an
+administrator can close them. The queue enforces
+the request deadline when it is opened—even if Portal Sync is offline—and shows
+the exact deadline for every active record.
+
+The member portal never writes this correction to Gym Assistant and there is no
+portal-side “mark corrected” button. The normal protected
+`POST /api/sync/members` cycle reads the later Gym Assistant change. After its
+database transaction, it schedules invitation and access reconciliation on a
+background thread; SMTP is never performed inside the sync request. A per-process
+mutex plus a PostgreSQL advisory lock prevents parallel Railway workers from
+running that reconciliation concurrently. Durable queue/send states make a
+worker restart recoverable on the next request or sync. Reconciliation completes
+the request only when the requested address is present on the exact member and
+is unique across synchronized members; duplicate or ambiguous addresses stop in
+manual review. On an exact match the portal invalidates every still-unused old
+message to the corrected address. It also removes the old portal password and
+increments the member authentication version so every earlier portal session is
+revoked. A normal Gym Assistant e-mail change received by member sync applies the
+same authentication invalidation, so codes, passwords, and sessions bound to the
+previous address cannot remain valid.
+
+Every request-state change uses a compare-and-swap status condition. A stale
+worker therefore cannot overwrite `completed`, `expired`, `manual_review` or
+`review_closed`, and authentication invalidation is committed at most once for
+the same correction request. Runtime schema creation, additive columns (including
+`member.auth_version`), indexes and backfills run under a PostgreSQL advisory
+lock during application import. A migration failure prevents the Gunicorn worker
+from accepting traffic; it is not deferred until an authentication request.
+
+Confirmed requests expire if the exact Gym Assistant update is not synchronized
+within `MEMBER_EMAIL_CORRECTION_SYNC_TTL_HOURS` (default `168`). Manual-review
+items remain durably visible in `/staff/email-corrections`. **Staff > Email Log**
+shows only their count and a link to that session-protected queue; it does not
+duplicate correction details and a legacy `STAFF_TOKEN` cannot read the queue.
+Their per-member open
+key is intentionally retained while they are quarantined, so a second request
+cannot bypass the unresolved conflict. That key is released only when an
+administrator closes the review. The queue never writes to Gym Assistant. After
+resolving a duplicate or delivery conflict, the administrator closes the review
+and asks the member to submit a new secure request if access is still needed.
+
+This access-recovery flow does **not** import, draft, approve or issue invoices.
+Production invoice import and issuance remain disabled outside the separately
+controlled Gym Assistant invoice pilot. It does not change
+`INVOICE_GA_PILOT_ENABLED`, `INVOICE_GA_PILOT_MEMBER_IDS`,
+`INVOICE_ISSUING_ENABLED`, the approved invoice-number gate, or any staff review
+requirement. Invoice download itself is not pilot-allowlist gated: a member who
+regains portal access can see and download only that member's invoices already
+stored with status `issued`, including previously issued records outside the
+current pilot allowlist. Access recovery does not create a draft, invoice
+number, PDF, or invoice e-mail, and legacy invoices absent from the portal's
+invoice records do not appear automatically.
 
 The existing-member reverification handoff is a separate closed pilot. Deploy it
 with `PORTAL_EXISTING_MEMBER_REVERIFICATION_ENABLED=false`; this is also the

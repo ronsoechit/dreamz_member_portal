@@ -58,6 +58,7 @@
               <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_data_audit' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_data_audit') }}">{{ t('staff_audit_nav') }}</a>
             {% endif %}
             <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_daily_changes' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_daily_changes') }}">{{ t('staff_changes_nav') }}</a>
+            <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_email_corrections' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_email_corrections') }}">{{ t('email_correction_queue_nav') }}</a>
             {% if current_staff_role == 'admin' %}
               <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_sync_status' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_sync_status') }}">{{ t('staff_sync_nav') }}</a>
               <a class="rounded px-3 py-2 {% if request.endpoint == 'staff_coach_activity' %}bg-yellow-500 text-black{% else %}text-gray-300 hover:bg-gray-700 hover:text-white{% endif %}" href="{{ url_for('staff_coach_activity') }}">{{ t('staff_coach_nav') }}</a>

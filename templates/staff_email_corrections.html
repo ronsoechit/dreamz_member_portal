@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}{{ t('email_correction_queue_title') }} | Dreamz Fitness{% endblock %}
+
+{% block content %}
+<section class="rounded border border-yellow-500/50 bg-yellow-950/20 p-4">
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <div>
+      <h1 class="text-xl font-semibold text-yellow-100">{{ t('email_correction_queue_title') }}</h1>
+      <p class="mt-1 text-sm text-yellow-100/80">{{ t('email_correction_queue_intro') }}</p>
+    </div>
+    <span class="rounded bg-yellow-500 px-3 py-1 text-sm font-bold text-black">{{ email_correction_review_count }}</span>
+  </div>
+
+  {% if email_correction_reviews %}
+    <div class="mt-4 space-y-3">
+      {% for correction in email_correction_reviews %}
+        {% set is_active_correction = correction.status == 'waiting_for_gym_assistant_email' %}
+        {% set is_processing_correction = correction.status in ['staff_notification_pending', 'sending_staff_notification', 'sending_member_notification'] %}
+        {% set correction_deadline = email_correction_deadlines.get(correction.id) if email_correction_deadlines else none %}
+        <details class="rounded border {% if is_active_correction %}border-green-500/40{% elif is_processing_correction %}border-yellow-500/40{% else %}border-red-500/40{% endif %} bg-gray-950/60 p-3">
+          <summary class="cursor-pointer font-semibold text-white">
+            <span class="mr-2 rounded px-2 py-1 text-xs {% if is_active_correction %}bg-green-500/20 text-green-100{% elif is_processing_correction %}bg-yellow-500/20 text-yellow-100{% else %}bg-red-500/20 text-red-100{% endif %}">
+              {{ t('email_correction_active_badge') if is_active_correction else (t('email_correction_processing_badge') if is_processing_correction else t('email_correction_manual_badge')) }}
+            </span>
+            {{ correction.reference }} · {{ t('member_id') }} #{{ correction.member_id }}
+          </summary>
+          <div class="mt-3 rounded border {% if is_active_correction %}border-green-500/30 bg-green-950/20 text-green-50{% elif is_processing_correction %}border-yellow-500/30 bg-yellow-950/20 text-yellow-50{% else %}border-red-500/30 bg-red-950/20 text-red-50{% endif %} p-3 text-sm leading-6">
+            {{ t('email_correction_active_instruction') if is_active_correction else (t('email_correction_processing_instruction') if is_processing_correction else t('email_correction_review_queue_intro')) }}
+          </div>
+          {% if is_active_correction and correction_deadline %}
+            <div class="mt-3 rounded border border-yellow-500/40 bg-yellow-950/30 px-3 py-2 text-sm font-semibold text-yellow-100">
+              {{ t('email_correction_active_deadline') }}: {{ correction_deadline|format_date('%d/%m/%Y %H:%M') }}
+            </div>
+          {% endif %}
+          <dl class="mt-3 grid gap-2 text-sm md:grid-cols-[10rem_minmax(0,1fr)]">
+            {% if not is_processing_correction and correction.email_confirmed_at %}
+              <dt class="font-semibold text-gray-300">{{ t('email_correction_review_claimed_name') }}</dt>
+              <dd class="text-gray-200">{{ correction.claimed_name }}</dd>
+              <dt class="font-semibold text-gray-300">{{ t('email_correction_review_confirmed_address') }}</dt>
+              <dd class="text-gray-200">{{ correction.requested_email }}</dd>
+            {% endif %}
+            {% if correction.status == 'manual_review' %}
+              <dt class="font-semibold text-gray-300">{{ t('email_correction_review_reason') }}</dt>
+              <dd class="font-mono text-red-200">{{ correction.last_error or 'manual_review' }}</dd>
+            {% endif %}
+            <dt class="font-semibold text-gray-300">{{ t('email_correction_review_confirmed_at') }}</dt>
+            <dd class="text-gray-200">{{ correction.email_confirmed_at|format_date('%d/%m/%Y %H:%M') if correction.email_confirmed_at else t('email_correction_review_not_confirmed') }}</dd>
+            <dt class="font-semibold text-gray-300">{{ t('email_correction_review_updated_at') }}</dt>
+            <dd class="text-gray-200">{{ correction.updated_at|format_date('%d/%m/%Y %H:%M') }}</dd>
+          </dl>
+          {% if correction.status == 'manual_review' and staff_role == 'admin' %}
+            <form method="post" action="{{ url_for('staff_member_email_correction_close', correction_id=correction.id) }}" class="mt-4 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input name="review_note" maxlength="2000" class="rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white" placeholder="{{ t('email_correction_review_note') }}">
+              <button type="submit" class="rounded bg-red-500 px-3 py-2 text-sm font-semibold text-white hover:bg-red-400">{{ t('email_correction_review_close') }}</button>
+            </form>
+          {% endif %}
+        </details>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

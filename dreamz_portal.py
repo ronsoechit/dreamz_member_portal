@@ -1,12 +1,15 @@
 import calendar
 import base64
 import hashlib
+import hmac
 import html
+import ipaddress
 import json
 import os
 import platform
 import re
 import threading
+import unicodedata
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from decimal import Decimal, InvalidOperation
@@ -21,12 +24,13 @@ if os.name == "nt":
 
 from flask import (
     Flask, render_template, request, abort,
-    redirect, url_for, flash, session, Response, send_file, send_from_directory, jsonify, has_request_context, g
+    redirect, url_for, flash, session, Response, send_file, send_from_directory, jsonify, has_request_context, g,
+    make_response,
 )
 
 from flask_sqlalchemy import SQLAlchemy
 from markupsafe import Markup
-from sqlalchemy import event, inspect, or_
+from sqlalchemy import event, inspect, or_, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from dateutil.relativedelta import relativedelta
 from datetime import datetime, date, time, timedelta   # ← bestaande regel uitbreiden
@@ -78,11 +82,13 @@ try:
         Ed25519PrivateKey,
         Ed25519PublicKey,
     )
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 except ImportError:  # pragma: no cover - exercised through the fail-closed gate
     InvalidSignature = None
     serialization = None
     Ed25519PrivateKey = None
     Ed25519PublicKey = None
+    AESGCM = None
 
 
 def normalize_database_uri(database_uri, default_database_path):
@@ -241,6 +247,44 @@ app.config["EMAIL_DELIVERY_MODE"] = os.getenv("EMAIL_DELIVERY_MODE", "log")
 app.config["MEMBER_LOGIN_CODE_TTL_MINUTES"] = int(os.getenv("MEMBER_LOGIN_CODE_TTL_MINUTES", "15"))
 app.config["MEMBER_SESSION_DAYS"] = int(os.getenv("MEMBER_SESSION_DAYS", "90"))
 app.config["MEMBER_PASSWORD_MIN_LENGTH"] = int(os.getenv("MEMBER_PASSWORD_MIN_LENGTH", "8"))
+app.config["MEMBER_EMAIL_CORRECTION_TOKEN_TTL_HOURS"] = positive_int_environment_value(
+    "MEMBER_EMAIL_CORRECTION_TOKEN_TTL_HOURS",
+    24,
+)
+app.config["MEMBER_EMAIL_CORRECTION_MAX_PER_IP_HOUR"] = positive_int_environment_value(
+    "MEMBER_EMAIL_CORRECTION_MAX_PER_IP_HOUR",
+    5,
+)
+app.config["MEMBER_EMAIL_CORRECTION_MAX_PER_MEMBER_DAY"] = positive_int_environment_value(
+    "MEMBER_EMAIL_CORRECTION_MAX_PER_MEMBER_DAY",
+    3,
+)
+app.config["MEMBER_EMAIL_CORRECTION_SYNC_TTL_HOURS"] = positive_int_environment_value(
+    "MEMBER_EMAIL_CORRECTION_SYNC_TTL_HOURS",
+    168,
+)
+app.config["MEMBER_EMAIL_CORRECTION_DELIVERY_STALE_MINUTES"] = positive_int_environment_value(
+    "MEMBER_EMAIL_CORRECTION_DELIVERY_STALE_MINUTES",
+    15,
+)
+app.config["MEMBER_EMAIL_CORRECTION_FRONTDESK_EMAIL"] = os.getenv(
+    "MEMBER_EMAIL_CORRECTION_FRONTDESK_EMAIL",
+    "",
+).strip()
+try:
+    member_email_correction_trusted_proxy_hops = int(os.getenv(
+        "MEMBER_EMAIL_CORRECTION_TRUSTED_PROXY_HOPS",
+        "0",
+    ))
+except ValueError:
+    member_email_correction_trusted_proxy_hops = 0
+app.config["MEMBER_EMAIL_CORRECTION_TRUSTED_PROXY_HOPS"] = max(
+    0,
+    min(member_email_correction_trusted_proxy_hops, 5),
+)
+app.config["MEMBER_EMAIL_CORRECTION_TRUST_RAILWAY_X_REAL_IP"] = bool(
+    os.getenv("RAILWAY_SERVICE_ID")
+)
 app.config["WHATSAPP_LOGIN_ENABLED"] = os.getenv("WHATSAPP_LOGIN_ENABLED", "false")
 app.config["WHATSAPP_META_APP_ID"] = os.getenv("WHATSAPP_META_APP_ID", "")
 app.config["WHATSAPP_BUSINESS_ACCOUNT_ID"] = os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID", "")
@@ -377,6 +421,7 @@ class Member(db.Model):
     photo_path       = db.Column(db.String)
     password_hash    = db.Column(db.String(512))
     password_set_at  = db.Column(db.DateTime)
+    auth_version     = db.Column(db.Integer, default=0, nullable=False)
     responsible_member_id = db.Column(db.String, index=True)
     dependent_member_ids  = db.Column(db.Text)
     gym_snapshot_run_id = db.Column(db.Integer, index=True)
@@ -786,6 +831,56 @@ class PortalInvitation(db.Model):
     sent_at = db.Column(db.DateTime)
 
     email_log = db.relationship("EmailLog")
+
+
+class MemberEmailCorrectionRequest(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    reference = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    member_id = db.Column(db.String, nullable=False, index=True)
+    claimed_name = db.Column(db.String(255), nullable=False)
+    requested_email = db.Column(db.String(254), nullable=False, index=True)
+    requested_email_hash = db.Column(db.String(64), nullable=False, index=True)
+    open_member_key = db.Column(db.String(64))
+    language = db.Column(db.String(8), default=DEFAULT_LANGUAGE, nullable=False)
+    status = db.Column(
+        db.String(48),
+        default="verification_queued",
+        nullable=False,
+        index=True,
+    )
+    confirmation_token_hash = db.Column(db.String(64), nullable=False)
+    confirmation_token_ciphertext = db.Column(db.Text)
+    confirmation_expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    requester_ip_hash = db.Column(db.String(64), nullable=False, index=True)
+    attempts = db.Column(db.Integer, default=0, nullable=False)
+    last_error = db.Column(db.Text)
+    verification_email_log_id = db.Column(db.Integer, db.ForeignKey("email_log.id"), index=True)
+    staff_email_log_id = db.Column(db.Integer, db.ForeignKey("email_log.id"), index=True)
+    member_email_log_id = db.Column(db.Integer, db.ForeignKey("email_log.id"), index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    email_confirmed_at = db.Column(db.DateTime)
+    staff_notified_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    member_notified_at = db.Column(db.DateTime)
+    member_auth_version_at_request = db.Column(db.Integer, default=0, nullable=False)
+    auth_secured_at = db.Column(db.DateTime)
+    auth_version_after_secure = db.Column(db.Integer)
+    reviewed_at = db.Column(db.DateTime)
+    reviewed_by = db.Column(db.String(255))
+    review_note = db.Column(db.Text)
+
+    verification_email_log = db.relationship("EmailLog", foreign_keys=[verification_email_log_id])
+    staff_email_log = db.relationship("EmailLog", foreign_keys=[staff_email_log_id])
+    member_email_log = db.relationship("EmailLog", foreign_keys=[member_email_log_id])
+
+
+class MemberEmailCorrectionAttempt(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    requester_ip_hash = db.Column(db.String(64), nullable=False, index=True)
+    member_subject_hash = db.Column(db.String(64), nullable=False, index=True)
+    proof_verified = db.Column(db.Boolean, default=False, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
 
 
 class ExistingMemberJournalEvidenceRequest(db.Model):
@@ -2578,6 +2673,16 @@ def ensure_runtime_model_columns():
             ensure_model_column(table.name, column.name, runtime_column_definition(column))
 
 
+def ensure_member_email_correction_open_index():
+    """Enforce one non-terminal correction request per GA member."""
+    db.session.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS "
+        "uq_member_email_correction_open_member_key "
+        "ON member_email_correction_request (open_member_key)"
+    ))
+    db.session.commit()
+
+
 def sql_bool(value):
     if db.engine.dialect.name == "postgresql":
         return "TRUE" if value else "FALSE"
@@ -2590,6 +2695,18 @@ def backfill_runtime_schema_defaults():
     true_value = sql_bool(True)
     db.session.execute(text(
         f"UPDATE staff_user SET is_active = {true_value} WHERE is_active IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE member SET auth_version = 0 WHERE auth_version IS NULL"
+    ))
+    db.session.execute(text(
+        "UPDATE member_email_correction_request "
+        "SET member_auth_version_at_request = 0 "
+        "WHERE member_auth_version_at_request IS NULL"
+    ))
+    db.session.execute(text(
+        f"UPDATE member_email_correction_attempt SET proof_verified = {sql_bool(False)} "
+        "WHERE proof_verified IS NULL"
     ))
     db.session.execute(text(
         "UPDATE staff_user SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
@@ -2754,6 +2871,7 @@ def ensure_runtime_schema():
 
     db.create_all()
     ensure_runtime_model_columns()
+    ensure_member_email_correction_open_index()
     backfill_runtime_schema_defaults()
     ensure_sqlite_model_column("cancellation_request", "notification_to", "TEXT")
     ensure_sqlite_model_column("cancellation_request", "notification_cc", "TEXT")
@@ -2807,6 +2925,32 @@ def ensure_runtime_schema():
     seed_feature_access_rules()
     seed_legal_documents()
     app.config["_RUNTIME_SCHEMA_READY"] = True
+
+
+RUNTIME_SCHEMA_STARTUP_LOCK_ID = 492310867530912337
+
+
+def ensure_runtime_schema_before_traffic():
+    """Complete runtime DDL/backfills before a worker can accept traffic."""
+    if db.engine.dialect.name != "postgresql":
+        ensure_runtime_schema()
+        return
+
+    lock_connection = db.engine.connect()
+    try:
+        lock_connection.execute(
+            text("SELECT pg_advisory_lock(:lock_id)"),
+            {"lock_id": RUNTIME_SCHEMA_STARTUP_LOCK_ID},
+        )
+        ensure_runtime_schema()
+    finally:
+        try:
+            lock_connection.execute(
+                text("SELECT pg_advisory_unlock(:lock_id)"),
+                {"lock_id": RUNTIME_SCHEMA_STARTUP_LOCK_ID},
+            )
+        finally:
+            lock_connection.close()
 
 
 def setting_value(key, default=None):
@@ -10534,6 +10678,8 @@ def apply_sync_payload(payload):
                         plan_type=member_data.get("plan_type") or existing.plan_type,
                         changes=changes,
                     ))
+                if any(change.get("field") == "email" for change in changes):
+                    secure_member_auth_after_email_change(existing)
                 for key, value in member_data.items():
                     setattr(existing, key, value)
             else:
@@ -10868,7 +11014,14 @@ def open_cancellation_count():
 
 def open_email_log_count():
     try:
-        return EmailLog.query.filter(email_log_review_required_filter()).count()
+        return (
+            EmailLog.query.filter(email_log_review_required_filter()).count()
+            + MemberEmailCorrectionRequest.query.filter(
+                MemberEmailCorrectionRequest.status.in_(
+                    MEMBER_EMAIL_CORRECTION_STAFF_QUEUE_STATUSES
+                )
+            ).count()
+        )
     except Exception:
         db.session.rollback()
         app.logger.exception("Open email log count unavailable; hiding staff badge.")
@@ -11030,8 +11183,8 @@ def current_member_or_redirect():
         return None, redirect(url_for("login"))
 
     member = Member.query.filter_by(member_id=member_id).first()
-    if not member:
-        session.pop("member_id", None)
+    if not member or int(session.get("member_auth_version", 0)) != int(member.auth_version or 0):
+        clear_member_session_authentication()
         flash(translated_text("please_log_in", current_language()))
         return None, redirect(url_for("login"))
 
@@ -11046,6 +11199,7 @@ def start_member_session(member, password_verified=False):
         session["_csrf_token"] = csrf_token
     session["language"] = language
     session["member_id"] = member.member_id
+    session["member_auth_version"] = int(member.auth_version or 0)
     if password_verified:
         session["member_password_verified"] = True
     session.permanent = True
@@ -11062,6 +11216,23 @@ def start_member_session(member, password_verified=False):
             "Could not initialize invoice language preference for member %s.",
             member.member_id,
         )
+
+
+def clear_member_session_authentication():
+    session.pop("member_id", None)
+    session.pop("member_auth_version", None)
+    session.pop("member_password_verified", None)
+
+
+@app.before_request
+def enforce_member_session_auth_version():
+    member_id = session.get("member_id")
+    if not member_id or request.endpoint in {"static", "web_manifest", "service_worker"}:
+        return None
+    member = Member.query.filter_by(member_id=member_id).first()
+    if member and int(session.get("member_auth_version", 0)) == int(member.auth_version or 0):
+        return None
+    clear_member_session_authentication()
 
 
 def validate_member_password(password, confirmation):
@@ -13721,6 +13892,16 @@ def require_staff_access(required_role=None):
     abort(403, "Staff login required.")
 
 
+def require_staff_session(required_role=None):
+    """Require an authenticated browser session; never accept STAFF_TOKEN."""
+    role = current_staff_role()
+    if not role:
+        abort(403, "Staff login required.")
+    if required_role == "admin" and role != "admin":
+        abort(403, "Admin access required.")
+    return role
+
+
 MANAGER_ALLOWED_STAFF_ENDPOINTS = frozenset({
     "staff_login",
     "staff_logout",
@@ -13735,6 +13916,7 @@ MANAGER_ALLOWED_STAFF_ENDPOINTS = frozenset({
     "staff_pricing_item_save",
     "staff_cancellations",
     "staff_cancellation_status",
+    "staff_email_corrections",
     "staff_member_detail",
 })
 
@@ -14393,7 +14575,15 @@ def email_html_layout(title, intro, rows=None, note=None, action_label=None, act
 </html>"""
 
 
-def deliver_email(to_addresses, subject, body, cc_addresses=None, bcc_addresses=None, html_body=None):
+def deliver_email(
+    to_addresses,
+    subject,
+    body,
+    cc_addresses=None,
+    bcc_addresses=None,
+    html_body=None,
+    redact_log_content=False,
+):
     to_addresses = [email for email in (to_addresses or []) if email]
     cc_addresses = [email for email in (cc_addresses or []) if email]
     bcc_addresses = [email for email in (bcc_addresses or []) if email]
@@ -14406,8 +14596,8 @@ def deliver_email(to_addresses, subject, body, cc_addresses=None, bcc_addresses=
         cc_addresses=", ".join(cc_addresses),
         bcc_addresses=", ".join(bcc_addresses),
         subject=subject,
-        body=body,
-        html_body=html_body,
+        body=("[Sensitive e-mail content redacted]" if redact_log_content else body),
+        html_body=(None if redact_log_content else html_body),
     )
     db.session.add(log_record)
     db.session.commit()
@@ -16315,6 +16505,1217 @@ def reconcile_pending_portal_invitations(limit=100):
     return summary
 
 
+MEMBER_EMAIL_CORRECTION_OPEN_STATUSES = {
+    "verification_queued",
+    "sending_verification",
+    "awaiting_email_confirmation",
+    "staff_notification_pending",
+    "sending_staff_notification",
+    "waiting_for_gym_assistant_email",
+    "sending_member_notification",
+}
+MEMBER_EMAIL_CORRECTION_RECONCILABLE_STATUSES = {
+    "verification_queued",
+    "sending_verification",
+    "staff_notification_pending",
+    "sending_staff_notification",
+    "waiting_for_gym_assistant_email",
+    "sending_member_notification",
+}
+MEMBER_EMAIL_CORRECTION_STAFF_QUEUE_STATUSES = {
+    "staff_notification_pending",
+    "sending_staff_notification",
+    "waiting_for_gym_assistant_email",
+    "sending_member_notification",
+    "manual_review",
+}
+MEMBER_EMAIL_CORRECTION_STAFF_QUEUE_PROCESSING_STATUSES = {
+    "staff_notification_pending",
+    "sending_staff_notification",
+    "sending_member_notification",
+}
+MEMBER_EMAIL_CORRECTION_TERMINAL_STATUSES = {
+    "completed",
+    "expired",
+    "manual_review",
+    "review_closed",
+}
+
+
+def current_member_email_correction(record):
+    """Reload a correction so decisions never rely on a stale ORM snapshot."""
+    if not record:
+        return None
+    record_id = record.id
+    db.session.expire_all()
+    return db.session.get(MemberEmailCorrectionRequest, record_id)
+
+
+def transition_member_email_correction(
+    record,
+    expected_statuses,
+    target_status,
+    *,
+    now=None,
+    **values,
+):
+    """Compare-and-swap one request state and return (current, claimed)."""
+    if not record:
+        return None, False
+    now = now or datetime.now()
+    expected_statuses = tuple(expected_statuses or ())
+    if not expected_statuses:
+        return current_member_email_correction(record), False
+    update_values = {
+        MemberEmailCorrectionRequest.status: target_status,
+        MemberEmailCorrectionRequest.updated_at: now,
+    }
+    for field_name, value in values.items():
+        update_values[getattr(MemberEmailCorrectionRequest, field_name)] = value
+    claimed = (
+        MemberEmailCorrectionRequest.query
+        .filter(MemberEmailCorrectionRequest.id == record.id)
+        .filter(MemberEmailCorrectionRequest.status.in_(expected_statuses))
+        .update(update_values, synchronize_session=False)
+    )
+    db.session.commit()
+    return current_member_email_correction(record), claimed == 1
+
+
+def member_email_correction_email_hash(email):
+    return hashlib.sha256(normalize_email(email).encode("utf-8")).hexdigest()
+
+
+def member_email_correction_token_hash(token):
+    return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+
+def member_email_correction_token_encryption_key():
+    if AESGCM is None:
+        raise RuntimeError("Cryptography support is required for queued verification e-mails.")
+    return hashlib.sha256(
+        b"dreamz-member-email-correction-token-v1\0"
+        + str(app.secret_key).encode("utf-8")
+    ).digest()
+
+
+def encrypt_member_email_correction_token(token):
+    nonce = os.urandom(12)
+    ciphertext = AESGCM(member_email_correction_token_encryption_key()).encrypt(
+        nonce,
+        str(token or "").encode("utf-8"),
+        b"dreamz.member-email-correction.v1",
+    )
+    return base64.urlsafe_b64encode(nonce + ciphertext).decode("ascii")
+
+
+def decrypt_member_email_correction_token(ciphertext):
+    try:
+        payload = base64.urlsafe_b64decode(str(ciphertext or "").encode("ascii"))
+        if len(payload) <= 12:
+            raise ValueError
+        plaintext = AESGCM(member_email_correction_token_encryption_key()).decrypt(
+            payload[:12],
+            payload[12:],
+            b"dreamz.member-email-correction.v1",
+        )
+        token = plaintext.decode("utf-8")
+    except Exception as exc:
+        raise RuntimeError("Queued verification token cannot be decrypted.") from exc
+    return token
+
+
+def member_email_correction_ip_hash(ip_address):
+    value = str(ip_address or "unknown").strip().encode("utf-8")
+    key = str(app.secret_key).encode("utf-8")
+    return hmac.new(key, value, hashlib.sha256).hexdigest()
+
+
+def trusted_client_ip_address():
+    remote = request.remote_addr if has_request_context() else None
+    try:
+        remote_ip = ipaddress.ip_address(str(remote or ""))
+    except ValueError:
+        return "unknown"
+
+    # Railway's documented public edge supplies X-Real-IP. Trust it only when
+    # the Railway-provided service identity is present in this process; local
+    # and non-Railway deployments continue to ignore this client-spoofable
+    # header unless their own proxy chain is explicitly configured below.
+    if app.config.get("MEMBER_EMAIL_CORRECTION_TRUST_RAILWAY_X_REAL_IP"):
+        railway_real_ip = request.headers.get("X-Real-IP", "") if has_request_context() else ""
+        try:
+            return str(ipaddress.ip_address(railway_real_ip.strip()))
+        except ValueError:
+            pass
+
+    trusted_hops = int(app.config.get("MEMBER_EMAIL_CORRECTION_TRUSTED_PROXY_HOPS") or 0)
+    if trusted_hops <= 0:
+        return str(remote_ip)
+
+    forwarded = request.headers.get("X-Forwarded-For", "") if has_request_context() else ""
+    chain = []
+    for value in forwarded.split(","):
+        try:
+            chain.append(ipaddress.ip_address(value.strip()))
+        except ValueError:
+            continue
+    if len(chain) < trusted_hops:
+        return str(remote_ip)
+    return str(chain[-trusted_hops])
+
+
+def member_email_correction_subject_hash(member_id):
+    value = str(member_id or "").strip().encode("utf-8")
+    key = str(app.secret_key).encode("utf-8")
+    return hmac.new(key, b"member-email-correction:" + value, hashlib.sha256).hexdigest()
+
+
+def member_email_correction_open_member_key(member_id):
+    return member_email_correction_subject_hash(member_id)
+
+
+def normalized_member_name_claim(value):
+    normalized = unicodedata.normalize("NFKD", str(value or ""))
+    normalized = "".join(character for character in normalized if not unicodedata.combining(character))
+    return " ".join(re.findall(r"[a-z0-9]+", normalized.lower()))
+
+
+def member_name_claim_matches(member, claimed_name):
+    expected = normalized_member_name_claim(display_member_name(getattr(member, "name", "")))
+    claimed = normalized_member_name_claim(claimed_name)
+    return bool(expected and claimed and secrets.compare_digest(expected, claimed))
+
+
+def member_birthdate_claim_matches(member, claimed_birthdate):
+    expected = getattr(member, "birthdate", None)
+    try:
+        claimed = date.fromisoformat(str(claimed_birthdate or "").strip())
+    except ValueError:
+        return False
+    return bool(expected and claimed == expected)
+
+
+def member_email_correction_reference():
+    for _ in range(10):
+        reference = f"EC-{datetime.now():%Y%m%d}-{secrets.token_hex(5).upper()}"
+        if not MemberEmailCorrectionRequest.query.filter_by(reference=reference).first():
+            return reference
+    raise RuntimeError("Could not allocate a unique e-mail correction reference.")
+
+
+def acquire_member_email_correction_rate_lock(lock_hash):
+    if db.engine.dialect.name != "postgresql":
+        return
+    db.session.execute(
+        text("SELECT pg_advisory_xact_lock(:lock_key)"),
+        {"lock_key": int(str(lock_hash)[:15], 16)},
+    )
+
+
+def member_email_correction_ip_rate_limited(requester_ip_hash, now=None):
+    now = now or datetime.now()
+    return (
+        MemberEmailCorrectionAttempt.query
+        .filter_by(requester_ip_hash=requester_ip_hash)
+        .filter(MemberEmailCorrectionAttempt.created_at >= now - timedelta(hours=1))
+        .count()
+        >= app.config["MEMBER_EMAIL_CORRECTION_MAX_PER_IP_HOUR"]
+    )
+
+
+def member_email_correction_verified_member_rate_limited(member_subject_hash, now=None):
+    now = now or datetime.now()
+    return (
+        MemberEmailCorrectionAttempt.query
+        .filter_by(
+            member_subject_hash=member_subject_hash,
+            proof_verified=True,
+        )
+        .filter(MemberEmailCorrectionAttempt.created_at >= now - timedelta(days=1))
+        .count()
+        >= app.config["MEMBER_EMAIL_CORRECTION_MAX_PER_MEMBER_DAY"]
+    )
+
+
+def record_member_email_correction_attempt(member_id, requester_ip, now=None):
+    now = now or datetime.now()
+    requester_ip_hash = member_email_correction_ip_hash(requester_ip)
+    member_subject_hash = member_email_correction_subject_hash(member_id)
+    acquire_member_email_correction_rate_lock(requester_ip_hash)
+    if member_email_correction_ip_rate_limited(requester_ip_hash, now=now):
+        db.session.rollback()
+        return None
+    attempt = MemberEmailCorrectionAttempt(
+        requester_ip_hash=requester_ip_hash,
+        member_subject_hash=member_subject_hash,
+        proof_verified=False,
+        created_at=now,
+    )
+    db.session.add(attempt)
+    db.session.commit()
+    return attempt
+
+
+def verify_member_email_correction_attempt(attempt, member_id, now=None):
+    if not attempt:
+        return False
+    now = now or datetime.now()
+    member_subject_hash = member_email_correction_subject_hash(member_id)
+    acquire_member_email_correction_rate_lock(member_subject_hash)
+    if member_email_correction_verified_member_rate_limited(member_subject_hash, now=now):
+        db.session.rollback()
+        return False
+    attempt = db.session.get(MemberEmailCorrectionAttempt, attempt.id)
+    if not attempt:
+        db.session.rollback()
+        return False
+    attempt.member_subject_hash = member_subject_hash
+    attempt.proof_verified = True
+    db.session.commit()
+    return True
+
+
+def member_email_correction_verification_subject(record):
+    language = normalize_language(record.language)
+    return (
+        f"{translated_text('email_correction_verify_subject', language)} "
+        f"[{record.reference}]"
+    )
+
+
+def build_member_email_correction_verification_email(record, token):
+    language = normalize_language(record.language)
+    confirmation_url = (
+        f"{app.config['MEMBER_PORTAL_PUBLIC_URL'].rstrip('/')}"
+        f"/access-help/confirm/{record.reference}#{token}"
+    )
+    subject = member_email_correction_verification_subject(record)
+    title = translated_text("email_correction_verify_title", language)
+    intro = translated_text("email_correction_verify_intro", language)
+    instruction = translated_text("email_correction_verify_instruction", language)
+    note = translated_text("email_correction_verify_note", language)
+    signoff = translated_text("email_signoff", language)
+    body = f"""{intro}
+
+{instruction}
+
+{confirmation_url}
+
+{note}
+
+{signoff}
+Dreamz Fitness
+"""
+    html_body = email_html_layout(
+        title,
+        intro,
+        rows=[],
+        note=f"{instruction}\n\n{note}",
+        action_label=translated_text("email_correction_verify_action", language),
+        action_url=confirmation_url,
+        tone="gold",
+        signoff=signoff,
+    )
+    return subject, body, html_body
+
+
+def create_member_email_correction_request(member, claimed_name, requested_email, language, requester_ip):
+    now = datetime.now()
+    member_id = str(member.member_id or "").strip()
+    requested_email = normalize_email(requested_email)
+    requester_ip_hash = member_email_correction_ip_hash(requester_ip)
+    recent_duplicate = (
+        MemberEmailCorrectionRequest.query
+        .filter_by(member_id=member_id, requested_email_hash=member_email_correction_email_hash(requested_email))
+        .filter(MemberEmailCorrectionRequest.status.in_(MEMBER_EMAIL_CORRECTION_OPEN_STATUSES))
+        .filter(MemberEmailCorrectionRequest.created_at >= now - timedelta(minutes=15))
+        .order_by(MemberEmailCorrectionRequest.id.desc())
+        .first()
+    )
+    if recent_duplicate:
+        return None, None
+
+    token = secrets.token_urlsafe(32)
+    encrypted_token = encrypt_member_email_correction_token(token)
+    record = MemberEmailCorrectionRequest(
+        reference=member_email_correction_reference(),
+        member_id=member_id,
+        claimed_name=str(claimed_name or "").strip()[:255],
+        requested_email=requested_email,
+        requested_email_hash=member_email_correction_email_hash(requested_email),
+        open_member_key=member_email_correction_open_member_key(member_id),
+        language=normalize_language(language),
+        status="verification_queued",
+        confirmation_token_hash=member_email_correction_token_hash(token),
+        confirmation_token_ciphertext=encrypted_token,
+        confirmation_expires_at=now + timedelta(
+            hours=app.config["MEMBER_EMAIL_CORRECTION_TOKEN_TTL_HOURS"]
+        ),
+        requester_ip_hash=requester_ip_hash,
+        member_auth_version_at_request=int(member.auth_version or 0),
+        created_at=now,
+        updated_at=now,
+    )
+    db.session.add(record)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return None, None
+    return record, token
+
+
+def send_member_email_correction_verification(record, token):
+    subject, body, html_body = build_member_email_correction_verification_email(record, token)
+    return deliver_email(
+        [record.requested_email],
+        subject,
+        body,
+        html_body=html_body,
+        redact_log_content=True,
+    )
+
+
+def build_staff_member_email_correction_email(record, member):
+    member_name = display_member_name(member.name) or record.claimed_name
+    portal_url = app.config["MEMBER_PORTAL_PUBLIC_URL"].rstrip("/")
+    protected_queue_url = f"{portal_url}/staff/email-corrections"
+    subject = (
+        "Dreamz Fitness - beveiligde portaaltoegangsaanvraag - "
+        f"#{record.member_id} - {record.reference}"
+    )
+    body = f"""Er staat een bevestigde portaaltoegangsaanvraag klaar voor controle door de frontdesk.
+
+Lid: {member_name}
+Gym Assistant-lidnummer: {record.member_id}
+Aanvraagreferentie: {record.reference}
+
+Deze e-mail is uitsluitend een melding en bevat bewust geen nieuw e-mailadres of wijzigingsopdracht.
+Wijzig niets in Gym Assistant op basis van deze e-mail. Meld je aan en controleer de actuele,
+beveiligde wachtrij voordat je handelt:
+
+{protected_queue_url}
+
+Alleen een aanvraag die daar nog als actief staat mag volgens de normale identiteits- en
+duplicaatcontrole worden verwerkt. De ledenportal schrijft nooit rechtstreeks naar Gym Assistant.
+"""
+    html_body = email_html_layout(
+        "Beveiligde portaaltoegangsaanvraag",
+        "Er staat een bevestigde aanvraag klaar in de beveiligde frontdesk-wachtrij.",
+        rows=[
+            ("Lid", member_name),
+            ("Gym Assistant-lidnummer", record.member_id),
+            ("Aanvraagreferentie", record.reference),
+        ],
+        note=(
+            "Deze e-mail is alleen een melding. Wijzig niets op basis van de e-mail. "
+            "Meld je aan, controleer of de aanvraag nog actief is en volg daar de identiteits- en duplicaatcontrole."
+        ),
+        action_label="Open beveiligde wachtrij",
+        action_url=protected_queue_url,
+        tone="gold",
+        signoff="Met vriendelijke groet,",
+    )
+    return subject, body, html_body
+
+
+def member_email_correction_notification_recipients():
+    to_addresses, cc_addresses = notification_recipients()
+    admin_email = (
+        setting_value("admin_email", "")
+        or app.config.get("STAFF_ADMIN_EMAIL")
+        or ""
+    ).strip()
+    frontdesk_email = (
+        app.config.get("MEMBER_EMAIL_CORRECTION_FRONTDESK_EMAIL")
+        or setting_value("frontdesk_email", "")
+        or ""
+    ).strip()
+    has_non_admin_recipient = any(
+        address.strip().lower() != admin_email.lower()
+        for address in to_addresses
+    )
+    if not frontdesk_email and not has_non_admin_recipient:
+        frontdesk_email = str(app.config.get("INVOICE_CONTACT_EMAIL") or "").strip()
+    if frontdesk_email:
+        append_unique_email(to_addresses, frontdesk_email)
+        cc_addresses = [
+            address
+            for address in cc_addresses
+            if address.strip().lower() != frontdesk_email.lower()
+        ]
+
+    if admin_email and admin_email.lower() not in {
+        address.strip().lower() for address in to_addresses
+    }:
+        append_unique_email(cc_addresses, admin_email)
+    return to_addresses, cc_addresses
+
+
+def notify_staff_member_email_correction(record, member):
+    to_addresses, cc_addresses = member_email_correction_notification_recipients()
+    if not to_addresses and not cc_addresses:
+        raise RuntimeError("No frontdesk/admin notification recipients are configured.")
+    subject, body, html_body = build_staff_member_email_correction_email(record, member)
+    result = deliver_email(
+        to_addresses,
+        subject,
+        body,
+        cc_addresses=cc_addresses,
+        html_body=html_body,
+    )
+    latest_log = (
+        EmailLog.query
+        .filter_by(subject=subject)
+        .order_by(EmailLog.id.desc())
+        .first()
+    )
+    if result != "sent" or not latest_log or latest_log.status != "sent":
+        raise RuntimeError("Frontdesk e-mail delivery was not confirmed by SMTP.")
+    now = datetime.now()
+    current, claimed = transition_member_email_correction(
+        record,
+        {"sending_staff_notification"},
+        "waiting_for_gym_assistant_email",
+        now=now,
+        staff_email_log_id=latest_log.id,
+        staff_notified_at=now,
+        last_error=None,
+    )
+    if not claimed:
+        return "state_changed"
+    return result
+
+
+def revoke_unused_member_login_codes(member_id, now=None):
+    now = now or datetime.now()
+    return (
+        MemberLoginCode.query
+        .filter_by(member_id=str(member_id or "").strip(), used_at=None)
+        .update({MemberLoginCode.used_at: now}, synchronize_session=False)
+    )
+
+
+def secure_member_auth_after_email_change(member, now=None):
+    now = now or datetime.now()
+    revoke_unused_member_login_codes(member.member_id, now=now)
+    member.password_hash = None
+    member.password_set_at = None
+    member.auth_version = int(member.auth_version or 0) + 1
+    return member
+
+
+def secure_member_auth_for_email_correction(record, now=None):
+    """Invalidate old portal auth exactly once for this correction request.
+
+    Portal Sync already performs the same invalidation when it imports the GA
+    e-mail change.  The request stores the member auth-version observed at
+    creation, so this transaction only increments it when Sync has not done so
+    already.  The request and member rows are locked together on PostgreSQL to
+    make crash recovery and concurrent sync/reconciliation idempotent.
+    """
+    now = now or datetime.now()
+    locked_record = (
+        MemberEmailCorrectionRequest.query
+        .filter_by(id=record.id)
+        .with_for_update()
+        .first()
+    )
+    if not locked_record:
+        raise RuntimeError("Member e-mail correction request disappeared during auth invalidation.")
+    if locked_record.status != "sending_member_notification":
+        db.session.rollback()
+        return None
+    locked_member = (
+        Member.query
+        .filter_by(member_id=locked_record.member_id)
+        .with_for_update()
+        .first()
+    )
+    if not locked_member:
+        raise RuntimeError("Member disappeared during e-mail correction auth invalidation.")
+
+    requested_email = normalize_email(locked_record.requested_email)
+    member_email = normalize_email(locked_member.email)
+    matching_members = (
+        Member.query
+        .filter(db.func.lower(db.func.trim(Member.email)) == requested_email)
+        .with_for_update()
+        .limit(2)
+        .all()
+    )
+    if (
+        not valid_portal_email(member_email)
+        or not secrets.compare_digest(
+            member_email_correction_email_hash(member_email),
+            locked_record.requested_email_hash,
+        )
+        or len(matching_members) != 1
+        or str(matching_members[0].member_id) != str(locked_record.member_id)
+    ):
+        db.session.rollback()
+        raise RuntimeError(
+            "Gym Assistant e-mail changed or became non-unique during completion."
+        )
+
+    if locked_record.auth_secured_at is None:
+        baseline = int(locked_record.member_auth_version_at_request or 0)
+        current_version = int(locked_member.auth_version or 0)
+        # Portal Sync may already have advanced auth_version, but a password or
+        # login-code request that was in flight at that moment can still finish
+        # afterwards.  Always repeat the destructive cleanup while completing
+        # the correction; only the version increment itself is conditional.
+        revoke_unused_member_login_codes(locked_member.member_id, now=now)
+        locked_member.password_hash = None
+        locked_member.password_set_at = None
+        if current_version <= baseline:
+            locked_member.auth_version = current_version + 1
+        locked_record.auth_secured_at = now
+        locked_record.auth_version_after_secure = int(locked_member.auth_version or 0)
+        locked_record.updated_at = now
+        db.session.commit()
+
+    db.session.refresh(record)
+    return locked_member
+
+
+def mark_member_email_correction_for_review(record, reason):
+    current, _ = transition_member_email_correction(
+        record,
+        MEMBER_EMAIL_CORRECTION_OPEN_STATUSES,
+        "manual_review",
+        confirmation_token_ciphertext=None,
+        last_error=reason,
+    )
+    return current
+
+
+def expire_member_email_correction(
+    record,
+    now=None,
+    reason="request_expired_before_completion",
+    **values,
+):
+    now = now or datetime.now()
+    current, _ = transition_member_email_correction(
+        record,
+        MEMBER_EMAIL_CORRECTION_OPEN_STATUSES,
+        "expired",
+        now=now,
+        open_member_key=None,
+        confirmation_token_ciphertext=None,
+        last_error=reason,
+        **values,
+    )
+    return current
+
+
+def member_email_correction_sync_expired(record, now=None):
+    now = now or datetime.now()
+    if not record.email_confirmed_at:
+        return False
+    deadline = record.email_confirmed_at + timedelta(
+        hours=app.config["MEMBER_EMAIL_CORRECTION_SYNC_TTL_HOURS"]
+    )
+    return deadline < now
+
+
+def member_email_correction_member_state(record):
+    member = Member.query.filter_by(member_id=record.member_id).first()
+    if not member:
+        return None, "member_missing"
+
+    requested_email = normalize_email(record.requested_email)
+    matches = (
+        Member.query
+        .filter(db.func.lower(db.func.trim(Member.email)) == requested_email)
+        .limit(2)
+        .all()
+    )
+    if matches and (
+        len(matches) != 1
+        or str(matches[0].member_id) != str(record.member_id)
+    ):
+        return member, "requested_email_not_unique"
+
+    member_email = normalize_email(member.email)
+    exact = (
+        valid_portal_email(member_email)
+        and secrets.compare_digest(
+            member_email_correction_email_hash(member_email),
+            record.requested_email_hash,
+        )
+    )
+    if not exact:
+        return member, "waiting"
+    if len(matches) != 1:
+        return member, "requested_email_not_unique"
+    return member, "ready"
+
+
+def member_email_correction_activation_message(record, member):
+    subject, body, html_body = build_portal_activation_email(
+        member,
+        language=record.language,
+    )
+    return f"{subject} [{record.reference}]", body, html_body
+
+
+def email_log_for_member_email_correction(subject, to_address=None):
+    query = EmailLog.query.filter_by(subject=subject)
+    if to_address is not None:
+        query = query.filter_by(to_addresses=normalize_email(to_address))
+    return query.order_by(EmailLog.id.desc()).first()
+
+
+def process_queued_member_email_correction_verification(record):
+    if record.status != "verification_queued":
+        return record
+    now = datetime.now()
+    if record.confirmation_expires_at < now:
+        return expire_member_email_correction(
+            record,
+            now=now,
+            reason="verification_link_expired",
+        )
+
+    claimed = (
+        MemberEmailCorrectionRequest.query
+        .filter_by(id=record.id, status="verification_queued")
+        .update(
+            {
+                MemberEmailCorrectionRequest.status: "sending_verification",
+                MemberEmailCorrectionRequest.attempts: MemberEmailCorrectionRequest.attempts + 1,
+                MemberEmailCorrectionRequest.updated_at: now,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.session.commit()
+    db.session.refresh(record)
+    if claimed != 1:
+        return record
+
+    try:
+        token = decrypt_member_email_correction_token(
+            record.confirmation_token_ciphertext
+        )
+        if not secrets.compare_digest(
+            member_email_correction_token_hash(token),
+            record.confirmation_token_hash,
+        ):
+            raise RuntimeError("Queued verification token integrity check failed.")
+        delivery_result = send_member_email_correction_verification(record, token)
+    except Exception:
+        db.session.rollback()
+        record = db.session.get(MemberEmailCorrectionRequest, record.id)
+        app.logger.exception(
+            "Member e-mail correction verification delivery failed for %s.",
+            record.reference if record else "unknown",
+        )
+        if not record:
+            return None
+        return mark_member_email_correction_for_review(
+            record,
+            "verification_email_delivery_failed_or_uncertain",
+        )
+
+    subject = member_email_correction_verification_subject(record)
+    verification_log = email_log_for_member_email_correction(
+        subject,
+        record.requested_email,
+    )
+    if (
+        delivery_result != "sent"
+        or not verification_log
+        or verification_log.status != "sent"
+    ):
+        return mark_member_email_correction_for_review(
+            record,
+            "verification_email_delivery_failed_or_uncertain",
+        )
+
+    current, _ = transition_member_email_correction(
+        record,
+        {"sending_verification"},
+        "awaiting_email_confirmation",
+        verification_email_log_id=verification_log.id,
+        confirmation_token_ciphertext=None,
+        last_error=None,
+    )
+    return current
+
+
+def recover_sending_member_email_correction_verification(record):
+    if record.status != "sending_verification":
+        return record
+    subject = member_email_correction_verification_subject(record)
+    verification_log = email_log_for_member_email_correction(
+        subject,
+        record.requested_email,
+    )
+    stale_before = datetime.now() - timedelta(
+        minutes=app.config["MEMBER_EMAIL_CORRECTION_DELIVERY_STALE_MINUTES"]
+    )
+    lease_is_fresh = bool(record.updated_at and record.updated_at > stale_before)
+    if verification_log:
+        if verification_log.status == "sent":
+            if record.confirmation_expires_at < datetime.now():
+                return expire_member_email_correction(
+                    record,
+                    reason="verification_link_expired",
+                    verification_email_log_id=verification_log.id,
+                )
+            current, _ = transition_member_email_correction(
+                record,
+                {"sending_verification"},
+                "awaiting_email_confirmation",
+                verification_email_log_id=verification_log.id,
+                confirmation_token_ciphertext=None,
+                last_error=None,
+            )
+            return current
+        if verification_log.status == "pending" and lease_is_fresh:
+            return record
+        return mark_member_email_correction_for_review(
+            record,
+            "verification_email_delivery_failed_or_uncertain",
+        )
+    if lease_is_fresh:
+        return record
+    if record.confirmation_expires_at < datetime.now():
+        return expire_member_email_correction(
+            record,
+            reason="verification_link_expired",
+        )
+    # No log means deliver_email never began its persisted send. Retrying is
+    # safe because every attempted delivery creates the deterministic log
+    # before SMTP is contacted.
+    claimed = (
+        MemberEmailCorrectionRequest.query
+        .filter_by(id=record.id, status="sending_verification")
+        .update(
+            {
+                MemberEmailCorrectionRequest.status: "verification_queued",
+                MemberEmailCorrectionRequest.updated_at: datetime.now(),
+            },
+            synchronize_session=False,
+        )
+    )
+    db.session.commit()
+    db.session.refresh(record)
+    if claimed != 1:
+        return record
+    return process_queued_member_email_correction_verification(record)
+
+
+def finish_member_email_correction(record, member, email_log):
+    if not email_log or email_log.status != "sent":
+        return mark_member_email_correction_for_review(
+            record,
+            "member_activation_email_delivery_failed_or_uncertain",
+        )
+    now = datetime.now()
+    try:
+        member = secure_member_auth_for_email_correction(record, now=now)
+    except Exception:
+        db.session.rollback()
+        record = db.session.get(MemberEmailCorrectionRequest, record.id)
+        return mark_member_email_correction_for_review(
+            record,
+            "gym_assistant_email_changed_or_not_unique_during_completion",
+        )
+    if member is None:
+        return current_member_email_correction(record)
+    record = current_member_email_correction(record)
+    current, _ = transition_member_email_correction(
+        record,
+        {"sending_member_notification"},
+        "completed",
+        now=now,
+        member_email_log_id=email_log.id,
+        open_member_key=None,
+        last_error=None,
+        member_notified_at=now,
+        completed_at=now,
+    )
+    return current
+
+
+def reconcile_member_email_correction_staff_notification(record):
+    if record.status not in {"staff_notification_pending", "sending_staff_notification"}:
+        return record
+    now = datetime.now()
+    stale_before = now - timedelta(
+        minutes=app.config["MEMBER_EMAIL_CORRECTION_DELIVERY_STALE_MINUTES"]
+    )
+
+    # A claimed send must first be recovered from its deterministic e-mail log.
+    # The notification itself contains no requested address or GA instruction,
+    # so an already-sent message can safely expire when the protected queue item
+    # has reached its TTL.
+    if record.status == "sending_staff_notification":
+        member = Member.query.filter_by(member_id=record.member_id).first()
+        if not member:
+            return mark_member_email_correction_for_review(
+                record,
+                "member_missing_after_email_confirmation",
+            )
+        subject, _, _ = build_staff_member_email_correction_email(record, member)
+        existing_log = email_log_for_member_email_correction(subject)
+        lease_is_fresh = bool(record.updated_at and record.updated_at > stale_before)
+        if existing_log:
+            if existing_log.status == "pending" and lease_is_fresh:
+                return record
+            if existing_log.status != "sent":
+                return mark_member_email_correction_for_review(
+                    record,
+                    "staff_notification_delivery_failed_or_uncertain",
+                )
+            if member_email_correction_sync_expired(record, now=now):
+                return expire_member_email_correction(
+                    record,
+                    now=now,
+                    staff_email_log_id=existing_log.id,
+                )
+            record, claimed = transition_member_email_correction(
+                record,
+                {"sending_staff_notification"},
+                "waiting_for_gym_assistant_email",
+                now=now,
+                staff_email_log_id=existing_log.id,
+                staff_notified_at=existing_log.created_at or now,
+                last_error=None,
+            )
+            return reconcile_member_email_correction(record) if claimed else record
+        if lease_is_fresh:
+            return record
+        if member_email_correction_sync_expired(record, now=now):
+            return expire_member_email_correction(record, now=now)
+
+        # No EmailLog means deliver_email never began its persisted send. Only
+        # this state is safe to retry automatically after a stale lease.
+        claimed = (
+            MemberEmailCorrectionRequest.query
+            .filter_by(id=record.id, status="sending_staff_notification")
+            .update(
+                {
+                    MemberEmailCorrectionRequest.status: "staff_notification_pending",
+                    MemberEmailCorrectionRequest.updated_at: now,
+                },
+                synchronize_session=False,
+            )
+        )
+        db.session.commit()
+        db.session.refresh(record)
+        if claimed != 1:
+            return record
+        return reconcile_member_email_correction_staff_notification(record)
+
+    if member_email_correction_sync_expired(record, now=now):
+        return expire_member_email_correction(record, now=now)
+
+    member, member_state = member_email_correction_member_state(record)
+    if member_state == "member_missing":
+        return mark_member_email_correction_for_review(
+            record,
+            "member_missing_after_email_confirmation",
+        )
+    if member_state == "requested_email_not_unique":
+        return mark_member_email_correction_for_review(
+            record,
+            "requested_email_already_in_use",
+        )
+    if member_state == "ready":
+        record, claimed = transition_member_email_correction(
+            record,
+            {"staff_notification_pending"},
+            "waiting_for_gym_assistant_email",
+            now=now,
+        )
+        return reconcile_member_email_correction(record) if claimed else record
+
+    claimed = (
+        MemberEmailCorrectionRequest.query
+        .filter_by(id=record.id, status="staff_notification_pending")
+        .update(
+            {
+                MemberEmailCorrectionRequest.status: "sending_staff_notification",
+                MemberEmailCorrectionRequest.attempts: MemberEmailCorrectionRequest.attempts + 1,
+                MemberEmailCorrectionRequest.updated_at: now,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.session.commit()
+    db.session.refresh(record)
+    if claimed != 1:
+        return record
+
+    try:
+        notify_staff_member_email_correction(record, member)
+    except Exception:
+        db.session.rollback()
+        record = db.session.get(MemberEmailCorrectionRequest, record.id)
+        return mark_member_email_correction_for_review(
+            record,
+            "staff_notification_delivery_failed_or_uncertain",
+        )
+    return current_member_email_correction(record)
+
+
+def recover_sending_member_email_correction(record):
+    record = current_member_email_correction(record)
+    if not record:
+        return None
+    if record.status != "sending_member_notification":
+        return record
+    member, member_state = member_email_correction_member_state(record)
+    if member_state == "member_missing":
+        return mark_member_email_correction_for_review(record, "member_missing_during_completion")
+    if member_state != "ready":
+        return mark_member_email_correction_for_review(
+            record,
+            "gym_assistant_email_changed_or_not_unique_during_completion",
+        )
+
+    subject, _, _ = member_email_correction_activation_message(record, member)
+    member_email = normalize_email(member.email)
+    existing_log = email_log_for_member_email_correction(subject, member_email)
+    if existing_log:
+        if existing_log.status == "sent":
+            return finish_member_email_correction(record, member, existing_log)
+        if existing_log.status == "pending":
+            stale_before = datetime.now() - timedelta(
+                minutes=app.config["MEMBER_EMAIL_CORRECTION_DELIVERY_STALE_MINUTES"]
+            )
+            if record.updated_at and record.updated_at > stale_before:
+                return record
+        return mark_member_email_correction_for_review(
+            record,
+            "member_activation_email_delivery_failed_or_uncertain",
+        )
+
+    stale_before = datetime.now() - timedelta(
+        minutes=app.config["MEMBER_EMAIL_CORRECTION_DELIVERY_STALE_MINUTES"]
+    )
+    if record.updated_at and record.updated_at > stale_before:
+        return record
+    if member_email_correction_sync_expired(record):
+        return expire_member_email_correction(record)
+
+    claimed = (
+        MemberEmailCorrectionRequest.query
+        .filter_by(id=record.id, status="sending_member_notification")
+        .update(
+            {
+                MemberEmailCorrectionRequest.status: "waiting_for_gym_assistant_email",
+                MemberEmailCorrectionRequest.updated_at: datetime.now(),
+            },
+            synchronize_session=False,
+        )
+    )
+    db.session.commit()
+    db.session.refresh(record)
+    if claimed != 1:
+        return record
+    return reconcile_member_email_correction(record)
+
+
+def reconcile_member_email_correction(record):
+    record = current_member_email_correction(record)
+    if not record:
+        return None
+    if record.status not in MEMBER_EMAIL_CORRECTION_RECONCILABLE_STATUSES:
+        return record
+    if record.status == "verification_queued":
+        return process_queued_member_email_correction_verification(record)
+    if record.status == "sending_verification":
+        return recover_sending_member_email_correction_verification(record)
+    if record.status in {"staff_notification_pending", "sending_staff_notification"}:
+        return reconcile_member_email_correction_staff_notification(record)
+    if record.status == "sending_member_notification":
+        return recover_sending_member_email_correction(record)
+    if member_email_correction_sync_expired(record):
+        return expire_member_email_correction(record)
+
+    member, member_state = member_email_correction_member_state(record)
+    if member_state == "member_missing":
+        return mark_member_email_correction_for_review(record, "member_missing_during_reconciliation")
+    if member_state == "requested_email_not_unique":
+        return mark_member_email_correction_for_review(record, "gym_assistant_email_not_unique")
+    if member_state != "ready":
+        return record
+
+    now = datetime.now()
+    claimed = (
+        MemberEmailCorrectionRequest.query
+        .filter_by(id=record.id, status="waiting_for_gym_assistant_email")
+        .update(
+            {
+                MemberEmailCorrectionRequest.status: "sending_member_notification",
+                MemberEmailCorrectionRequest.attempts: MemberEmailCorrectionRequest.attempts + 1,
+                MemberEmailCorrectionRequest.updated_at: now,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.session.commit()
+    db.session.refresh(record)
+    if claimed != 1:
+        return record
+
+    try:
+        member = secure_member_auth_for_email_correction(record, now=now)
+    except Exception:
+        db.session.rollback()
+        record = db.session.get(MemberEmailCorrectionRequest, record.id)
+        return mark_member_email_correction_for_review(
+            record,
+            "gym_assistant_email_changed_or_not_unique_during_completion",
+        )
+    record = current_member_email_correction(record)
+    if member is None or not record or record.status != "sending_member_notification":
+        return record
+    subject, body, html_body = member_email_correction_activation_message(record, member)
+    member_email = normalize_email(record.requested_email)
+    try:
+        delivery_result = deliver_email([member_email], subject, body, html_body=html_body)
+    except Exception:
+        db.session.rollback()
+        record = db.session.get(MemberEmailCorrectionRequest, record.id)
+        return mark_member_email_correction_for_review(
+            record,
+            "member_activation_email_delivery_failed_or_uncertain",
+        )
+    latest_log = email_log_for_member_email_correction(subject, member_email)
+    if delivery_result != "sent" or not latest_log or latest_log.status != "sent":
+        return mark_member_email_correction_for_review(
+            record,
+            "member_activation_email_delivery_failed_or_uncertain",
+        )
+    _, final_member_state = member_email_correction_member_state(record)
+    if final_member_state != "ready":
+        return mark_member_email_correction_for_review(
+            record,
+            "gym_assistant_email_changed_or_not_unique_during_completion",
+        )
+    return finish_member_email_correction(record, member, latest_log)
+
+
+def reconcile_pending_member_email_corrections(limit=100):
+    now = datetime.now()
+    expired = (
+        MemberEmailCorrectionRequest.query
+        .filter_by(status="awaiting_email_confirmation")
+        .filter(MemberEmailCorrectionRequest.confirmation_expires_at < now)
+        .limit(limit)
+        .all()
+    )
+    expired_count = 0
+    for record in expired:
+        current = expire_member_email_correction(
+            record,
+            now=now,
+            reason="verification_link_expired",
+        )
+        if current and current.status == "expired":
+            expired_count += 1
+
+    records = (
+        MemberEmailCorrectionRequest.query
+        .filter(MemberEmailCorrectionRequest.status.in_(MEMBER_EMAIL_CORRECTION_RECONCILABLE_STATUSES))
+        .order_by(MemberEmailCorrectionRequest.created_at.asc())
+        .limit(limit)
+        .all()
+    )
+    summary = {"checked": 0, "completed": 0, "waiting": 0, "manual_review": 0, "expired": expired_count}
+    for record in records:
+        record = reconcile_member_email_correction(record)
+        summary["checked"] += 1
+        if not record:
+            continue
+        if record.status == "completed":
+            summary["completed"] += 1
+        elif record.status == "manual_review":
+            summary["manual_review"] += 1
+        elif record.status == "expired":
+            summary["expired"] += 1
+        else:
+            summary["waiting"] += 1
+    return summary
+
+
+POST_SYNC_RECONCILIATION_ADVISORY_LOCK_ID = 492310867530912338
+_POST_SYNC_RECONCILIATION_THREAD_LOCK = threading.Lock()
+
+
+def post_sync_reconciliation_summaries():
+    return {
+        "portal_invitations": reconcile_pending_portal_invitations(limit=10),
+        "member_email_corrections": reconcile_pending_member_email_corrections(limit=10),
+    }
+
+
+def run_post_sync_reconciliation_background():
+    """Run SMTP-capable reconciliation outside the sync request."""
+    advisory_connection = None
+    advisory_acquired = False
+    try:
+        with app.app_context():
+            if db.engine.dialect.name == "postgresql":
+                advisory_connection = db.engine.connect()
+                advisory_acquired = bool(advisory_connection.execute(
+                    text("SELECT pg_try_advisory_lock(:lock_id)"),
+                    {"lock_id": POST_SYNC_RECONCILIATION_ADVISORY_LOCK_ID},
+                ).scalar())
+                if not advisory_acquired:
+                    return
+            summaries = post_sync_reconciliation_summaries()
+            app.logger.info("Post-sync reconciliation completed: %s", summaries)
+    except Exception:
+        with app.app_context():
+            db.session.rollback()
+            app.logger.exception("Background post-sync reconciliation failed.")
+    finally:
+        if advisory_connection is not None:
+            try:
+                if advisory_acquired:
+                    advisory_connection.execute(
+                        text("SELECT pg_advisory_unlock(:lock_id)"),
+                        {"lock_id": POST_SYNC_RECONCILIATION_ADVISORY_LOCK_ID},
+                    )
+            finally:
+                advisory_connection.close()
+        _POST_SYNC_RECONCILIATION_THREAD_LOCK.release()
+
+
+def schedule_post_sync_reconciliation():
+    """Keep tests deterministic and production sync requests free of SMTP."""
+    if app.config.get("TESTING"):
+        return post_sync_reconciliation_summaries()
+    if not _POST_SYNC_RECONCILIATION_THREAD_LOCK.acquire(blocking=False):
+        return {
+            "portal_invitations": {"status": "already_running"},
+            "member_email_corrections": {"status": "already_running"},
+        }
+    try:
+        worker = threading.Thread(
+            target=run_post_sync_reconciliation_background,
+            name="dreamz-post-sync-reconciliation",
+            daemon=True,
+        )
+        worker.start()
+    except Exception:
+        _POST_SYNC_RECONCILIATION_THREAD_LOCK.release()
+        raise
+    return {
+        "portal_invitations": {"status": "scheduled"},
+        "member_email_corrections": {"status": "scheduled"},
+    }
+
+
 def build_staff_login_code_request_notification(member):
     member_name = display_member_name(member.name) or "Unknown member"
     requested_at = local_datetime(datetime.now(timezone.utc)).strftime("%d/%m/%Y %H:%M")
@@ -17045,7 +18446,9 @@ def staff_login():
             session.permanent = True
             if user.role == "manager":
                 flash(translated_text("staff_manager_scope_notice", current_language()), "warning")
-                return redirect(url_for("staff_daily_changes"))
+                if next_target == url_for("staff_home"):
+                    next_target = url_for("staff_daily_changes")
+                return redirect(next_target)
             return redirect(next_target)
         flash("Invalid staff login.")
         if next_target and next_target != url_for("staff_home"):
@@ -17217,11 +18620,13 @@ def api_sync_members():
         abort(400, str(exc))
 
     try:
-        invitation_summary = reconcile_pending_portal_invitations()
+        reconciliation = schedule_post_sync_reconciliation()
     except Exception:
-        db.session.rollback()
-        app.logger.exception("Portal invitation reconciliation failed after member sync.")
-        invitation_summary = {"status": "failed"}
+        app.logger.exception("Could not schedule reconciliation after member sync.")
+        reconciliation = {
+            "portal_invitations": {"status": "failed_to_schedule"},
+            "member_email_corrections": {"status": "failed_to_schedule"},
+        }
 
     return {
         "status": sync_run.status,
@@ -17233,7 +18638,8 @@ def api_sync_members():
         "members_snapshot_complete": bool(sync_run.members_snapshot_complete),
         "member_snapshot_protocol": sync_run.member_snapshot_protocol,
         "member_snapshot_reason": sync_run.member_snapshot_reason,
-        "portal_invitations": invitation_summary,
+        "portal_invitations": reconciliation["portal_invitations"],
+        "member_email_corrections": reconciliation["member_email_corrections"],
     }
 
 
@@ -19048,6 +20454,11 @@ def staff_email_log():
     review_filter = request.args.get("review", "").strip()
     staff_warning = try_staff_runtime_schema("staff_email_log_nav")
     try:
+        email_correction_review_count = MemberEmailCorrectionRequest.query.filter(
+            MemberEmailCorrectionRequest.status.in_(
+                MEMBER_EMAIL_CORRECTION_STAFF_QUEUE_STATUSES
+            )
+        ).count()
         query = EmailLog.query
         if selected_status:
             query = query.filter_by(status=selected_status)
@@ -19065,6 +20476,7 @@ def staff_email_log():
         app.logger.exception("Email log data unavailable while rendering staff email log.")
         logs = []
         counts = {"open": 0, "failed": 0, "sent": 0, "logged": 0}
+        email_correction_review_count = 0
         staff_warning = staff_warning or staff_data_warning("staff_email_log_nav")
     return render_template(
         "staff_email_log.html",
@@ -19073,6 +20485,7 @@ def staff_email_log():
         selected_status=selected_status,
         review_filter=review_filter,
         email_log_requires_review=email_log_requires_review,
+        email_correction_review_count=email_correction_review_count,
         staff_role=staff_role,
         staff_page_warning=staff_warning,
     )
@@ -20355,6 +21768,39 @@ def staff_email_log_review(email_id):
     db.session.commit()
     flash("Email log marked as reviewed.")
     return redirect(url_for("staff_email_log", status=request.args.get("status", ""), review=request.args.get("review", "")))
+
+
+@app.post("/staff/email-corrections/<int:correction_id>/close")
+def staff_member_email_correction_close(correction_id):
+    validate_csrf_token()
+    require_staff_session(required_role="admin")
+    ensure_runtime_schema()
+    reviewed_at = datetime.now()
+    claimed = (
+        MemberEmailCorrectionRequest.query
+        .filter_by(id=correction_id, status="manual_review")
+        .update(
+            {
+                MemberEmailCorrectionRequest.status: "review_closed",
+                MemberEmailCorrectionRequest.open_member_key: None,
+                MemberEmailCorrectionRequest.reviewed_at: reviewed_at,
+                MemberEmailCorrectionRequest.reviewed_by: current_staff_username() or "admin",
+                MemberEmailCorrectionRequest.review_note: (
+                    str(request.form.get("review_note") or "").strip()[:2000]
+                    or None
+                ),
+                MemberEmailCorrectionRequest.updated_at: reviewed_at,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.session.commit()
+    if claimed != 1:
+        if not db.session.get(MemberEmailCorrectionRequest, correction_id):
+            abort(404, "Portal access request not found.")
+        abort(409, "Only an open manual-review request can be closed.")
+    flash(translated_text("email_correction_review_closed_flash", current_language()))
+    return redirect(url_for("staff_email_corrections"))
 
 
 @app.get("/staff/cancellations.csv")
@@ -21995,6 +23441,355 @@ def cancel():
     flash(translated_text("cancel_request_received_flash", current_language()))
     return redirect(url_for("member_account_membership"))
 
+@app.route("/access-help", methods=["GET", "POST"])
+def member_email_correction_request():
+    ensure_runtime_schema()
+    submitted = request.args.get("submitted") == "1"
+    if request.method == "POST":
+        validate_csrf_token()
+        member_id = str(request.form.get("member_number") or "").strip()
+        claimed_name = str(request.form.get("full_name") or "").strip()
+        claimed_birthdate = str(request.form.get("birthdate") or "").strip()
+        requested_email = normalize_email(request.form.get("requested_email"))
+        requester_ip = trusted_client_ip_address()
+        attempt = record_member_email_correction_attempt(
+            member_id,
+            requester_ip,
+        )
+
+        # Always return the same public HTTP result. This prevents direct
+        # response-based member-number, name or e-mail enumeration. Delivery
+        # to the candidate inbox remains a separately rate-limited signal.
+        if (
+            attempt is not None
+            and re.fullmatch(r"\d{1,12}", member_id)
+            and 1 <= len(claimed_name) <= 255
+            and re.fullmatch(r"\d{4}-\d{2}-\d{2}", claimed_birthdate)
+            and valid_portal_email(requested_email)
+        ):
+            member = Member.query.filter_by(member_id=member_id).first()
+            if (
+                member
+                and member_name_claim_matches(member, claimed_name)
+                and member_birthdate_claim_matches(member, claimed_birthdate)
+                and verify_member_email_correction_attempt(attempt, member_id)
+            ):
+                try:
+                    create_member_email_correction_request(
+                        member,
+                        claimed_name,
+                        requested_email,
+                        current_language(),
+                        requester_ip,
+                    )
+                    if not app.config.get("TESTING"):
+                        schedule_post_sync_reconciliation()
+                except Exception:
+                    db.session.rollback()
+                    app.logger.exception("Could not queue a member e-mail correction verification.")
+        return redirect(url_for("member_email_correction_request", submitted=1))
+
+    response = app.make_response(render_template("access_help.html", submitted=submitted))
+    response = member_email_correction_confirmation_response(response)
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
+        "form-action 'self'"
+    )
+    return response
+
+
+def valid_member_email_correction_confirmation(record, token, now=None):
+    now = now or datetime.now()
+    return bool(
+        record
+        and record.status == "awaiting_email_confirmation"
+        and record.confirmation_expires_at >= now
+        and secrets.compare_digest(
+            record.confirmation_token_hash,
+            member_email_correction_token_hash(token),
+        )
+    )
+
+
+def recover_staff_notification_for_protected_queue(record, now=None):
+    """Resolve a claimed staff send from persisted evidence without sending mail."""
+    record = current_member_email_correction(record)
+    if not record:
+        return None
+    if record.status != "sending_staff_notification":
+        return record
+    now = now or datetime.now()
+    member = Member.query.filter_by(member_id=record.member_id).first()
+    if not member:
+        return mark_member_email_correction_for_review(
+            record,
+            "member_missing_after_email_confirmation",
+        )
+    subject, _, _ = build_staff_member_email_correction_email(record, member)
+    existing_log = email_log_for_member_email_correction(subject)
+    stale_before = now - timedelta(
+        minutes=app.config["MEMBER_EMAIL_CORRECTION_DELIVERY_STALE_MINUTES"]
+    )
+    lease_is_fresh = bool(record.updated_at and record.updated_at > stale_before)
+    if not existing_log:
+        if lease_is_fresh:
+            return record
+        return mark_member_email_correction_for_review(
+            record,
+            "staff_notification_not_started_before_queue_recovery",
+        )
+
+    if existing_log.status == "pending" and lease_is_fresh:
+        return record
+    if existing_log.status != "sent":
+        return mark_member_email_correction_for_review(
+            record,
+            "staff_notification_delivery_failed_or_uncertain",
+        )
+    if member_email_correction_sync_expired(record, now=now):
+        return expire_member_email_correction(
+            record,
+            now=now,
+            staff_email_log_id=existing_log.id,
+        )
+
+    member, member_state = member_email_correction_member_state(record)
+    if member_state == "member_missing":
+        return mark_member_email_correction_for_review(
+            record,
+            "member_missing_after_email_confirmation",
+        )
+    if member_state == "requested_email_not_unique":
+        return mark_member_email_correction_for_review(
+            record,
+            "requested_email_already_in_use",
+        )
+    # If GA already contains the requested address, keep the item visibly in a
+    # non-actionable processing state. The background reconciler will perform
+    # the member notification; a queue GET must never send it.
+    target_status = (
+        "staff_notification_pending"
+        if member_state == "ready"
+        else "waiting_for_gym_assistant_email"
+    )
+    current, _ = transition_member_email_correction(
+        record,
+        {"sending_staff_notification"},
+        target_status,
+        now=now,
+        staff_email_log_id=existing_log.id,
+        staff_notified_at=existing_log.created_at or now,
+        last_error=None,
+    )
+    return current
+
+
+def staff_member_email_correction_queue_data(staff_role=None):
+    now = datetime.now()
+    active_cutoff = now - timedelta(
+        hours=app.config["MEMBER_EMAIL_CORRECTION_SYNC_TTL_HOURS"]
+    )
+    claimed_records = (
+        MemberEmailCorrectionRequest.query
+        .filter_by(status="sending_staff_notification")
+        .order_by(MemberEmailCorrectionRequest.updated_at.asc())
+        .all()
+    )
+    for claimed_record in claimed_records:
+        recover_staff_notification_for_protected_queue(claimed_record, now=now)
+
+    # This queue remains authoritative when Portal Sync is offline. Expiry is
+    # enforced before data is rendered, without sending mail or touching GA.
+    (
+        MemberEmailCorrectionRequest.query
+        .filter(MemberEmailCorrectionRequest.status.in_({
+            "staff_notification_pending",
+            "sending_staff_notification",
+            "waiting_for_gym_assistant_email",
+        }))
+        .filter(MemberEmailCorrectionRequest.email_confirmed_at < active_cutoff)
+        .update(
+            {
+                MemberEmailCorrectionRequest.status: "expired",
+                MemberEmailCorrectionRequest.open_member_key: None,
+                MemberEmailCorrectionRequest.confirmation_token_ciphertext: None,
+                MemberEmailCorrectionRequest.last_error: "request_expired_before_completion",
+                MemberEmailCorrectionRequest.updated_at: now,
+            },
+            synchronize_session=False,
+        )
+    )
+    (
+        MemberEmailCorrectionRequest.query
+        .filter(MemberEmailCorrectionRequest.status.in_({
+            "staff_notification_pending",
+            "sending_staff_notification",
+            "waiting_for_gym_assistant_email",
+            "sending_member_notification",
+        }))
+        .filter(MemberEmailCorrectionRequest.email_confirmed_at.is_(None))
+        .update(
+            {
+                MemberEmailCorrectionRequest.status: "manual_review",
+                MemberEmailCorrectionRequest.last_error: "confirmed_timestamp_missing",
+                MemberEmailCorrectionRequest.updated_at: now,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.session.commit()
+    queue_query = MemberEmailCorrectionRequest.query.filter(
+        MemberEmailCorrectionRequest.status.in_(
+            MEMBER_EMAIL_CORRECTION_STAFF_QUEUE_STATUSES
+        )
+    )
+    if staff_role != "admin":
+        queue_query = queue_query.filter(db.or_(
+            MemberEmailCorrectionRequest.status != "manual_review",
+            MemberEmailCorrectionRequest.email_confirmed_at.isnot(None),
+        ))
+    records = (
+        queue_query
+        .order_by(MemberEmailCorrectionRequest.updated_at.desc())
+        .all()
+    )
+    count = queue_query.count()
+    deadlines = {
+        correction.id: (
+            correction.email_confirmed_at
+            + timedelta(hours=app.config["MEMBER_EMAIL_CORRECTION_SYNC_TTL_HOURS"])
+        )
+        for correction in records
+        if (
+            correction.status == "waiting_for_gym_assistant_email"
+            and correction.email_confirmed_at
+        )
+    }
+    return records, count, deadlines
+
+
+@app.get("/staff/email-corrections")
+def staff_email_corrections():
+    if not current_staff_role():
+        return redirect(url_for(
+            "staff_login",
+            next=url_for("staff_email_corrections"),
+        ))
+    staff_role = require_staff_session()
+    staff_warning = try_staff_runtime_schema("staff_email_log_nav")
+    try:
+        records, count, deadlines = staff_member_email_correction_queue_data(
+            staff_role=staff_role,
+        )
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("Portal access queue unavailable while rendering staff page.")
+        records, count, deadlines = [], 0, {}
+        staff_warning = staff_warning or staff_data_warning("staff_email_log_nav")
+    return private_no_cache_response(make_response(render_template(
+        "staff_email_corrections.html",
+        email_correction_reviews=records,
+        email_correction_review_count=count,
+        email_correction_deadlines=deadlines,
+        staff_role=staff_role,
+        staff_page_warning=staff_warning,
+    )))
+
+
+def member_email_correction_confirmation_response(response):
+    response.headers["Cache-Control"] = "private, no-store, no-cache, max-age=0, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
+        "form-action 'self'"
+    )
+    return response
+
+
+@app.route("/access-help/confirm/<reference>", methods=["GET", "POST"])
+def confirm_member_email_correction(reference):
+    ensure_runtime_schema()
+    record = MemberEmailCorrectionRequest.query.filter_by(reference=reference).first()
+    if record:
+        session["language"] = normalize_language(record.language)
+    token = request.form.get("confirmation_token", "") if request.method == "POST" else ""
+    valid = (
+        bool(
+            record
+            and record.status == "awaiting_email_confirmation"
+            and record.confirmation_expires_at >= datetime.now()
+        )
+        if request.method == "GET"
+        else valid_member_email_correction_confirmation(record, token)
+    )
+    if request.method == "GET":
+        # GET is deliberately read-only so mail scanners cannot approve a request.
+        response = app.make_response(render_template(
+            "access_help_confirm.html",
+            record=record,
+            valid=valid,
+            completed=False,
+        ))
+        return member_email_correction_confirmation_response(response)
+
+    validate_csrf_token()
+    if not valid:
+        response = app.make_response((
+            render_template(
+                "access_help_confirm.html",
+                record=record,
+                valid=False,
+                completed=False,
+            ),
+            400,
+        ))
+        return member_email_correction_confirmation_response(response)
+
+    now = datetime.now()
+    claimed = (
+        MemberEmailCorrectionRequest.query
+        .filter_by(id=record.id, status="awaiting_email_confirmation")
+        .update(
+            {
+                MemberEmailCorrectionRequest.status: "staff_notification_pending",
+                MemberEmailCorrectionRequest.email_confirmed_at: now,
+                MemberEmailCorrectionRequest.updated_at: now,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.session.commit()
+    db.session.refresh(record)
+    if claimed != 1:
+        response = app.make_response((
+            render_template(
+                "access_help_confirm.html",
+                record=record,
+                valid=False,
+                completed=False,
+            ),
+            409,
+        ))
+        return member_email_correction_confirmation_response(response)
+
+    schedule_post_sync_reconciliation()
+    if app.config.get("TESTING"):
+        record = current_member_email_correction(record)
+
+    response = app.make_response(render_template(
+        "access_help_confirm.html",
+        record=record,
+        valid=True,
+        completed=True,
+    ))
+    return member_email_correction_confirmation_response(response)
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
@@ -22059,7 +23854,13 @@ def login():
 
         if check_password_hash(login_code.code_hash, supplied_code):
             member = Member.query.filter_by(member_id=login_code.member_id).first()
-            if not member:
+            if (
+                not member
+                or normalize_email(member.email) != normalize_email(login_code.email)
+                or member_by_email(member.email) is None
+            ):
+                login_code.used_at = datetime.now()
+                db.session.commit()
                 flash(translated_text("login_not_verified", current_language()), "error")
                 return redirect(url_for("login"))
             login_code.used_at = datetime.now()
@@ -22211,6 +24012,7 @@ def set_member_password():
     member, redirect_response = current_member_or_redirect()
     if redirect_response:
         return redirect_response
+    expected_auth_version = int(session.get("member_auth_version", 0))
 
     if request.method == "POST":
         validate_csrf_token()
@@ -22220,8 +24022,27 @@ def set_member_password():
         if error_key:
             flash(translated_text(error_key, current_language()), "error")
             return redirect(url_for("set_member_password"))
-        member.password_hash = generate_password_hash(password)
-        member.password_set_at = datetime.now()
+        password_hash = generate_password_hash(password)
+        password_set_at = datetime.now()
+        updated = (
+            Member.query
+            .filter(
+                Member.id == member.id,
+                Member.auth_version == expected_auth_version,
+            )
+            .update(
+                {
+                    Member.password_hash: password_hash,
+                    Member.password_set_at: password_set_at,
+                },
+                synchronize_session=False,
+            )
+        )
+        if updated != 1:
+            db.session.rollback()
+            clear_member_session_authentication()
+            flash(translated_text("member_session_changed", current_language()), "error")
+            return redirect(url_for("login"))
         db.session.commit()
         session["member_password_verified"] = True
         flash(translated_text("member_password_saved", current_language()), "success")
@@ -22241,7 +24062,13 @@ def member_login_alias():
 
 @app.get("/logout")
 def logout():
-    session.pop("member_id", None)
-    session.pop("member_password_verified", None)
+    clear_member_session_authentication()
     flash(translated_text("logged_out", current_language()))
     return redirect(url_for("login"))
+
+
+# Gunicorn imports this module before binding a worker. A failed migration must
+# therefore fail the worker instead of letting authentication query an old
+# schema on the first request.
+with app.app_context():
+    ensure_runtime_schema_before_traffic()
