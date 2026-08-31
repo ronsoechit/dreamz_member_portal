@@ -95,6 +95,42 @@
             <dd class="mt-1 text-gray-200">{{ row.eligible_count }}</dd>
           </div>
         </dl>
+        {% if row.invoice_request %}
+          <div class="mt-4 rounded-lg border border-blue-500/25 bg-blue-500/10 p-3 text-sm text-blue-100">
+            <span class="font-semibold">{{ t('invoice_request_title') }}:</span>
+            {{ t('invoice_request_status_' ~ row.invoice_request.status) }}
+            {% if row.invoice_request_reason %}
+              <div class="mt-2 text-xs leading-5 text-blue-100/80">{{ row.invoice_request_reason }}</div>
+            {% endif %}
+          </div>
+          {% if row.invoice_request.status == 'source_ready' %}
+            <form class="mt-3" method="post" action="{{ url_for('staff_prepare_invoice_request', request_id=row.invoice_request.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-black hover:bg-yellow-400">
+                {{ t('invoice_request_prepare_action') }}
+              </button>
+            </form>
+          {% elif row.invoice_request.status == 'source_blocked' %}
+            <div class="mt-3 flex flex-wrap gap-2">
+              <form method="post" action="{{ url_for('staff_retry_invoice_request', request_id=row.invoice_request.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-4 py-2 text-sm font-semibold text-yellow-100 hover:bg-yellow-500/20">
+                  {{ t('invoice_request_retry_action') }}
+                </button>
+              </form>
+              <form method="post" action="{{ url_for('staff_close_invoice_request', request_id=row.invoice_request.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <label class="mb-2 flex items-start gap-2 text-xs leading-4 text-gray-300">
+                  <input class="mt-0.5 h-3.5 w-3.5 accent-yellow-500" type="checkbox" name="confirm_close" value="1" required>
+                  <span>{{ t('invoice_request_close_confirm') }}</span>
+                </label>
+                <button type="submit" class="rounded-lg border border-gray-500/40 bg-gray-800 px-4 py-2 text-sm font-semibold text-gray-100 hover:bg-gray-700">
+                  {{ t('invoice_request_close_action') }}
+                </button>
+              </form>
+            </div>
+          {% endif %}
+        {% endif %}
       </article>
     {% else %}
       <div class="rounded-xl border border-gray-700 bg-gray-900/70 p-5 text-sm text-gray-300">{{ t('staff_invoice_no_records') }}</div>
@@ -200,7 +236,8 @@
   <div class="grid gap-4">
     {% for invoice in invoices %}
       {% set invoice_is_immutable = invoice.status in ['issued', 'void'] %}
-      {% set selected_invoice_language = invoice.language if invoice_is_immutable else invoice_language_preferences.get(invoice.member_id) %}
+      {% set invoice_request_binding = invoice_request_bindings.get(invoice.id) %}
+      {% set selected_invoice_language = invoice.language if invoice_is_immutable or invoice_request_binding else invoice_language_preferences.get(invoice.member_id) %}
       <article class="rounded-xl border border-gray-700 bg-gray-900/70 p-5">
         <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.8fr)]">
           <div>

@@ -213,6 +213,19 @@ app.config["INVOICE_GA_PILOT_MEMBER_IDS"] = {
     for member_id in os.getenv("INVOICE_GA_PILOT_MEMBER_IDS", "").split(",")
     if member_id.strip().isdigit() and int(member_id.strip()) > 0
 }
+app.config["INVOICE_ON_DEMAND_ENABLED"] = os.getenv(
+    "INVOICE_ON_DEMAND_ENABLED",
+    "false",
+).lower() in ("1", "true", "yes")
+app.config["INVOICE_ON_DEMAND_MEMBER_IDS"] = {
+    member_id.strip()
+    for member_id in os.getenv("INVOICE_ON_DEMAND_MEMBER_IDS", "").split(",")
+    if member_id.strip().isdigit() and int(member_id.strip()) > 0
+}
+app.config["INVOICE_ON_DEMAND_MAX_MEMBERS"] = positive_int_environment_value(
+    "INVOICE_ON_DEMAND_MAX_MEMBERS",
+    25,
+)
 app.config["INVOICE_GA_PILOT_SYNC_MAX_AGE_MINUTES"] = positive_int_environment_value(
     "INVOICE_GA_PILOT_SYNC_MAX_AGE_MINUTES",
     30,
@@ -1097,6 +1110,74 @@ class MemberPortalPreference(db.Model):
     member_id = db.Column(db.String, primary_key=True)
     invoice_language = db.Column(db.String(8), default=DEFAULT_LANGUAGE, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+
+class MemberInvoiceRequest(db.Model):
+    """Member-owned authorization to inspect that member's invoice source."""
+
+    id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.String, nullable=False, index=True)
+    open_member_key = db.Column(db.String, unique=True, index=True)
+    status = db.Column(db.String(32), default="pending_sync", nullable=False, index=True)
+    requested_language = db.Column(db.String(8), nullable=False)
+    source_event_id = db.Column(
+        db.Integer,
+        db.ForeignKey("gym_assistant_journal_event.id"),
+        index=True,
+    )
+    source_payload_hash = db.Column(db.String(64))
+    source_sync_run_id = db.Column(db.Integer, db.ForeignKey("sync_run.id"), index=True)
+    invoice_id = db.Column(db.Integer, db.ForeignKey("member_invoice.id"), index=True)
+    invoice_binding_key = db.Column(db.String, unique=True, index=True)
+    source_snapshot_sha256 = db.Column(db.String(64))
+    status_reason = db.Column(db.String(160))
+    requested_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+    source_bound_at = db.Column(db.DateTime)
+    prepared_at = db.Column(db.DateTime)
+    prepared_by = db.Column(db.String)
+    closed_at = db.Column(db.DateTime)
+    closed_by = db.Column(db.String)
+    completed_at = db.Column(db.DateTime)
+    updated_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    source_event = db.relationship("GymAssistantJournalEvent", foreign_keys=[source_event_id])
+    invoice = db.relationship("MemberInvoice", foreign_keys=[invoice_id])
+
+
+class MemberInvoiceRequestAudit(db.Model):
+    """Immutable evidence captured before an administrative request transition."""
+
+    id = db.Column(db.Integer, primary_key=True)
+    request_id = db.Column(
+        db.Integer,
+        db.ForeignKey("member_invoice_request.id"),
+        nullable=False,
+        index=True,
+    )
+    member_id = db.Column(db.String, nullable=False, index=True)
+    action = db.Column(db.String(32), nullable=False, index=True)
+    from_status = db.Column(db.String(32))
+    to_status = db.Column(db.String(32), nullable=False)
+    prior_status_reason = db.Column(db.String(160))
+    transition_reason = db.Column(db.String(160), nullable=False)
+    source_event_id = db.Column(db.Integer)
+    source_payload_hash = db.Column(db.String(64))
+    source_sync_run_id = db.Column(db.Integer)
+    source_snapshot_sha256 = db.Column(db.String(64))
+    source_bound_at = db.Column(db.DateTime)
+    invoice_id = db.Column(db.Integer)
+    invoice_binding_key = db.Column(db.String)
+    prepared_at = db.Column(db.DateTime)
+    prepared_by = db.Column(db.String)
+    open_member_key = db.Column(db.String)
+    actor = db.Column(db.String, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False, index=True)
+
+
+@event.listens_for(MemberInvoiceRequestAudit, "before_delete")
+@event.listens_for(MemberInvoiceRequestAudit, "before_update")
+def prevent_member_invoice_request_audit_update(_mapper, _connection, _target):
+    raise RuntimeError("Member invoice request audit rows are immutable.")
 
 
 class GymAssistantInvoiceSyncState(db.Model):
@@ -8018,6 +8099,15 @@ INVOICE_STATUS_READY = "ready_for_review"
 INVOICE_STATUS_ISSUED = "issued"
 INVOICE_STATUS_FAILED = "generation_failed"
 INVOICE_STATUS_VOID = "void"
+INVOICE_STATUS_SUPERSEDED = "superseded"
+INVOICE_REQUEST_PENDING = "pending_sync"
+INVOICE_REQUEST_SOURCE_READY = "source_ready"
+INVOICE_REQUEST_SOURCE_BLOCKED = "source_blocked"
+INVOICE_REQUEST_DRAFT_READY = "draft_ready"
+INVOICE_REQUEST_ISSUED = "issued"
+INVOICE_REQUEST_VOID = "void"
+INVOICE_REQUEST_INVALIDATED = "invalidated"
+INVOICE_REQUEST_CLOSED = "closed"
 INVOICE_CENT = Decimal("0.01")
 INVOICE_EVENT_BATCH_SCHEMA = "dreamz.ga.invoice-event-batch.v1"
 INVOICE_EVENT_BATCH_RECEIPT_SCHEMA = "dreamz.ga.invoice-event-batch-receipt.v1"
@@ -8202,20 +8292,125 @@ def invoice_pilot_member_allowed(member_id):
     )
 
 
+def configured_invoice_on_demand_member_ids():
+    value = app.config.get("INVOICE_ON_DEMAND_MEMBER_IDS") or set()
+    if isinstance(value, str):
+        value = value.split(",")
+    return {
+        str(member_id).strip()
+        for member_id in value
+        if str(member_id).strip().isdigit() and int(str(member_id).strip()) > 0
+    }
+
+
+def invoice_on_demand_member_allowed(member_id):
+    return (
+        bool(app.config.get("INVOICE_ON_DEMAND_ENABLED"))
+        and str(member_id or "").strip()
+        in configured_invoice_on_demand_member_ids()
+    )
+
+
+def requested_invoice_member_ids():
+    if not app.config.get("INVOICE_ON_DEMAND_ENABLED"):
+        return set()
+    return {
+        str(member_id)
+        for (member_id,) in (
+            db.session.query(MemberInvoiceRequest.member_id)
+            .filter(
+                MemberInvoiceRequest.status.in_({
+                    INVOICE_REQUEST_PENDING,
+                    INVOICE_REQUEST_SOURCE_READY,
+                    INVOICE_REQUEST_DRAFT_READY,
+                }),
+                MemberInvoiceRequest.open_member_key.isnot(None),
+            )
+            .all()
+        )
+        if member_id
+    }
+
+
+def pending_invoice_request_member_ids():
+    if not app.config.get("INVOICE_ON_DEMAND_ENABLED"):
+        return set()
+    return {
+        str(member_id)
+        for (member_id,) in (
+            db.session.query(MemberInvoiceRequest.member_id)
+            .filter(
+                MemberInvoiceRequest.status == INVOICE_REQUEST_PENDING,
+                MemberInvoiceRequest.open_member_key.isnot(None),
+            )
+            .all()
+        )
+        if member_id
+    }
+
+
+def invoice_request_member_ids():
+    return {
+        str(member_id)
+        for (member_id,) in db.session.query(MemberInvoiceRequest.member_id).distinct().all()
+        if member_id
+    }
+
+
+def member_has_invoice_request(member_id):
+    return (
+        MemberInvoiceRequest.query
+        .filter_by(member_id=str(member_id or "").strip())
+        .count()
+        > 0
+    )
+
+
+def invoice_event_authorized_for_issue(event):
+    if not event:
+        return False
+    if invoice_pilot_member_allowed(event.member_id):
+        return True
+    if not app.config.get("INVOICE_ON_DEMAND_ENABLED"):
+        return False
+    return (
+        MemberInvoiceRequest.query
+        .filter(
+            MemberInvoiceRequest.member_id == str(event.member_id),
+            MemberInvoiceRequest.source_event_id == event.id,
+            MemberInvoiceRequest.status.in_({
+                INVOICE_REQUEST_SOURCE_READY,
+                INVOICE_REQUEST_DRAFT_READY,
+                INVOICE_REQUEST_ISSUED,
+            }),
+        )
+        .first()
+        is not None
+    )
+
+
 def tracked_invoice_member_ids():
-    event_ids = {
+    # Issued and already-voided invoices retain their exact reversal evidence
+    # cohort. Open requests are added separately, and static pilots remain
+    # covered by their explicit allowlist. Historical event-only members must
+    # not silently become a permanent scanner cohort.
+    return {
         str(member_id)
-        for (member_id,) in db.session.query(
-            GymAssistantJournalEvent.member_id
-        ).distinct()
+        for (member_id,) in (
+            db.session.query(MemberInvoice.member_id)
+            .filter(MemberInvoice.status.in_({
+                INVOICE_STATUS_ISSUED,
+                INVOICE_STATUS_VOID,
+            }))
+            .distinct()
+            .all()
+        )
         if member_id
     }
-    invoice_ids = {
-        str(member_id)
-        for (member_id,) in db.session.query(MemberInvoice.member_id).distinct()
-        if member_id
-    }
-    return event_ids | invoice_ids
+
+
+def invoice_monitor_member_ids():
+    return tracked_invoice_member_ids() | requested_invoice_member_ids()
 
 
 def acquire_invoice_member_transaction_lock(member_id):
@@ -8227,6 +8422,20 @@ def acquire_invoice_member_transaction_lock(member_id):
         hashlib.sha256(
             f"dreamz-member-invoice:{str(member_id)}".encode("utf-8")
         ).digest()[:8],
+        byteorder="big",
+        signed=True,
+    )
+    db.session.execute(
+        text("SELECT pg_advisory_xact_lock(:lock_key)"),
+        {"lock_key": lock_key},
+    )
+
+
+def acquire_invoice_request_capacity_lock():
+    if db.engine.dialect.name != "postgresql":
+        return
+    lock_key = int.from_bytes(
+        hashlib.sha256(b"dreamz-member-invoice-request-capacity").digest()[:8],
         byteorder="big",
         signed=True,
     )
@@ -8269,7 +8478,9 @@ def member_has_issued_invoices(member_id):
 
 def member_invoice_access_allowed(member_id):
     return (
-        invoice_pilot_member_allowed(member_id)
+        invoice_on_demand_member_allowed(member_id)
+        or member_has_invoice_request(member_id)
+        or invoice_pilot_member_allowed(member_id)
         or member_has_issued_invoices(member_id)
     )
 
@@ -8557,13 +8768,80 @@ def invoice_event_eligibility(values, member):
     return "eligible", None
 
 
+def invoice_event_latest_sort_key(event):
+    """Return the canonical Gym Assistant ordering for a normalized/model event."""
+
+    def value(name, default=None):
+        if isinstance(event, dict):
+            return event.get(name, default)
+        return getattr(event, name, default)
+
+    occurred_at = value("occurred_at") or datetime.min
+    if getattr(occurred_at, "tzinfo", None):
+        occurred_at = occurred_at.astimezone(timezone.utc).replace(tzinfo=None)
+    sequence = str(value("journal_sequence", "") or "").strip()
+    try:
+        sequence_number = int(sequence, 16)
+    except (TypeError, ValueError):
+        sequence_number = -1
+    try:
+        transaction_number = int(value("journal_transaction_id") or -1)
+    except (TypeError, ValueError):
+        transaction_number = -1
+    return (
+        occurred_at,
+        sequence_number,
+        transaction_number,
+        str(value("source_reference", "") or ""),
+    )
+
+
 def void_invoice_linked_to_source_event(event, reason, now=None):
     if not event or not event.id:
         return None
-    invoice = MemberInvoice.query.filter_by(source_event_id=event.id).first()
-    if not invoice or invoice.status == INVOICE_STATUS_VOID:
-        return invoice
     now = now or datetime.now()
+    is_confirmed_void = reason == "source_event_voided"
+    for invoice_request in MemberInvoiceRequest.query.filter_by(source_event_id=event.id).all():
+        if is_confirmed_void:
+            invoice_request.status = INVOICE_REQUEST_VOID
+            invoice_request.status_reason = reason
+            invoice_request.open_member_key = None
+            invoice_request.completed_at = now
+            invoice_request.updated_at = now
+        elif invoice_request.status in {
+            INVOICE_REQUEST_PENDING,
+            INVOICE_REQUEST_SOURCE_READY,
+            INVOICE_REQUEST_SOURCE_BLOCKED,
+            INVOICE_REQUEST_DRAFT_READY,
+        }:
+            supersede_invoice_request_draft(
+                invoice_request,
+                "Superseded because the Gym Assistant source payload changed.",
+                "system:ga-journal",
+                now=now,
+            )
+            invoice_request.status = INVOICE_REQUEST_INVALIDATED
+            invoice_request.status_reason = reason
+            invoice_request.open_member_key = None
+            invoice_request.completed_at = now
+            invoice_request.updated_at = now
+        elif invoice_request.status == INVOICE_REQUEST_ISSUED:
+            # A payload conflict is not proof that Gym Assistant voided the
+            # payment. Preserve the issued legal document and flag review.
+            invoice_request.status_reason = reason
+            invoice_request.updated_at = now
+    invoice = MemberInvoice.query.filter_by(source_event_id=event.id).first()
+    if not invoice or invoice.status in {INVOICE_STATUS_VOID, INVOICE_STATUS_SUPERSEDED}:
+        return invoice
+    if not is_confirmed_void:
+        if invoice.status in {INVOICE_STATUS_READY, INVOICE_STATUS_FAILED}:
+            invoice.status = INVOICE_STATUS_SUPERSEDED
+            invoice.review_reason = reason
+            invoice.voided_at = now
+            invoice.voided_by = "system:ga-journal"
+            invoice.void_reason = reason
+            invoice.updated_at = now
+        return invoice
     invoice.status = INVOICE_STATUS_VOID
     invoice.voided_at = now
     invoice.voided_by = "system:ga-journal"
@@ -8572,14 +8850,36 @@ def void_invoice_linked_to_source_event(event, reason, now=None):
     return invoice
 
 
+def supersede_invoice_request_draft(invoice_request, reason, actor, now=None):
+    if not invoice_request:
+        return None
+    now = now or datetime.now()
+    invoice = invoice_request.invoice
+    if invoice and invoice.status in {INVOICE_STATUS_READY, INVOICE_STATUS_FAILED}:
+        invoice.status = INVOICE_STATUS_SUPERSEDED
+        invoice.review_reason = reason
+        invoice.voided_at = now
+        invoice.voided_by = actor
+        invoice.void_reason = reason
+        invoice.updated_at = now
+    invoice_request.invoice_id = None
+    invoice_request.invoice_binding_key = None
+    invoice_request.prepared_at = None
+    invoice_request.prepared_by = None
+    return invoice
+
+
 def sync_invoice_membership_events(payload, sync_run):
-    active_ids = (
+    pilot_ids = (
         configured_invoice_pilot_member_ids()
         if app.config.get("INVOICE_GA_PILOT_ENABLED")
         else set()
     )
+    active_request_ids = requested_invoice_member_ids()
+    pending_request_ids = pending_invoice_request_member_ids()
+    new_event_ids = pilot_ids | active_request_ids
     tracked_ids = tracked_invoice_member_ids()
-    accepted_ids = active_ids | tracked_ids
+    accepted_ids = new_event_ids | tracked_ids
     if not accepted_ids:
         return {"status": "disabled", "received": 0, "eligible": 0, "rejected": 0}
 
@@ -8597,7 +8897,13 @@ def sync_invoice_membership_events(payload, sync_run):
         if str(member_id).strip().isdigit()
         and int(str(member_id).strip()) > 0
     }
-    covered_ids = accepted_ids
+    # A request may be created after the agent fetched its target set. Dynamic
+    # requests absent from this exact payload simply wait for the next cycle.
+    # Static pilot and reversal-monitor IDs must always remain covered.
+    covered_ids = accepted_ids & requested_ids
+    required_coverage_ids = pilot_ids | tracked_ids
+    missing_required_ids = required_coverage_ids - requested_ids
+    state_ids = covered_ids | missing_required_ids
     source = str(payload.get("invoice_journal_source") or "").strip() or None
     catalog_source = str(payload.get("invoice_catalog_source") or "").strip() or None
     try:
@@ -8640,9 +8946,11 @@ def sync_invoice_membership_events(payload, sync_run):
     if metadata_issue_count:
         raw_events = []
 
-    received_by_member = {member_id: 0 for member_id in covered_ids}
+    received_by_member = {member_id: 0 for member_id in state_ids}
     eligible = rejected = conflicts = 0
+    conflicts_by_member = {}
     now = datetime.now()
+    normalized_events = []
     for raw_event in raw_events:
         try:
             values = normalize_invoice_membership_event(
@@ -8658,13 +8966,41 @@ def sync_invoice_membership_events(payload, sync_run):
         ):
             rejected += 1
             continue
+        normalized_events.append(values)
+
+    latest_request_values = {}
+    for values in normalized_events:
+        member_id = values["member_id"]
+        if member_id not in active_request_ids:
+            continue
+        current = latest_request_values.get(member_id)
+        if (
+            current is None
+            or invoice_event_latest_sort_key(values)
+            > invoice_event_latest_sort_key(current)
+        ):
+            latest_request_values[member_id] = values
+
+    processed_event_by_member = {}
+    for values in normalized_events:
+        member_id = values["member_id"]
         existing = GymAssistantJournalEvent.query.filter_by(
             source_reference=values["source_reference"]
         ).first()
-        if values["member_id"] not in active_ids and existing is None:
+        if (
+            member_id in active_request_ids
+            and member_id not in pilot_ids
+            and existing is None
+            and latest_request_values.get(member_id, {}).get("source_reference")
+            != values["source_reference"]
+        ):
+            # An on-demand request is deliberately bound to one newest event;
+            # it never falls back to an older, more convenient source.
             continue
-        received_by_member[values["member_id"]] += 1
-        member = Member.query.filter_by(member_id=values["member_id"]).first()
+        if member_id not in new_event_ids and existing is None:
+            continue
+        received_by_member[member_id] = received_by_member.get(member_id, 0) + 1
+        member = Member.query.filter_by(member_id=member_id).first()
         eligibility_status, eligibility_reason = invoice_event_eligibility(values, member)
         if existing and existing.source_payload_hash != values["source_payload_hash"]:
             if values["is_voided"]:
@@ -8676,6 +9012,9 @@ def sync_invoice_membership_events(payload, sync_run):
                 existing.eligibility_status = "conflict"
                 existing.eligibility_reason = "source_payload_changed"
                 conflicts += 1
+                conflicts_by_member[member_id] = (
+                    conflicts_by_member.get(member_id, 0) + 1
+                )
             existing.last_sync_run_id = sync_run.id
             existing.last_seen_at = now
             void_invoice_linked_to_source_event(
@@ -8714,10 +9053,17 @@ def sync_invoice_membership_events(payload, sync_run):
                 last_seen_at=now,
             )
             db.session.add(existing)
+        current = processed_event_by_member.get(member_id)
+        if (
+            current is None
+            or invoice_event_latest_sort_key(values)
+            > invoice_event_latest_sort_key(current[0])
+        ):
+            processed_event_by_member[member_id] = (values, existing)
         if eligibility_status == "eligible":
             eligible += 1
 
-    for member_id in covered_ids:
+    for member_id in state_ids:
         state = db.session.get(GymAssistantInvoiceSyncState, member_id)
         if not state:
             state = GymAssistantInvoiceSyncState(member_id=member_id)
@@ -8728,10 +9074,11 @@ def sync_invoice_membership_events(payload, sync_run):
         state.source_snapshot_at = source_snapshot_at
         state.source_sha256 = source_sha256
         state.catalog_sha256 = catalog_sha256
-        coverage_issue_count = 0 if member_id in requested_ids else 1
+        coverage_issue_count = 0 if member_id in covered_ids else 1
         state.journal_issue_count = (
             journal_issue_count
             + rejected
+            + conflicts_by_member.get(member_id, 0)
             + metadata_issue_count
             + coverage_issue_count
         )
@@ -8739,14 +9086,107 @@ def sync_invoice_membership_events(payload, sync_run):
         state.last_sync_run_id = sync_run.id
         state.last_synced_at = now
 
+    db.session.flush()
+    pending_requests = (
+        MemberInvoiceRequest.query
+        .filter(
+            MemberInvoiceRequest.member_id.in_(covered_ids & pending_request_ids),
+            MemberInvoiceRequest.status == INVOICE_REQUEST_PENDING,
+            MemberInvoiceRequest.open_member_key.isnot(None),
+        )
+        .order_by(MemberInvoiceRequest.id.asc())
+        .all()
+    ) if covered_ids & pending_request_ids else []
+    source_cycle_has_issues = bool(
+        journal_issue_count
+        or rejected
+        or metadata_issue_count
+        or not source_sha256
+        or not catalog_sha256
+    )
+    source_cycle_freshness_issues = invoice_source_snapshot_time_issues(
+        source_snapshot_at
+    )
+    for invoice_request in pending_requests:
+        member_id = invoice_request.member_id
+        invoice_request.updated_at = now
+        invoice_request.source_snapshot_sha256 = source_sha256
+        if conflicts_by_member.get(member_id, 0):
+            invoice_request.status = INVOICE_REQUEST_SOURCE_BLOCKED
+            invoice_request.status_reason = "source_payload_changed"
+            continue
+        if source_cycle_has_issues:
+            invoice_request.status_reason = "source_sync_not_successful"
+            continue
+
+        processed = processed_event_by_member.get(member_id)
+        if not processed:
+            invoice_request.status = INVOICE_REQUEST_SOURCE_BLOCKED
+            invoice_request.status_reason = "no_positive_membership_event"
+            continue
+
+        _values, source_event = processed
+        invoice_request.source_event_id = source_event.id
+        invoice_request.source_payload_hash = source_event.source_payload_hash
+        invoice_request.source_sync_run_id = sync_run.id
+        invoice_request.source_bound_at = now
+        if source_cycle_freshness_issues:
+            invoice_request.status = INVOICE_REQUEST_SOURCE_BLOCKED
+            invoice_request.status_reason = source_cycle_freshness_issues[0]
+        elif source_event.eligibility_status == "eligible" and not source_event.is_voided:
+            invoice_request.status = INVOICE_REQUEST_SOURCE_READY
+            invoice_request.status_reason = None
+        else:
+            invoice_request.status = INVOICE_REQUEST_SOURCE_BLOCKED
+            invoice_request.status_reason = (
+                source_event.eligibility_reason or "source_event_not_eligible"
+            )
+
+    bound_requests = (
+        MemberInvoiceRequest.query
+        .filter(
+            MemberInvoiceRequest.member_id.in_(covered_ids & active_request_ids),
+            MemberInvoiceRequest.status.in_({
+                INVOICE_REQUEST_SOURCE_READY,
+                INVOICE_REQUEST_DRAFT_READY,
+            }),
+            MemberInvoiceRequest.open_member_key.isnot(None),
+            MemberInvoiceRequest.source_event_id.isnot(None),
+        )
+        .order_by(MemberInvoiceRequest.id.asc())
+        .all()
+    ) if covered_ids & active_request_ids else []
+    for invoice_request in bound_requests:
+        processed = processed_event_by_member.get(invoice_request.member_id)
+        if not processed:
+            continue
+        _values, newest_event = processed
+        bound_event = invoice_request.source_event
+        if (
+            bound_event
+            and newest_event.id != bound_event.id
+            and invoice_event_latest_sort_key(newest_event)
+            > invoice_event_latest_sort_key(bound_event)
+        ):
+            supersede_invoice_request_draft(
+                invoice_request,
+                "Superseded because a newer Gym Assistant membership event was detected.",
+                "system:ga-journal",
+                now=now,
+            )
+            invoice_request.status = INVOICE_REQUEST_SOURCE_BLOCKED
+            invoice_request.status_reason = "newer_membership_event_detected"
+            invoice_request.updated_at = now
+
     return {
         "status": (
             "blocked"
             if (
                 journal_issue_count
                 + rejected
+                + conflicts
                 + metadata_issue_count
-                + len(accepted_ids - requested_ids)
+                + len(missing_required_ids)
             )
             else "success"
         ),
@@ -9464,8 +9904,190 @@ def persist_member_invoice_language_preference(member_id, language, *, commit=Tr
     return preference
 
 
+def latest_member_invoice_request(member_id):
+    return (
+        MemberInvoiceRequest.query
+        .filter_by(member_id=str(member_id or "").strip())
+        .order_by(MemberInvoiceRequest.requested_at.desc(), MemberInvoiceRequest.id.desc())
+        .first()
+    )
+
+
+def open_member_invoice_request(member_id, *, lock=False):
+    query = MemberInvoiceRequest.query.filter_by(
+        open_member_key=str(member_id or "").strip(),
+    )
+    if lock:
+        query = query.with_for_update()
+    return query.first()
+
+
+def invoice_request_binding_for_invoice(invoice):
+    if not invoice:
+        return None
+    return (
+        MemberInvoiceRequest.query
+        .filter(MemberInvoiceRequest.invoice_binding_key == str(invoice.id))
+        .order_by(MemberInvoiceRequest.requested_at.desc(), MemberInvoiceRequest.id.desc())
+        .first()
+    )
+
+
+def audit_member_invoice_request_transition(
+    invoice_request,
+    *,
+    action,
+    to_status,
+    transition_reason,
+    actor,
+    created_at=None,
+):
+    if not invoice_request or not invoice_request.id:
+        raise ValueError("A persisted invoice request is required for audit.")
+    audit = MemberInvoiceRequestAudit(
+        request_id=invoice_request.id,
+        member_id=invoice_request.member_id,
+        action=str(action),
+        from_status=invoice_request.status,
+        to_status=str(to_status),
+        prior_status_reason=invoice_request.status_reason,
+        transition_reason=str(transition_reason),
+        source_event_id=invoice_request.source_event_id,
+        source_payload_hash=invoice_request.source_payload_hash,
+        source_sync_run_id=invoice_request.source_sync_run_id,
+        source_snapshot_sha256=invoice_request.source_snapshot_sha256,
+        source_bound_at=invoice_request.source_bound_at,
+        invoice_id=invoice_request.invoice_id,
+        invoice_binding_key=invoice_request.invoice_binding_key,
+        prepared_at=invoice_request.prepared_at,
+        prepared_by=invoice_request.prepared_by,
+        open_member_key=invoice_request.open_member_key,
+        actor=str(actor or "admin"),
+        created_at=created_at or datetime.now(),
+    )
+    db.session.add(audit)
+    return audit
+
+
+def create_member_invoice_request(member_id):
+    member_id = str(member_id or "").strip()
+    if not member_id:
+        raise ValueError("A member is required.")
+    if not invoice_on_demand_member_allowed(member_id):
+        raise ValueError("This member is not authorized for invoice requests.")
+    language = confirmed_invoice_language_for_member(member_id)
+    if not language:
+        raise ValueError("Invoice language preference is not confirmed.")
+
+    acquire_invoice_request_capacity_lock()
+    acquire_invoice_member_transaction_lock(member_id)
+    existing = open_member_invoice_request(member_id, lock=True)
+    if existing:
+        return existing, False
+
+    known_member_ids = {
+        str(value)
+        for (value,) in db.session.query(MemberInvoiceRequest.member_id).distinct().all()
+        if value
+    }
+    max_members = int(app.config.get("INVOICE_ON_DEMAND_MAX_MEMBERS") or 0)
+    if member_id not in known_member_ids and (
+        max_members <= 0 or len(known_member_ids) >= max_members
+    ):
+        raise ValueError("The controlled invoice request rollout is full.")
+
+    now = datetime.now()
+    invoice_request = MemberInvoiceRequest(
+        member_id=member_id,
+        open_member_key=member_id,
+        status=INVOICE_REQUEST_PENDING,
+        requested_language=language,
+        requested_at=now,
+        updated_at=now,
+    )
+    db.session.add(invoice_request)
+    db.session.flush()
+    return invoice_request, True
+
+
+def prepare_member_invoice_request(invoice_request, actor=None):
+    if not app.config.get("INVOICE_ON_DEMAND_ENABLED"):
+        raise ValueError("Invoice requests are disabled.")
+    if not invoice_request or invoice_request.status != INVOICE_REQUEST_SOURCE_READY:
+        raise ValueError("The invoice request source is not ready for preparation.")
+    event = invoice_request.source_event
+    if not event:
+        raise ValueError("The invoice request has no bound source event.")
+    if (
+        str(event.member_id) != str(invoice_request.member_id)
+        or event.id != invoice_request.source_event_id
+        or invoice_request.source_payload_hash != event.source_payload_hash
+        or not invoice_request.source_snapshot_sha256
+    ):
+        raise ValueError("The invoice request source binding is incomplete.")
+    blockers = invoice_event_issue_blockers(event)
+    if blockers:
+        raise ValueError("Invoice source is blocked: " + ", ".join(blockers))
+
+    request_language = str(invoice_request.requested_language or "").strip().lower()
+    if request_language not in LANGUAGES:
+        raise ValueError("The invoice request language binding is invalid.")
+    invoice, was_created = create_ga_membership_invoice_draft(
+        event,
+        actor=actor,
+        language=request_language,
+    )
+    now = datetime.now()
+    if invoice.status == INVOICE_STATUS_ISSUED:
+        invoice_request.invoice_id = invoice.id
+        invoice_request.status = INVOICE_REQUEST_ISSUED
+        invoice_request.status_reason = "invoice_already_issued"
+        invoice_request.open_member_key = None
+        invoice_request.prepared_at = now
+        invoice_request.prepared_by = actor or "staff-token"
+        invoice_request.completed_at = now
+        invoice_request.updated_at = now
+        return invoice, was_created
+    if invoice.status not in {INVOICE_STATUS_READY, INVOICE_STATUS_FAILED}:
+        raise ValueError("The bound invoice is not an editable draft.")
+    originating_request = MemberInvoiceRequest.query.filter_by(
+        invoice_binding_key=str(invoice.id)
+    ).first()
+    if originating_request and originating_request.id != invoice_request.id:
+        raise ValueError("The invoice draft is already bound to another request.")
+    invoice.language = request_language
+    invoice_request.invoice_id = invoice.id
+    invoice_request.invoice_binding_key = str(invoice.id)
+    invoice_request.prepared_at = now
+    invoice_request.prepared_by = actor or "staff-token"
+    invoice_request.updated_at = now
+    invoice_request.status = INVOICE_REQUEST_DRAFT_READY
+    return invoice, was_created
+
+
 def invoice_utc_now():
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def invoice_source_snapshot_time_issues(source_snapshot_at, now=None):
+    if not source_snapshot_at:
+        return ["missing_source_snapshot_at"]
+    now = now or invoice_utc_now()
+    try:
+        max_age_minutes = int(
+            app.config.get("INVOICE_GA_PILOT_SYNC_MAX_AGE_MINUTES", 30)
+        )
+    except (TypeError, ValueError):
+        max_age_minutes = 0
+    if max_age_minutes <= 0:
+        return ["invalid_sync_max_age"]
+
+    age_seconds = (now - source_snapshot_at).total_seconds()
+    if age_seconds < -300:
+        return ["source_clock_is_in_future"]
+    if age_seconds > max_age_minutes * 60:
+        return ["source_snapshot_is_stale"]
+    return []
 
 
 def invoice_event_freshness_issues(event, now=None):
@@ -9488,24 +10110,12 @@ def invoice_event_freshness_issues(event, now=None):
         issues.append("missing_source_snapshot_hash")
     if not re.fullmatch(r"[0-9a-f]{64}", str(state.catalog_sha256 or "")):
         issues.append("missing_catalog_snapshot_hash")
-    if not state.source_snapshot_at:
-        issues.append("missing_source_snapshot_at")
-        return issues
-
-    now = now or invoice_utc_now()
-    try:
-        max_age_minutes = int(app.config.get("INVOICE_GA_PILOT_SYNC_MAX_AGE_MINUTES", 30))
-    except (TypeError, ValueError):
-        max_age_minutes = 0
-    if max_age_minutes <= 0:
-        issues.append("invalid_sync_max_age")
-        return issues
-
-    age_seconds = (now - state.source_snapshot_at).total_seconds()
-    if age_seconds < -300:
-        issues.append("source_clock_is_in_future")
-    elif age_seconds > max_age_minutes * 60:
-        issues.append("source_snapshot_is_stale")
+    issues.extend(
+        invoice_source_snapshot_time_issues(
+            state.source_snapshot_at,
+            now=now,
+        )
+    )
     return issues
 
 
@@ -9513,20 +10123,19 @@ def invoice_event_issue_blockers(event):
     blockers = []
     if not event:
         return ["missing_source_event"]
-    if not invoice_pilot_member_allowed(event.member_id):
-        blockers.append("member_not_in_active_pilot")
+    if not invoice_event_authorized_for_issue(event):
+        blockers.append("member_not_authorized_for_invoice")
     if event.is_voided:
         blockers.append("source_event_voided")
     if event.eligibility_status != "eligible":
         blockers.append(event.eligibility_reason or "source_event_not_eligible")
+    member_events = GymAssistantJournalEvent.query.filter_by(
+        member_id=event.member_id
+    ).all()
     latest_event = (
-        GymAssistantJournalEvent.query
-        .filter_by(member_id=event.member_id)
-        .order_by(
-            GymAssistantJournalEvent.occurred_at.desc(),
-            GymAssistantJournalEvent.id.desc(),
-        )
-        .first()
+        max(member_events, key=invoice_event_latest_sort_key)
+        if member_events
+        else None
     )
     if latest_event and latest_event.id != event.id:
         blockers.append("source_event_not_latest")
@@ -9546,7 +10155,7 @@ def gymassistant_invoice_payment_reference(event):
     return f"GA {event.source_reference.removeprefix('ga-journal:')[:12]}"
 
 
-def create_ga_membership_invoice_draft(event, actor=None):
+def create_ga_membership_invoice_draft(event, actor=None, language=None):
     if not event:
         raise ValueError("A Gym Assistant source event is required.")
     existing = MemberInvoice.query.filter_by(source_event_id=event.id).first()
@@ -9564,7 +10173,12 @@ def create_ga_membership_invoice_draft(event, actor=None):
     if paid_amount <= 0:
         raise ValueError("Membership dues must be greater than zero.")
     service_period_end = event.service_period_end_exclusive - timedelta(days=1)
-    language = invoice_language_for_member(member.member_id)
+    language = (
+        str(language or "").strip().lower()
+        or invoice_language_for_member(member.member_id)
+    )
+    if language not in LANGUAGES:
+        raise ValueError("Invoice language is invalid.")
     membership_name = (
         event.catalog_plan_name
         or translated_text("membership", language)
@@ -9641,9 +10255,15 @@ def invoice_configuration_issues():
     issues = []
     if not app.config.get("INVOICE_ISSUING_ENABLED"):
         issues.append("issuing_disabled")
-    if not app.config.get("INVOICE_GA_PILOT_ENABLED"):
+    pilot_enabled = bool(app.config.get("INVOICE_GA_PILOT_ENABLED"))
+    pilot_ids = configured_invoice_pilot_member_ids()
+    on_demand_enabled = bool(app.config.get("INVOICE_ON_DEMAND_ENABLED"))
+    on_demand_ids = configured_invoice_on_demand_member_ids()
+    if not on_demand_enabled and not pilot_enabled:
         issues.append("pilot_disabled")
-    if not configured_invoice_pilot_member_ids():
+    if on_demand_enabled and not on_demand_ids:
+        issues.append("on_demand_allowlist_empty")
+    if not on_demand_enabled and pilot_enabled and not pilot_ids:
         issues.append("pilot_allowlist_empty")
     if not app.config.get("INVOICE_NUMBER_SERIES_APPROVED"):
         issues.append("number_series_unapproved")
@@ -9759,7 +10379,54 @@ def read_member_invoice_pdf(invoice):
 def member_invoice_integrity_issues(invoice):
     issues = []
     event = invoice.source_event
-    issues.extend(invoice_event_issue_blockers(event))
+    if invoice.status in {INVOICE_STATUS_READY, INVOICE_STATUS_FAILED}:
+        issues.extend(invoice_event_issue_blockers(event))
+    elif event and event.is_voided:
+        # Historical documents do not become corrupt merely because a feature
+        # flag changes, source freshness expires or a newer payment arrives.
+        # A confirmed source void remains a real legal-document condition.
+        issues.append("source_event_voided")
+    invoice_request = invoice_request_binding_for_invoice(invoice)
+    active_source_requests = []
+    if event and invoice.status in {INVOICE_STATUS_READY, INVOICE_STATUS_FAILED}:
+        active_source_requests = (
+            MemberInvoiceRequest.query
+            .filter(
+                MemberInvoiceRequest.source_event_id == event.id,
+                MemberInvoiceRequest.status.in_({
+                    INVOICE_REQUEST_PENDING,
+                    INVOICE_REQUEST_SOURCE_READY,
+                    INVOICE_REQUEST_SOURCE_BLOCKED,
+                    INVOICE_REQUEST_DRAFT_READY,
+                }),
+            )
+            .order_by(
+                MemberInvoiceRequest.requested_at.desc(),
+                MemberInvoiceRequest.id.desc(),
+            )
+            .all()
+        )
+    if active_source_requests and (
+        len(active_source_requests) != 1
+        or not invoice_request
+        or invoice_request.id != active_source_requests[0].id
+        or invoice_request.status != INVOICE_REQUEST_DRAFT_READY
+        or invoice_request.member_id != invoice.member_id
+        or invoice_request.source_event_id != invoice.source_event_id
+        or invoice_request.invoice_id != invoice.id
+        or invoice_request.source_payload_hash != event.source_payload_hash
+        or invoice_request.source_payload_hash != invoice.source_payload_hash
+    ):
+        issues.append("invoice_request_prepare_required")
+    if invoice_request:
+        request_language = str(
+            invoice_request.requested_language or ""
+        ).strip().lower()
+        if (
+            request_language not in LANGUAGES
+            or str(invoice.language or "").strip().lower() != request_language
+        ):
+            issues.append("invoice_request_language_mismatch")
     if event and invoice.source_payload_hash != event.source_payload_hash:
         issues.append("source_payload_changed")
     if (
@@ -9874,9 +10541,17 @@ def issue_member_invoice(invoice, actor):
     member = Member.query.filter_by(member_id=invoice.member_id).first()
     if not member:
         raise ValueError("Invoice member was not found.")
-    issue_language = confirmed_invoice_language_for_member(invoice.member_id)
-    if not issue_language:
-        raise ValueError("Invoice language preference is not confirmed.")
+    invoice_request = invoice_request_binding_for_invoice(invoice)
+    if invoice_request:
+        issue_language = str(
+            invoice_request.requested_language or ""
+        ).strip().lower()
+        if issue_language not in LANGUAGES or invoice.language != issue_language:
+            raise ValueError("Invoice request language binding changed before issue.")
+    else:
+        issue_language = confirmed_invoice_language_for_member(invoice.member_id)
+        if not issue_language:
+            raise ValueError("Invoice language preference is not confirmed.")
     now = datetime.now()
     issue_date = current_portal_datetime().date()
     if not invoice.invoice_number:
@@ -9967,7 +10642,13 @@ INVOICE_REASON_TRANSLATION_KEYS = {
     "source_payload_changed": "invoice_eligibility_source_changed",
     "source_event_not_eligible": "invoice_eligibility_no_positive_membership_event",
     "source_event_not_latest": "invoice_eligibility_source_not_latest",
+    "newer_membership_event_detected": "invoice_eligibility_source_not_latest",
     "member_not_in_active_pilot": "invoice_eligibility_member_not_allowlisted",
+    "member_not_authorized_for_invoice": "invoice_eligibility_member_not_authorized",
+    "invoice_request_language_mismatch": "invoice_eligibility_request_language_mismatch",
+    "invoice_request_prepare_required": "invoice_request_prepare_blocked",
+    "invoice_already_issued": "invoice_request_status_already_available",
+    "closed_after_manual_source_review": "invoice_request_closed_reason",
     "missing_source_event": "invoice_eligibility_no_positive_membership_event",
     "missing_member_sync_state": "invoice_eligibility_stale_sync",
     "source_sync_not_successful": "invoice_eligibility_stale_sync",
@@ -9995,6 +10676,7 @@ def staff_invoice_pilot_context():
     allowed_ids = (
         configured_invoice_pilot_member_ids()
         | tracked_invoice_member_ids()
+        | invoice_request_member_ids()
     )
     members = {
         member.member_id: member
@@ -10023,6 +10705,19 @@ def staff_invoice_pilot_context():
         .filter(MemberPortalPreference.member_id.in_(allowed_ids))
         .all()
     ) if allowed_ids else []
+    invoice_requests = (
+        MemberInvoiceRequest.query
+        .filter(MemberInvoiceRequest.member_id.in_(allowed_ids))
+        .order_by(MemberInvoiceRequest.requested_at.desc(), MemberInvoiceRequest.id.desc())
+        .all()
+    ) if allowed_ids else []
+    latest_request_by_member = {}
+    request_binding_by_invoice_id = {}
+    for invoice_request in invoice_requests:
+        latest_request_by_member.setdefault(invoice_request.member_id, invoice_request)
+        binding_key = str(invoice_request.invoice_binding_key or "").strip()
+        if binding_key.isdigit():
+            request_binding_by_invoice_id.setdefault(int(binding_key), invoice_request)
     invoice_language_preferences = {}
     for preference in preference_rows:
         language = str(preference.invoice_language or "").strip().lower()
@@ -10052,6 +10747,7 @@ def staff_invoice_pilot_context():
         member = members.get(member_id)
         state = states.get(member_id)
         member_events = [row for row in event_rows if row["event"].member_id == member_id]
+        invoice_request = latest_request_by_member.get(member_id)
         pilot_members.append({
             "member_id": member_id,
             "member": member,
@@ -10059,6 +10755,12 @@ def staff_invoice_pilot_context():
             "state": state,
             "event_count": len(member_events),
             "eligible_count": sum(1 for row in member_events if row["is_ready"]),
+            "invoice_request": invoice_request,
+            "invoice_request_reason": (
+                invoice_reason_text(invoice_request.status_reason)
+                if invoice_request and invoice_request.status_reason
+                else None
+            ),
         })
     return {
         "invoice_config_issues": invoice_configuration_issues(),
@@ -10066,6 +10768,8 @@ def staff_invoice_pilot_context():
         "event_rows": event_rows,
         "invoices": invoices,
         "invoice_language_preferences": invoice_language_preferences,
+        "invoice_request_bindings": request_binding_by_invoice_id,
+        "invoice_requests": invoice_requests,
         "invoice_pending_count": sum(
             1 for invoice in invoices if invoice.status in {INVOICE_STATUS_READY, INVOICE_STATUS_FAILED}
         ),
@@ -18373,8 +19077,15 @@ def member_dashboard_context(member, staff_admin_view=False):
             status=INVOICE_STATUS_ISSUED,
         ).count(),
     )
+    has_invoice_request = optional_dashboard_value(
+        "member_invoice_request",
+        False,
+        lambda: member_has_invoice_request(member.member_id),
+    )
     invoice_pilot_visible = (
-        invoice_pilot_member_allowed(member.member_id)
+        invoice_on_demand_member_allowed(member.member_id)
+        or has_invoice_request
+        or invoice_pilot_member_allowed(member.member_id)
         or issued_invoice_count > 0
     )
 
@@ -19334,7 +20045,7 @@ def api_sync_member_ids():
             for (member_id,) in db.session.query(Member.member_id).all()
         ],
         "invoice_monitor_member_ids": sorted(
-            tracked_invoice_member_ids(),
+            invoice_monitor_member_ids(),
             key=int,
         ),
     }
@@ -22108,14 +22819,17 @@ def staff_member_detail(member_id):
 
 @app.get("/staff/invoices")
 def staff_invoices():
-    require_staff_access(required_role="admin")
+    require_staff_session(required_role="admin")
     ensure_runtime_schema()
-    return render_template("staff_invoices.html", **staff_invoice_pilot_context())
+    return private_no_cache_response(app.make_response(render_template(
+        "staff_invoices.html",
+        **staff_invoice_pilot_context(),
+    )))
 
 
 @app.get("/staff/invoices/reconciliation")
 def staff_invoice_reconciliation():
-    require_staff_access(required_role="admin")
+    require_staff_session(required_role="admin")
     response = app.make_response(render_template(
         "staff_invoice_reconciliation.html",
         **staff_invoice_reconciliation_context(),
@@ -22131,7 +22845,7 @@ def staff_invoice_reconciliation():
 @app.post("/staff/invoices/reconcile")
 def staff_reconcile_invoices():
     validate_csrf_token()
-    require_staff_access(required_role="admin")
+    require_staff_session(required_role="admin")
     ensure_runtime_schema()
     try:
         created, blocked = reconcile_ga_membership_invoice_drafts(
@@ -22162,10 +22876,169 @@ def staff_reconcile_invoices():
     return redirect(url_for("staff_invoices"))
 
 
+@app.post("/staff/invoice-requests/<int:request_id>/prepare")
+def staff_prepare_invoice_request(request_id):
+    validate_csrf_token()
+    require_staff_session(required_role="admin")
+    ensure_runtime_schema()
+    member_id = (
+        db.session.query(MemberInvoiceRequest.member_id)
+        .filter(MemberInvoiceRequest.id == request_id)
+        .scalar()
+    )
+    if not member_id:
+        abort(404)
+    acquire_invoice_member_transaction_lock(member_id)
+    invoice_request = (
+        MemberInvoiceRequest.query
+        .filter_by(id=request_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    try:
+        invoice, _created = prepare_member_invoice_request(
+            invoice_request,
+            actor=current_staff_username() or "admin",
+        )
+        db.session.commit()
+    except ValueError:
+        db.session.rollback()
+        flash(translated_text("invoice_request_prepare_blocked", current_language()), "error")
+        return redirect(url_for("staff_invoices"))
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Could not prepare member invoice request %s.", request_id)
+        flash(translated_text("invoice_request_prepare_failed", current_language()), "error")
+        return redirect(url_for("staff_invoices"))
+    flash(
+        translated_text(
+            "invoice_request_prepare_success",
+            current_language(),
+            member_id=invoice.member_id,
+        ),
+        "success",
+    )
+    return redirect(url_for("staff_invoices"))
+
+
+@app.post("/staff/invoice-requests/<int:request_id>/retry")
+def staff_retry_invoice_request(request_id):
+    validate_csrf_token()
+    require_staff_session(required_role="admin")
+    ensure_runtime_schema()
+    if not app.config.get("INVOICE_ON_DEMAND_ENABLED"):
+        abort(404)
+    member_id = (
+        db.session.query(MemberInvoiceRequest.member_id)
+        .filter(MemberInvoiceRequest.id == request_id)
+        .scalar()
+    )
+    if not member_id:
+        abort(404)
+    acquire_invoice_member_transaction_lock(member_id)
+    invoice_request = (
+        MemberInvoiceRequest.query
+        .filter_by(id=request_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if not invoice_request:
+        abort(404)
+    if invoice_request.status != INVOICE_REQUEST_SOURCE_BLOCKED:
+        db.session.rollback()
+        flash(translated_text("invoice_request_retry_blocked", current_language()), "error")
+        return redirect(url_for("staff_invoices"))
+    now = datetime.now()
+    actor = current_staff_username() or "admin"
+    audit_member_invoice_request_transition(
+        invoice_request,
+        action="retry",
+        to_status=INVOICE_REQUEST_PENDING,
+        transition_reason="administrator_retried_source_request",
+        actor=actor,
+        created_at=now,
+    )
+    supersede_invoice_request_draft(
+        invoice_request,
+        "Superseded when the administrator retried the source request.",
+        actor,
+    )
+    invoice_request.status = INVOICE_REQUEST_PENDING
+    invoice_request.status_reason = None
+    invoice_request.source_event_id = None
+    invoice_request.source_payload_hash = None
+    invoice_request.source_sync_run_id = None
+    invoice_request.source_snapshot_sha256 = None
+    invoice_request.source_bound_at = None
+    invoice_request.updated_at = now
+    db.session.commit()
+    flash(translated_text("invoice_request_retry_success", current_language()), "success")
+    return redirect(url_for("staff_invoices"))
+
+
+@app.post("/staff/invoice-requests/<int:request_id>/close")
+def staff_close_invoice_request(request_id):
+    validate_csrf_token()
+    require_staff_session(required_role="admin")
+    if request.form.get("confirm_close") != "1":
+        flash(translated_text("invoice_request_close_confirm_required", current_language()), "error")
+        return redirect(url_for("staff_invoices"))
+    ensure_runtime_schema()
+    member_id = (
+        db.session.query(MemberInvoiceRequest.member_id)
+        .filter(MemberInvoiceRequest.id == request_id)
+        .scalar()
+    )
+    if not member_id:
+        abort(404)
+    acquire_invoice_member_transaction_lock(member_id)
+    invoice_request = (
+        MemberInvoiceRequest.query
+        .filter_by(id=request_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if not invoice_request:
+        abort(404)
+    if invoice_request.status != INVOICE_REQUEST_SOURCE_BLOCKED:
+        db.session.rollback()
+        flash(translated_text("invoice_request_close_blocked", current_language()), "error")
+        return redirect(url_for("staff_invoices"))
+    now = datetime.now()
+    actor = current_staff_username() or "admin"
+    audit_member_invoice_request_transition(
+        invoice_request,
+        action="close",
+        to_status=INVOICE_REQUEST_CLOSED,
+        transition_reason="closed_after_manual_source_review",
+        actor=actor,
+        created_at=now,
+    )
+    supersede_invoice_request_draft(
+        invoice_request,
+        "Closed by the administrator without issuing an invoice.",
+        actor,
+        now=now,
+    )
+    invoice_request.status = INVOICE_REQUEST_CLOSED
+    invoice_request.status_reason = "closed_after_manual_source_review"
+    invoice_request.open_member_key = None
+    invoice_request.closed_at = now
+    invoice_request.closed_by = actor
+    invoice_request.completed_at = now
+    invoice_request.updated_at = now
+    db.session.commit()
+    flash(translated_text("invoice_request_close_success", current_language()), "success")
+    return redirect(url_for("staff_invoices"))
+
+
 @app.post("/staff/invoices/<int:invoice_id>/issue")
 def staff_issue_invoice(invoice_id):
     validate_csrf_token()
-    require_staff_access(required_role="admin")
+    require_staff_session(required_role="admin")
     required_checks = {
         "review_source_confirmed",
         "review_scope_confirmed",
@@ -22187,6 +23060,7 @@ def staff_issue_invoice(invoice_id):
     invoice = (
         MemberInvoice.query
         .filter_by(id=invoice_id)
+        .populate_existing()
         .with_for_update()
         .first()
     )
@@ -22210,7 +23084,20 @@ def staff_issue_invoice(invoice_id):
         if period_review_required:
             invoice.period_reviewed_at = datetime.now()
             invoice.period_reviewed_by = current_staff_username() or "staff-token"
+        originating_request = invoice_request_binding_for_invoice(invoice)
+        if originating_request and (
+            originating_request.status != INVOICE_REQUEST_DRAFT_READY
+            or originating_request.invoice_id != invoice.id
+            or originating_request.source_event_id != invoice.source_event_id
+        ):
+            raise ValueError("Invoice request binding is not ready for issue.")
         issue_member_invoice(invoice, current_staff_username() or "staff-token")
+        if originating_request:
+            originating_request.status = INVOICE_REQUEST_ISSUED
+            originating_request.status_reason = None
+            originating_request.open_member_key = None
+            originating_request.completed_at = invoice.issued_at or datetime.now()
+            originating_request.updated_at = datetime.now()
         db.session.commit()
     except ValueError as exc:
         db.session.rollback()
@@ -22255,7 +23142,7 @@ def staff_issue_invoice(invoice_id):
 
 @app.get("/staff/invoices/<int:invoice_id>/download")
 def staff_download_invoice(invoice_id):
-    require_staff_access(required_role="admin")
+    require_staff_session(required_role="admin")
     invoice = (
         MemberInvoice.query
         .filter(
@@ -22560,6 +23447,13 @@ def account_detail_context(member, account_page):
     elif account_page == "invoices":
         if not member_invoice_access_allowed(member.member_id):
             abort(404)
+        invoice_request = latest_member_invoice_request(member.member_id)
+        open_invoice_request = open_member_invoice_request(member.member_id)
+        context["invoice_request"] = invoice_request
+        context["invoice_request_can_submit"] = bool(
+            invoice_on_demand_member_allowed(member.member_id)
+            and open_invoice_request is None
+        )
         context["invoices"] = (
             MemberInvoice.query
             .filter_by(
@@ -22593,7 +23487,56 @@ def member_account_invoices():
     member, redirect_response = current_member_or_redirect()
     if redirect_response:
         return redirect_response
-    return render_template("account_detail.html", **account_detail_context(member, "invoices"))
+    return private_no_cache_response(app.make_response(render_template(
+        "account_detail.html",
+        **account_detail_context(member, "invoices"),
+    )))
+
+
+@app.post("/account/invoices/request")
+def member_request_invoice():
+    validate_csrf_token()
+    member, redirect_response = current_member_or_redirect()
+    if redirect_response:
+        return redirect_response
+    if not invoice_on_demand_member_allowed(member.member_id):
+        abort(404)
+    ensure_runtime_schema()
+    if not confirmed_invoice_language_for_member(member.member_id):
+        flash(translated_text("invoice_request_language_required", current_language()), "error")
+        return redirect(url_for("member_account_preferences"))
+    try:
+        _invoice_request, created = create_member_invoice_request(member.member_id)
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        existing = open_member_invoice_request(member.member_id)
+        if not existing:
+            app.logger.exception(
+                "Invoice request uniqueness conflict without an open request for member %s.",
+                member.member_id,
+            )
+            flash(translated_text("invoice_request_unavailable", current_language()), "error")
+            return redirect(url_for("member_account_invoices"))
+        created = False
+    except ValueError:
+        db.session.rollback()
+        flash(translated_text("invoice_request_unavailable", current_language()), "error")
+        return redirect(url_for("member_account_invoices"))
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Could not create invoice request for member %s.", member.member_id)
+        flash(translated_text("invoice_request_unavailable", current_language()), "error")
+        return redirect(url_for("member_account_invoices"))
+
+    flash(
+        translated_text(
+            "invoice_request_created" if created else "invoice_request_existing",
+            current_language(),
+        ),
+        "success",
+    )
+    return redirect(url_for("member_account_invoices"))
 
 
 @app.get("/account/invoices/<int:invoice_id>/download")

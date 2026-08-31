@@ -253,10 +253,11 @@ and asks the member to submit a new secure request if access is still needed.
 
 This access-recovery flow does **not** import, draft, approve or issue invoices.
 Production invoice import and issuance remain disabled outside the separately
-controlled Gym Assistant invoice pilot. It does not change
+controlled Gym Assistant invoice pilot or bounded on-demand rollout. It does not change
 `INVOICE_GA_PILOT_ENABLED`, `INVOICE_GA_PILOT_MEMBER_IDS`,
-`INVOICE_ISSUING_ENABLED`, the approved invoice-number gate, or any staff review
-requirement. Invoice download itself is not pilot-allowlist gated: a member who
+`INVOICE_ON_DEMAND_ENABLED`, `INVOICE_ISSUING_ENABLED`, the approved
+invoice-number gate, or any staff review requirement. Invoice download itself
+is not pilot-allowlist gated: a member who
 regains portal access can see and download only that member's invoices already
 stored with status `issued`, including previously issued records outside the
 current pilot allowlist. Access recovery does not create a draft, invoice
@@ -456,6 +457,71 @@ disabled; those PDFs remain immutable in private object storage. The updated
 frontdesk agent also keeps previously imported invoice members in its
 read-only monitor set, so a later Gym Assistant void/reversal can still
 invalidate the linked portal invoice while new drafts remain disabled.
+
+### Bounded member-owned invoice requests
+
+The member-owned request route is a separate, closed rollout layered on the
+same Gym Assistant evidence, draft, review, number-series and private-storage
+controls. It is disabled by default with `INVOICE_ON_DEMAND_ENABLED=false`.
+`INVOICE_ON_DEMAND_MEMBER_IDS` is the exact comma-separated rollout cohort and
+is enforced by both the member page and the request endpoint. An empty list
+fails closed. The numeric cap is a second safety boundary, not authorization.
+`INVOICE_ON_DEMAND_MAX_MEMBERS` defaults to `25` and counts distinct members
+that have ever used this rollout, not only currently open requests. This is an
+intentional hard rollout ceiling. It is **not** capacity for a general launch
+to the full member base.
+
+When enabled, an authenticated member may request only that member's newest
+paid membership event. The member ID comes from the authenticated session and
+cannot be supplied in the form. The first successful portal login stores the
+selected portal language; the request freezes that language for the eventual
+financial document. A later portal-language change does not change an already
+prepared request or issued PDF. If the Gym Assistant email is missing, wrong or
+non-unique, use `/access-help`; that recovery process remains separate and never
+creates an invoice.
+
+The request is asynchronous and creates no draft, number, PDF or email. Portal
+Sync discovers active requests through `/api/sync/member-ids`; a request created
+after the agent read that endpoint safely waits for the next cycle. The scanner
+binds exactly the newest returned event and never falls back to an older eligible
+payment. A new payment detected between source binding and issue blocks the old
+request and supersedes any unissued draft. A confirmed Gym Assistant void hides
+the linked invoice; a hash/source conflict alone raises a review condition and
+does not automatically void an already issued legal document.
+
+Each request still needs a fresh official Gym Assistant `.gbu`, a clean Portal
+Sync cycle, explicit admin draft preparation and all existing issue-review
+checkboxes. Drafts have no invoice number and are invisible to members. Staff
+invoice pages, preparation, retry, close, issue and download require an
+authenticated browser admin session; `STAFF_TOKEN` is not accepted. An admin
+may close a blocked request only after a separate confirmation; the actor,
+time and reason remain in the request audit record, and the member may then
+submit a new request.
+
+Use this rollout sequence:
+
+1. Deploy with `INVOICE_ON_DEMAND_ENABLED=false`. Keep the existing 14-member
+   atomic bootstrap and its allowlist unchanged.
+2. Verify the additive request table, admin-only invoice page, private S3/R2
+   write/read path, approved number-series gate and all existing invoice config.
+3. Review and record the exact small rollout ceiling and exact member IDs. Do
+   not raise the ceiling merely to make the feature appear generally available.
+4. Put one additional controlled member in `INVOICE_ON_DEMAND_MEMBER_IDS`,
+   enable the flag, have that member log in and request the latest membership
+   invoice, then create a fresh official Gym Assistant backup.
+5. Wait for the next successful Portal Sync, prepare only the exact request,
+   perform the existing individual review and issue it. Verify the member can
+   download the PDF in the frozen request language.
+6. Expand only within the reviewed hard ceiling after that complete test.
+
+To stop new requests and source preparation immediately, set
+`INVOICE_ON_DEMAND_ENABLED=false`. Also set `INVOICE_ISSUING_ENABLED=false` to
+stop all invoice issue. Existing issued PDFs remain available to their owning
+members. The current scanner permanently retains members with an issued or
+voided portal invoice for reversal evidence and has a finite event envelope;
+therefore this design must not be advertised or enabled for all members. A broad rollout first needs
+an incremental/exact-source reversal monitor, an explicit queue-capacity policy
+and paginated staff operations.
 
 ### Storage note
 
