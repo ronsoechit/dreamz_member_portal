@@ -470,6 +470,29 @@ class MemberInvoicePilotTests(unittest.TestCase):
             monitor_response.get_json()["invoice_monitor_member_ids"],
         )
 
+    def test_static_pilot_member_without_invoice_stays_in_monitor_set(self):
+        self.add_pilot_member()
+
+        monitor_response = self.client.get(
+            "/api/sync/member-ids",
+            headers={"X-Sync-Token": "invoice-sync-token"},
+        )
+        self.assertEqual(monitor_response.status_code, 200)
+        self.assertIn(
+            PILOT_MEMBER_ID,
+            monitor_response.get_json()["invoice_monitor_member_ids"],
+        )
+
+        app.config["INVOICE_GA_PILOT_ENABLED"] = False
+        disabled_response = self.client.get(
+            "/api/sync/member-ids",
+            headers={"X-Sync-Token": "invoice-sync-token"},
+        )
+        self.assertNotIn(
+            PILOT_MEMBER_ID,
+            disabled_response.get_json()["invoice_monitor_member_ids"],
+        )
+
     def test_disallowed_retail_line_cannot_be_issued(self):
         self.add_pilot_member()
         invoice = self.prepare_draft()

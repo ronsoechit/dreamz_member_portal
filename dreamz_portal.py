@@ -8410,7 +8410,15 @@ def tracked_invoice_member_ids():
 
 
 def invoice_monitor_member_ids():
-    return tracked_invoice_member_ids() | requested_invoice_member_ids()
+    # The sync agent takes its scan cohort from this set. The static pilot
+    # allowlist must stay in it, otherwise pilot members without an issued
+    # invoice lose source coverage and their newest payment stays blocked.
+    pilot_ids = (
+        configured_invoice_pilot_member_ids()
+        if app.config.get("INVOICE_GA_PILOT_ENABLED")
+        else set()
+    )
+    return pilot_ids | tracked_invoice_member_ids() | requested_invoice_member_ids()
 
 
 def acquire_invoice_member_transaction_lock(member_id):
