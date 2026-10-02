@@ -373,6 +373,140 @@ class MemberInvoicePilotTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             issue_member_invoice(older_invoice, "staff")
 
+    def admin_session(self):
+        with self.client.session_transaction() as session:
+            session["staff_role"] = "admin"
+            session["staff_username"] = "ron"
+            session["_csrf_token"] = "csrf-test"
+
+    def test_dependent_payment_is_invoiced_in_member_name(self):
+        self.add_pilot_member()
+        self.sync_event(self.event_payload(
+            remittance_type=8,
+            remittance_reference=990001,
+        ))
+
+        event = GymAssistantJournalEvent.query.one()
+        self.assertEqual(event.eligibility_status, "eligible")
+        invoice, created = create_ga_membership_invoice_draft(event, actor="ron")
+
+        self.assertTrue(created)
+        self.assertEqual(invoice.member_id, PILOT_MEMBER_ID)
+        self.assertEqual(invoice.member_name, "Pilot Member")
+        self.assertEqual(invoice.paid_amount, Decimal("65.00"))
+
+    def test_bulk_issue_requires_confirmation_and_reviewed_ids(self):
+        self.add_pilot_member()
+        invoice = self.prepare_draft(self.event_payload(
+            catalog_interval_count=1,
+            catalog_period_match_status="mismatch",
+        ))
+        self.enable_issuing()
+        self.admin_session()
+
+        body = self.client.get("/staff/invoices").get_data(as_text=True)
+        self.assertIn(f'name="invoice_ids" value="{invoice.id}"', body)
+        self.assertIn("Non-standard period", body)
+
+        for data in (
+            {"csrf_token": "csrf-test", "invoice_ids": str(invoice.id)},
+            {"csrf_token": "csrf-test", "bulk_review_confirmed": "1"},
+        ):
+            response = self.client.post("/staff/invoices/issue-latest", data=data)
+            self.assertEqual(response.status_code, 302)
+            db.session.expire_all()
+            self.assertEqual(
+                db.session.get(MemberInvoice, invoice.id).status,
+                "ready_for_review",
+            )
+
+        response = self.client.post("/staff/invoices/issue-latest", data={
+            "csrf_token": "csrf-test",
+            "bulk_review_confirmed": "1",
+            "invoice_ids": str(invoice.id),
+        })
+        self.assertEqual(response.status_code, 302)
+        db.session.expire_all()
+        issued = db.session.get(MemberInvoice, invoice.id)
+        self.assertEqual(issued.status, "issued")
+        self.assertTrue(issued.invoice_number)
+        self.assertIsNotNone(issued.period_reviewed_at)
+        self.assertEqual(issued.reviewed_by, "ron")
+
+    def test_bulk_issue_skips_draft_of_older_payment(self):
+        self.add_pilot_member()
+        older_payload = self.event_payload(
+            source_reference="ga-journal:" + ("9" * 64),
+            source_payload_hash="a" * 64,
+            journal_transaction_id=990704,
+            occurred_at="2026-01-15T19:56:00+00:00",
+            service_period_start="2025-09-01",
+            service_period_end_exclusive="2026-01-01",
+        )
+        self.sync_event(older_payload)
+        older_invoice, _ = create_ga_membership_invoice_draft(
+            GymAssistantJournalEvent.query.one(),
+            actor="staff",
+        )
+        db.session.commit()
+        latest_payload = self.event_payload(
+            source_reference="ga-journal:" + ("b" * 64),
+            source_payload_hash="c" * 64,
+            journal_transaction_id=990705,
+            occurred_at="2026-02-15T19:56:00+00:00",
+        )
+        self.sync_event([older_payload, latest_payload])
+        latest_event = GymAssistantJournalEvent.query.filter_by(
+            journal_transaction_id=990705
+        ).one()
+        latest_invoice, _ = create_ga_membership_invoice_draft(latest_event, actor="staff")
+        db.session.commit()
+        self.enable_issuing()
+        self.admin_session()
+
+        body = self.client.get("/staff/invoices").get_data(as_text=True)
+        self.assertIn(f'name="invoice_ids" value="{latest_invoice.id}"', body)
+        self.assertNotIn(f'name="invoice_ids" value="{older_invoice.id}"', body)
+        self.assertIn("Outdated drafts", body)
+
+        response = self.client.post("/staff/invoices/issue-latest", data={
+            "csrf_token": "csrf-test",
+            "bulk_review_confirmed": "1",
+            "invoice_ids": [str(older_invoice.id), str(latest_invoice.id)],
+        })
+        self.assertEqual(response.status_code, 302)
+        db.session.expire_all()
+        self.assertEqual(
+            db.session.get(MemberInvoice, older_invoice.id).status,
+            "ready_for_review",
+        )
+        self.assertEqual(
+            db.session.get(MemberInvoice, latest_invoice.id).status,
+            "issued",
+        )
+
+    def test_bulk_issue_is_admin_only(self):
+        self.add_pilot_member()
+        invoice = self.prepare_draft()
+        self.enable_issuing()
+        with self.client.session_transaction() as session:
+            session["staff_role"] = "staff"
+            session["staff_username"] = "frontdesk"
+            session["_csrf_token"] = "csrf-test"
+
+        response = self.client.post("/staff/invoices/issue-latest", data={
+            "csrf_token": "csrf-test",
+            "bulk_review_confirmed": "1",
+            "invoice_ids": str(invoice.id),
+        })
+
+        self.assertNotEqual(response.status_code, 200)
+        db.session.expire_all()
+        self.assertEqual(
+            db.session.get(MemberInvoice, invoice.id).status,
+            "ready_for_review",
+        )
+
     def test_unreadable_new_snapshot_immediately_invalidates_old_draft(self):
         self.add_pilot_member()
         invoice = self.prepare_draft()

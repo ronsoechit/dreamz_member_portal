@@ -8739,8 +8739,9 @@ def invoice_event_eligibility(values, member):
         return "blocked", "membership_payment_uses_account_credit"
     if values["service_period_end_exclusive"] <= values["service_period_start"]:
         return "blocked", "invalid_service_period"
-    if values["remittance_type"] == 8:
-        return "blocked", "dependent_payment_requires_review"
+    # Remittance type 8 (dues settled through another member's payment) is
+    # invoiced in the name of the member whose membership was paid; the dues,
+    # catalog and billing checks below apply to it unchanged.
     if values["other_contract_fee_cents"] or values["source_tax_cents"]:
         return "blocked", "non_membership_components_require_review"
     if (
@@ -10608,6 +10609,75 @@ def issue_member_invoice(invoice, actor):
     return invoice
 
 
+def issue_locked_invoice_draft(invoice, actor, period_review_required=False):
+    """Issue one row-locked draft and close its request; the caller commits."""
+    if period_review_required:
+        invoice.period_reviewed_at = datetime.now()
+        invoice.period_reviewed_by = actor
+    originating_request = invoice_request_binding_for_invoice(invoice)
+    if originating_request and (
+        originating_request.status != INVOICE_REQUEST_DRAFT_READY
+        or originating_request.invoice_id != invoice.id
+        or originating_request.source_event_id != invoice.source_event_id
+    ):
+        raise ValueError("Invoice request binding is not ready for issue.")
+    issue_member_invoice(invoice, actor)
+    if originating_request:
+        originating_request.status = INVOICE_REQUEST_ISSUED
+        originating_request.status_reason = None
+        originating_request.open_member_key = None
+        originating_request.completed_at = invoice.issued_at or datetime.now()
+        originating_request.updated_at = datetime.now()
+    return invoice
+
+
+def mark_member_invoice_generation_failed(invoice_id):
+    failed_invoice = db.session.get(MemberInvoice, invoice_id)
+    if failed_invoice and failed_invoice.status != INVOICE_STATUS_ISSUED:
+        failed_invoice.status = INVOICE_STATUS_FAILED
+        failed_invoice.review_reason = "PDF generation or durable storage failed; see application log."
+        failed_invoice.updated_at = datetime.now()
+        db.session.commit()
+
+
+def invoice_draft_bulk_issue_language(invoice):
+    invoice_request = invoice_request_binding_for_invoice(invoice)
+    if invoice_request:
+        language = str(invoice_request.requested_language or "").strip().lower()
+        return language if language in LANGUAGES else None
+    return confirmed_invoice_language_for_member(invoice.member_id)
+
+
+def invoice_draft_bulk_issue_ready(invoice):
+    """True when a draft of the member's newest payment can be issued as is."""
+    if invoice.status != INVOICE_STATUS_READY or not invoice.source_event:
+        return False
+    if not invoice_draft_bulk_issue_language(invoice):
+        return False
+    issues = set(member_invoice_integrity_issues(invoice))
+    # The bulk confirmation lists and covers the non-standard periods.
+    issues.discard("catalog_period_requires_review")
+    return not issues
+
+
+def staff_invoice_bulk_issue_rows():
+    if invoice_configuration_issues():
+        return []
+    drafts = MemberInvoice.query.filter_by(status=INVOICE_STATUS_READY).all()
+    rows = [
+        {
+            "invoice": invoice,
+            "language": invoice_draft_bulk_issue_language(invoice),
+            "period_review_required": (
+                invoice.source_event.catalog_period_match_status == "mismatch"
+            ),
+        }
+        for invoice in drafts
+        if invoice_draft_bulk_issue_ready(invoice)
+    ]
+    return sorted(rows, key=lambda row: (row["invoice"].member_name or "", row["invoice"].id))
+
+
 def invoice_pdf_download_response(invoice):
     try:
         pdf_bytes = read_member_invoice_pdf(invoice)
@@ -10770,7 +10840,23 @@ def staff_invoice_pilot_context():
                 else None
             ),
         })
+    # Drafts of a payment that a newer payment has replaced can never be
+    # issued; they are listed apart so the working list stays short.
+    blockers_by_event_id = {row["event"].id: row["blockers"] for row in event_rows}
+    outdated_drafts = [
+        invoice for invoice in invoices
+        if invoice.status == INVOICE_STATUS_SUPERSEDED
+        or (
+            invoice.status in {INVOICE_STATUS_READY, INVOICE_STATUS_FAILED}
+            and "source_event_not_latest"
+            in blockers_by_event_id.get(invoice.source_event_id, [])
+        )
+    ]
+    outdated_ids = {invoice.id for invoice in outdated_drafts}
+    invoices = [invoice for invoice in invoices if invoice.id not in outdated_ids]
     return {
+        "bulk_issue_rows": staff_invoice_bulk_issue_rows(),
+        "outdated_drafts": outdated_drafts,
         "invoice_config_issues": invoice_configuration_issues(),
         "invoice_request_candidates": (
             Member.query.filter(
@@ -23123,23 +23209,11 @@ def staff_issue_invoice(invoice_id):
         )
         return redirect(url_for("staff_invoices"))
     try:
-        if period_review_required:
-            invoice.period_reviewed_at = datetime.now()
-            invoice.period_reviewed_by = current_staff_username() or "staff-token"
-        originating_request = invoice_request_binding_for_invoice(invoice)
-        if originating_request and (
-            originating_request.status != INVOICE_REQUEST_DRAFT_READY
-            or originating_request.invoice_id != invoice.id
-            or originating_request.source_event_id != invoice.source_event_id
-        ):
-            raise ValueError("Invoice request binding is not ready for issue.")
-        issue_member_invoice(invoice, current_staff_username() or "staff-token")
-        if originating_request:
-            originating_request.status = INVOICE_REQUEST_ISSUED
-            originating_request.status_reason = None
-            originating_request.open_member_key = None
-            originating_request.completed_at = invoice.issued_at or datetime.now()
-            originating_request.updated_at = datetime.now()
+        issue_locked_invoice_draft(
+            invoice,
+            current_staff_username() or "staff-token",
+            period_review_required=period_review_required,
+        )
         db.session.commit()
     except ValueError as exc:
         db.session.rollback()
@@ -23156,12 +23230,7 @@ def staff_issue_invoice(invoice_id):
     except Exception:
         db.session.rollback()
         app.logger.exception("Could not issue member invoice %s.", invoice_id)
-        failed_invoice = db.session.get(MemberInvoice, invoice_id)
-        if failed_invoice and failed_invoice.status != INVOICE_STATUS_ISSUED:
-            failed_invoice.status = INVOICE_STATUS_FAILED
-            failed_invoice.review_reason = "PDF generation or durable storage failed; see application log."
-            failed_invoice.updated_at = datetime.now()
-            db.session.commit()
+        mark_member_invoice_generation_failed(invoice_id)
         flash(
             translated_text(
                 "staff_invoice_issue_failure",
@@ -23178,6 +23247,80 @@ def staff_issue_invoice(invoice_id):
             number=invoice.invoice_number,
         ),
         "success",
+    )
+    return redirect(url_for("staff_invoices"))
+
+
+@app.post("/staff/invoices/issue-latest")
+def staff_issue_latest_invoices():
+    validate_csrf_token()
+    require_staff_session(required_role="admin")
+    if request.form.get("bulk_review_confirmed") != "1":
+        flash(translated_text("staff_invoice_bulk_review_incomplete", current_language()), "error")
+        return redirect(url_for("staff_invoices"))
+
+    ensure_runtime_schema()
+    actor = current_staff_username() or "staff-token"
+    # Only drafts the admin saw in the confirmed list are issued, and only
+    # while they are still the newest unblocked payment of their member.
+    reviewed_ids = {
+        int(value)
+        for value in request.form.getlist("invoice_ids")
+        if str(value).isdigit()
+    }
+    candidate_ids = [
+        row["invoice"].id
+        for row in staff_invoice_bulk_issue_rows()
+        if row["invoice"].id in reviewed_ids
+    ]
+    db.session.rollback()
+    issued_count = 0
+    failed_count = 0
+    for invoice_id in candidate_ids:
+        try:
+            invoice_member_id = (
+                db.session.query(MemberInvoice.member_id)
+                .filter(MemberInvoice.id == invoice_id)
+                .scalar()
+            )
+            if not invoice_member_id:
+                raise ValueError("Invoice draft no longer exists.")
+            acquire_invoice_member_transaction_lock(invoice_member_id)
+            invoice = (
+                MemberInvoice.query
+                .filter_by(id=invoice_id)
+                .populate_existing()
+                .with_for_update()
+                .first()
+            )
+            if not invoice or not invoice_draft_bulk_issue_ready(invoice):
+                raise ValueError("Invoice draft is no longer ready for bulk issue.")
+            issue_locked_invoice_draft(
+                invoice,
+                actor,
+                period_review_required=(
+                    invoice.source_event.catalog_period_match_status == "mismatch"
+                ),
+            )
+            db.session.commit()
+            issued_count += 1
+        except ValueError as exc:
+            db.session.rollback()
+            app.logger.warning("Invoice %s failed bulk issue validation: %s", invoice_id, exc)
+            failed_count += 1
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Could not issue member invoice %s.", invoice_id)
+            mark_member_invoice_generation_failed(invoice_id)
+            failed_count += 1
+    flash(
+        translated_text(
+            "staff_invoice_bulk_result",
+            current_language(),
+            issued=issued_count,
+            failed=failed_count,
+        ),
+        "error" if failed_count or not issued_count else "success",
     )
     return redirect(url_for("staff_invoices"))
 
