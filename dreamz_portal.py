@@ -222,6 +222,8 @@ app.config["INVOICE_ON_DEMAND_MEMBER_IDS"] = {
     for member_id in os.getenv("INVOICE_ON_DEMAND_MEMBER_IDS", "").split(",")
     if member_id.strip().isdigit() and int(member_id.strip()) > 0
 }
+# Semicolon-separated Gym Assistant plan names whose active members may request invoices.
+app.config["INVOICE_ON_DEMAND_PLAN_TYPES"] = os.getenv("INVOICE_ON_DEMAND_PLAN_TYPES", "").strip()
 app.config["INVOICE_ON_DEMAND_MAX_MEMBERS"] = positive_int_environment_value(
     "INVOICE_ON_DEMAND_MAX_MEMBERS",
     25,
@@ -242,6 +244,7 @@ app.config["INVOICE_CONTACT_EMAIL"] = os.getenv(
 app.config["INVOICE_CONTACT_PHONE"] = os.getenv("INVOICE_CONTACT_PHONE", "+599 7964016").strip()
 app.config["INVOICE_NOTIFY_FROM_NAME"] = os.getenv("INVOICE_NOTIFY_FROM_NAME", "Dreamz Fitness Frontdesk").strip()
 app.config["INVOICE_NOTIFY_BCC"] = os.getenv("INVOICE_NOTIFY_BCC", "").strip()
+app.config["INVOICE_NOTIFY_REPLY_TO"] = os.getenv("INVOICE_NOTIFY_REPLY_TO", "").strip()
 app.config["INVOICE_NOTIFY_ON_ISSUE"] = os.getenv("INVOICE_NOTIFY_ON_ISSUE", "false").lower() in ("1", "true", "yes")
 app.config["INVOICE_TAX_MODE"] = os.getenv("INVOICE_TAX_MODE", "inclusive").strip().lower()
 app.config["INVOICE_ABB_RATE"] = os.getenv("INVOICE_ABB_RATE", "0.06").strip()
@@ -8308,11 +8311,43 @@ def configured_invoice_on_demand_member_ids():
     }
 
 
+def normalize_invoice_plan_type(value):
+    return " ".join(str(value or "").split()).casefold()
+
+
+def configured_invoice_on_demand_plan_types():
+    value = app.config.get("INVOICE_ON_DEMAND_PLAN_TYPES") or ""
+    if isinstance(value, str):
+        value = value.split(";")
+    return {
+        normalize_invoice_plan_type(plan_type)
+        for plan_type in value
+        if normalize_invoice_plan_type(plan_type)
+    }
+
+
+def invoice_on_demand_plan_member_allowed(member_id):
+    """True for an active member whose own plan is on the configured plan list."""
+    plan_types = configured_invoice_on_demand_plan_types()
+    if not plan_types:
+        return False
+    row = (
+        db.session.query(Member.plan_type, Member.is_active)
+        .filter(Member.member_id == member_id)
+        .first()
+    )
+    if not row or row[1] is False:
+        return False
+    return normalize_invoice_plan_type(row[0]) in plan_types
+
+
 def invoice_on_demand_member_allowed(member_id):
+    member_id = str(member_id or "").strip()
+    if not member_id or not app.config.get("INVOICE_ON_DEMAND_ENABLED"):
+        return False
     return (
-        bool(app.config.get("INVOICE_ON_DEMAND_ENABLED"))
-        and str(member_id or "").strip()
-        in configured_invoice_on_demand_member_ids()
+        member_id in configured_invoice_on_demand_member_ids()
+        or invoice_on_demand_plan_member_allowed(member_id)
     )
 
 
@@ -10275,7 +10310,11 @@ def invoice_configuration_issues():
     on_demand_ids = configured_invoice_on_demand_member_ids()
     if not on_demand_enabled and not pilot_enabled:
         issues.append("pilot_disabled")
-    if on_demand_enabled and not on_demand_ids:
+    if (
+        on_demand_enabled
+        and not on_demand_ids
+        and not configured_invoice_on_demand_plan_types()
+    ):
         issues.append("on_demand_allowlist_empty")
     if not on_demand_enabled and pilot_enabled and not pilot_ids:
         issues.append("pilot_allowlist_empty")
@@ -10690,6 +10729,13 @@ def invoice_notification_bcc_addresses():
     return addresses
 
 
+def invoice_notification_reply_to_addresses():
+    addresses = []
+    for email in parse_email_list(app.config.get("INVOICE_NOTIFY_REPLY_TO") or ""):
+        append_unique_email(addresses, email)
+    return addresses
+
+
 def build_member_invoice_ready_email(invoice):
     language = normalize_language(invoice.language or DEFAULT_LANGUAGE)
     portal_url = app.config["MEMBER_PORTAL_PUBLIC_URL"].rstrip("/")
@@ -10760,12 +10806,13 @@ def send_member_invoice_ready_email(invoice):
         email for email in invoice_notification_bcc_addresses()
         if email.lower() != recipient.lower()
     ]
-    # Replies go to the front desk; the internal copy holders are included so
-    # they see the member's answer as well.
+    # Replies go to the front desk plus the configured internal addresses, so
+    # they see the member's answer even when the blind copy is switched off.
     reply_to_addresses = []
     append_unique_email(reply_to_addresses, app.config.get("INVOICE_CONTACT_EMAIL"))
-    for email in bcc_addresses:
-        append_unique_email(reply_to_addresses, email)
+    for email in invoice_notification_reply_to_addresses() or bcc_addresses:
+        if email.lower() != recipient.lower():
+            append_unique_email(reply_to_addresses, email)
     subject, body, html_body = build_member_invoice_ready_email(invoice)
     result = deliver_email(
         [recipient],
@@ -10998,7 +11045,12 @@ def staff_invoice_pilot_context():
             if notify_rows else None
         ),
         "invoice_notify_bcc": invoice_notification_bcc_addresses(),
-        "invoice_notify_reply_to": app.config.get("INVOICE_CONTACT_EMAIL"),
+        "invoice_notify_reply_to": ", ".join(
+            email for email in (
+                [app.config.get("INVOICE_CONTACT_EMAIL")]
+                + (invoice_notification_reply_to_addresses() or invoice_notification_bcc_addresses())
+            ) if email
+        ),
         "invoice_notify_automatic": bool(app.config.get("INVOICE_NOTIFY_ON_ISSUE")),
         "outdated_drafts": outdated_drafts,
         "invoice_config_issues": invoice_configuration_issues(),

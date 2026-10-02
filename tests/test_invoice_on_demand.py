@@ -40,6 +40,7 @@ class InvoiceOnDemandTests(unittest.TestCase):
                 "INVOICE_GA_PILOT_MEMBER_IDS",
                 "INVOICE_ON_DEMAND_ENABLED",
                 "INVOICE_ON_DEMAND_MEMBER_IDS",
+                "INVOICE_ON_DEMAND_PLAN_TYPES",
                 "INVOICE_ON_DEMAND_MAX_MEMBERS",
                 "INVOICE_GA_PILOT_SYNC_MAX_AGE_MINUTES",
                 "INVOICE_FORCE_LOCAL_STORAGE",
@@ -58,6 +59,7 @@ class InvoiceOnDemandTests(unittest.TestCase):
             INVOICE_GA_PILOT_MEMBER_IDS=set(),
             INVOICE_ON_DEMAND_ENABLED=True,
             INVOICE_ON_DEMAND_MEMBER_IDS={MEMBER_ID},
+            INVOICE_ON_DEMAND_PLAN_TYPES="",
             INVOICE_ON_DEMAND_MAX_MEMBERS=2,
             INVOICE_GA_PILOT_SYNC_MAX_AGE_MINUTES=30,
             INVOICE_FORCE_LOCAL_STORAGE=True,
@@ -209,6 +211,53 @@ class InvoiceOnDemandTests(unittest.TestCase):
         })
         self.assertEqual(response.status_code, 403)
         self.assertEqual(MemberInvoiceRequest.query.count(), 0)
+
+    def test_plan_rule_opens_requests_for_own_memberships_only(self):
+        from dreamz_portal import invoice_configuration_issues
+
+        app.config["INVOICE_ON_DEMAND_MEMBER_IDS"] = set()
+        self.assertIn("on_demand_allowlist_empty", invoice_configuration_issues())
+        self.assertEqual(self.request_invoice().status_code, 404)
+
+        app.config["INVOICE_ON_DEMAND_PLAN_TYPES"] = (
+            "Contract 12 months 2024; CONTRACT  dreamz 6 Months ;"
+        )
+        self.assertNotIn("on_demand_allowlist_empty", invoice_configuration_issues())
+        self.member_session(language="nl")
+        body = self.client.get("/account/invoices").get_data(as_text=True)
+        self.assertEqual(self.client.get("/account/invoices").status_code, 200)
+        self.assertIn("/account/invoices/request", body)
+        self.assertEqual(self.request_invoice().status_code, 302)
+        self.assertEqual(MemberInvoiceRequest.query.one().status, "pending_sync")
+
+        for member_id, plan_type, is_active in (
+            ("35871", "Delfins Fitness", True),
+            ("35872", "Day Pass", True),
+            ("35873", None, True),
+            ("35874", "contract Dreamz 6 months", False),
+        ):
+            db.session.add(Member(
+                member_id=member_id,
+                name=f"Member, {member_id}",
+                email=f"member-{member_id}@example.com",
+                plan_type=plan_type,
+                is_active=is_active,
+            ))
+            db.session.add(MemberPortalPreference(member_id=member_id, invoice_language="nl"))
+            db.session.commit()
+            with self.client.session_transaction() as member_session:
+                member_session.clear()
+                member_session["member_id"] = member_id
+                member_session["member_auth_version"] = 0
+                member_session["language"] = "nl"
+                member_session["_csrf_token"] = "csrf-member"
+            self.assertEqual(self.client.get("/account/invoices").status_code, 404, plan_type)
+            response = self.client.post(
+                "/account/invoices/request",
+                data={"csrf_token": "csrf-member"},
+            )
+            self.assertEqual(response.status_code, 404, plan_type)
+        self.assertEqual(MemberInvoiceRequest.query.count(), 1)
 
     def test_admin_request_requires_browser_admin_not_manager_or_staff_token(self):
         self.member_session(language="nl")

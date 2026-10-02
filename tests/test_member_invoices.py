@@ -511,6 +511,7 @@ class MemberInvoicePilotTests(unittest.TestCase):
         defaults = {
             "EMAIL_DELIVERY_MODE": "log",
             "INVOICE_NOTIFY_BCC": "owner@example.com, manager@example.com",
+            "INVOICE_NOTIFY_REPLY_TO": "",
             "INVOICE_NOTIFY_ON_ISSUE": False,
             "INVOICE_CONTACT_EMAIL": "frontdesk@example.com",
         }
@@ -602,6 +603,28 @@ class MemberInvoicePilotTests(unittest.TestCase):
         )
         self.assertEqual(issued.status, "issued")
         self.assertIsNotNone(issued.member_notified_at)
+
+    def test_invoice_ready_email_without_bcc_keeps_internal_reply_addresses(self):
+        from unittest.mock import patch
+
+        self.configure_notifications(
+            EMAIL_DELIVERY_MODE="smtp",
+            INVOICE_NOTIFY_ON_ISSUE=True,
+            INVOICE_NOTIFY_BCC="",
+            INVOICE_NOTIFY_REPLY_TO="owner@example.com, manager@example.com",
+        )
+        self.add_pilot_member()
+        draft = self.prepare_draft()
+        with patch("dreamz_portal.smtplib.SMTP_SSL") as smtp:
+            self.issue_draft_as_admin(draft)
+        send = smtp.return_value.__enter__.return_value.send_message
+        send.assert_called_once()
+        message = send.call_args.args[0]
+        self.assertEqual(
+            message["Reply-To"],
+            "frontdesk@example.com, owner@example.com, manager@example.com",
+        )
+        self.assertEqual(send.call_args.kwargs["to_addrs"], ["pilot.member@example.com"])
 
     def test_failed_invoice_email_keeps_invoice_issued_and_unnotified(self):
         from unittest.mock import patch
