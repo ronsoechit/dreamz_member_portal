@@ -177,6 +177,63 @@ class InvoiceOnDemandTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
         return response
 
+    def test_admin_can_request_source_without_impersonating_member(self):
+        self.member_session(language="nl")
+        self.staff_session()
+        self.assertEqual(self.client.post('/staff/invoice-requests').status_code, 400)
+        for _ in range(2):
+            response = self.client.post('/staff/invoice-requests', data={
+                'csrf_token': 'csrf-staff', 'member_id': MEMBER_ID,
+            })
+            self.assertEqual(response.status_code, 302)
+        invoice_request = MemberInvoiceRequest.query.one()
+        self.assertEqual(invoice_request.requested_language, 'nl')
+        self.assertEqual(invoice_request.status, 'pending_sync')
+        audit = MemberInvoiceRequestAudit.query.one()
+        self.assertEqual(audit.action, 'staff_request')
+        self.assertEqual(audit.actor, 'ron')
+        self.assertEqual(MemberInvoice.query.count(), 0)
+
+    def test_admin_request_rejects_nonallowlisted_member_and_disabled_feature(self):
+        self.member_session(language="nl")
+        self.staff_session()
+        app.config['INVOICE_ON_DEMAND_MEMBER_IDS'] = {'99999'}
+        response = self.client.post('/staff/invoice-requests', data={
+            'csrf_token': 'csrf-staff', 'member_id': MEMBER_ID,
+        })
+        self.assertEqual(response.status_code, 403)
+        app.config['INVOICE_ON_DEMAND_MEMBER_IDS'] = {MEMBER_ID}
+        app.config['INVOICE_ON_DEMAND_ENABLED'] = False
+        response = self.client.post('/staff/invoice-requests', data={
+            'csrf_token': 'csrf-staff', 'member_id': MEMBER_ID,
+        })
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(MemberInvoiceRequest.query.count(), 0)
+
+    def test_admin_request_requires_browser_admin_not_manager_or_staff_token(self):
+        self.member_session(language="nl")
+        self.staff_session(role='manager')
+        response = self.client.post('/staff/invoice-requests', data={
+            'csrf_token': 'csrf-staff', 'member_id': MEMBER_ID,
+        })
+        self.assertEqual(response.status_code, 403)
+        with self.client.session_transaction() as staff_session:
+            staff_session.clear()
+            staff_session['_csrf_token'] = 'csrf-staff'
+        response = self.client.post('/staff/invoice-requests?token=staff-token-test', data={
+            'csrf_token': 'csrf-staff', 'member_id': MEMBER_ID,
+        })
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(MemberInvoiceRequest.query.count(), 0)
+
+    def test_admin_request_does_not_invent_member_language(self):
+        self.staff_session()
+        response = self.client.post('/staff/invoice-requests', data={
+            'csrf_token': 'csrf-staff', 'member_id': MEMBER_ID,
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(MemberInvoiceRequest.query.count(), 0)
+
     def test_member_request_is_csrf_protected_idempotent_and_monitored(self):
         self.member_session()
         self.assertEqual(self.client.post("/account/invoices/request").status_code, 400)

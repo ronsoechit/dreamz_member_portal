@@ -10764,6 +10764,12 @@ def staff_invoice_pilot_context():
         })
     return {
         "invoice_config_issues": invoice_configuration_issues(),
+        "invoice_request_candidates": (
+            Member.query.filter(
+                Member.member_id.in_(configured_invoice_on_demand_member_ids())
+            ).order_by(Member.name.asc()).all()
+            if app.config.get("INVOICE_ON_DEMAND_ENABLED") else []
+        ),
         "pilot_members": pilot_members,
         "event_rows": event_rows,
         "invoices": invoices,
@@ -22873,6 +22879,34 @@ def staff_reconcile_invoices():
         ),
         "success",
     )
+    return redirect(url_for("staff_invoices"))
+
+
+@app.post("/staff/invoice-requests")
+def staff_create_invoice_request():
+    validate_csrf_token()
+    require_staff_session(required_role="admin")
+    ensure_runtime_schema()
+    member_id = str(request.form.get("member_id") or "").strip()
+    member = Member.query.filter_by(member_id=member_id).first()
+    if not member or not invoice_on_demand_member_allowed(member_id):
+        abort(403)
+    try:
+        invoice_request, created = create_member_invoice_request(member_id)
+        if created:
+            audit_member_invoice_request_transition(
+                invoice_request,
+                action="staff_request",
+                to_status=INVOICE_REQUEST_PENDING,
+                transition_reason="administrator_requested_membership_invoice",
+                actor=current_staff_username(),
+            )
+        db.session.commit()
+    except ValueError:
+        db.session.rollback()
+        flash(translated_text("invoice_request_unavailable", current_language()), "error")
+        return redirect(url_for("staff_invoices"))
+    flash(translated_text("staff_invoice_request_recorded", current_language()), "success")
     return redirect(url_for("staff_invoices"))
 
 

@@ -58,6 +58,22 @@
   {% endif %}
 </section>
 
+{% if invoice_request_candidates %}
+<section class="mb-6 rounded-xl border border-gray-700 bg-gray-900/70 p-5">
+  <h2 class="text-lg font-semibold text-white">{{ t('invoice_request_title') }}</h2>
+  <p class="mt-2 text-sm text-gray-300">{{ t('staff_invoice_request_intro') }}</p>
+  <form method="post" action="{{ url_for('staff_create_invoice_request') }}" class="mt-4 flex flex-wrap gap-3">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <select name="member_id" class="dreamz-select" required aria-label="{{ t('member') }}">
+      {% for member in invoice_request_candidates %}
+      <option value="{{ member.member_id }}">#{{ member.member_id }} · {{ member.name }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-black">{{ t('invoice_request_action') }}</button>
+  </form>
+</section>
+{% endif %}
+
 <section class="mb-6">
   <div class="mb-3 flex items-center justify-between">
     <h2 class="text-lg font-semibold text-white">{{ t('staff_invoice_source_status') }}</h2>

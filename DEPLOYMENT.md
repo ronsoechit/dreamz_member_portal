@@ -498,6 +498,16 @@ may close a blocked request only after a separate confirmation; the actor,
 time and reason remain in the request audit record, and the member may then
 submit a new request.
 
+An authenticated administrator can also request the source for a member from
+the exact on-demand allowlist through `POST /staff/invoice-requests`. This uses
+the same per-member lock, lifetime capacity, confirmed member language and
+idempotent request creation as the member route. The creating administrator is
+recorded in an immutable `staff_request` audit event; no member session is
+created or impersonated. It creates no draft, invoice number, PDF or email.
+The subsequent source binding, preparation, review and issuing steps remain
+mandatory. The staff form lists only members in that separately configured
+allowlist and does not extend the historical 14-member bootstrap cohort.
+
 Use this rollout sequence:
 
 1. Deploy with `INVOICE_ON_DEMAND_ENABLED=false`. Keep the existing 14-member

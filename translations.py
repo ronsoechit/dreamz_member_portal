@@ -7158,6 +7158,28 @@ for language, values in MEMBER_EMAIL_CORRECTION_TRANSLATIONS.items():
     TRANSLATIONS.setdefault(language, {}).update(values)
 
 
+STAFF_INVOICE_REQUEST_TRANSLATIONS = {
+    "en": {
+        "staff_invoice_request_intro": "Request the latest membership invoice for an authorized member. This retrieves the source for review and does not issue an invoice or send an email.",
+        "staff_invoice_request_recorded": "The membership invoice request is recorded. Check its source before preparing and issuing the invoice.",
+    },
+    "nl": {
+        "staff_invoice_request_intro": "Vraag de nieuwste lidmaatschapsfactuur aan voor een toegestaan lid. Dit haalt de bron op voor controle en geeft geen factuur uit of verstuurt een e-mail.",
+        "staff_invoice_request_recorded": "De factuuraanvraag is vastgelegd. Controleer de bron voordat je de factuur voorbereidt en uitgeeft.",
+    },
+    "pap": {
+        "staff_invoice_request_intro": "Pidi e faktura mas resien di membresia pa un miembro autorisá. Esaki ta buska e fuente pa kontrol; e no ta emiti faktura ni manda email.",
+        "staff_invoice_request_recorded": "A registrá e petishon pa faktura. Kontrolá e fuente promé ku prepará i emiti e faktura.",
+    },
+    "es": {
+        "staff_invoice_request_intro": "Solicita la factura de membresía más reciente para un miembro autorizado. Esto obtiene la fuente para revisión y no emite una factura ni envía un correo.",
+        "staff_invoice_request_recorded": "La solicitud de factura está registrada. Revisa la fuente antes de preparar y emitir la factura.",
+    },
+}
+for language, values in STAFF_INVOICE_REQUEST_TRANSLATIONS.items():
+    TRANSLATIONS.setdefault(language, {}).update(values)
+
+
 def normalize_language(language):
     if language in LANGUAGES:
         return language
