@@ -245,6 +245,11 @@ app.config["INVOICE_CONTACT_PHONE"] = os.getenv("INVOICE_CONTACT_PHONE", "+599 7
 app.config["INVOICE_NOTIFY_FROM_NAME"] = os.getenv("INVOICE_NOTIFY_FROM_NAME", "Dreamz Fitness Frontdesk").strip()
 app.config["INVOICE_NOTIFY_BCC"] = os.getenv("INVOICE_NOTIFY_BCC", "").strip()
 app.config["INVOICE_NOTIFY_REPLY_TO"] = os.getenv("INVOICE_NOTIFY_REPLY_TO", "").strip()
+# Internal alert when a member requests an invoice; TO defaults to INVOICE_CONTACT_EMAIL.
+app.config["INVOICE_REQUEST_NOTIFY_ENABLED"] = os.getenv("INVOICE_REQUEST_NOTIFY_ENABLED", "false").lower() in ("1", "true", "yes")
+app.config["INVOICE_REQUEST_NOTIFY_TO"] = os.getenv("INVOICE_REQUEST_NOTIFY_TO", "").strip()
+app.config["INVOICE_REQUEST_NOTIFY_CC"] = os.getenv("INVOICE_REQUEST_NOTIFY_CC", "").strip()
+app.config["INVOICE_REQUEST_NOTIFY_LANGUAGE"] = os.getenv("INVOICE_REQUEST_NOTIFY_LANGUAGE", "").strip()
 app.config["INVOICE_NOTIFY_ON_ISSUE"] = os.getenv("INVOICE_NOTIFY_ON_ISSUE", "false").lower() in ("1", "true", "yes")
 app.config["INVOICE_TAX_MODE"] = os.getenv("INVOICE_TAX_MODE", "inclusive").strip().lower()
 app.config["INVOICE_ABB_RATE"] = os.getenv("INVOICE_ABB_RATE", "0.06").strip()
@@ -10727,6 +10732,83 @@ def invoice_notification_bcc_addresses():
     for email in parse_email_list(app.config.get("INVOICE_NOTIFY_BCC") or ""):
         append_unique_email(addresses, email)
     return addresses
+
+
+def build_invoice_request_staff_email(invoice_request):
+    language = normalize_language(
+        app.config.get("INVOICE_REQUEST_NOTIFY_LANGUAGE") or DEFAULT_LANGUAGE
+    )
+    member = Member.query.filter_by(member_id=invoice_request.member_id).first()
+    member_name = display_member_name(member.name if member else "") or str(invoice_request.member_id)
+    portal_url = app.config["MEMBER_PORTAL_PUBLIC_URL"].rstrip("/")
+    subject = translated_text(
+        "email_invoice_request_subject",
+        language,
+        name=member_name,
+        member_id=invoice_request.member_id,
+    )
+    intro = translated_text("email_invoice_request_intro", language)
+    rows = [
+        (translated_text("invoice_pdf_member", language), f"{member_name} (#{invoice_request.member_id})"),
+        (translated_text("email", language), (member.email if member else "") or "—"),
+        (translated_text("membership", language), (member.plan_type if member else "") or "—"),
+    ]
+    steps = translated_text("email_invoice_request_steps", language)
+    signoff = translated_text("email_signoff", language)
+    row_text = "\n".join(f"{label}: {value}" for label, value in rows)
+    body = f"""{intro}
+
+{row_text}
+
+{steps}
+
+{signoff}
+Dreamz Fitness Bonaire
+"""
+    html_body = email_html_layout(
+        subject,
+        intro,
+        rows=rows,
+        note=steps,
+        action_label=translated_text("email_invoice_request_action", language),
+        action_url=f"{portal_url}/staff/invoices",
+        signoff=signoff,
+    )
+    return subject, body, html_body
+
+
+def notify_staff_of_invoice_request(request_id):
+    """Best-effort internal alert; never undoes the member's request."""
+    if not app.config.get("INVOICE_REQUEST_NOTIFY_ENABLED"):
+        return
+    try:
+        invoice_request = db.session.get(MemberInvoiceRequest, request_id)
+        if not invoice_request:
+            return
+        to_addresses = []
+        for email in (
+            parse_email_list(app.config.get("INVOICE_REQUEST_NOTIFY_TO") or "")
+            or [app.config.get("INVOICE_CONTACT_EMAIL")]
+        ):
+            append_unique_email(to_addresses, email)
+        if not to_addresses:
+            return
+        cc_addresses = []
+        for email in parse_email_list(app.config.get("INVOICE_REQUEST_NOTIFY_CC") or ""):
+            if email.lower() not in {address.lower() for address in to_addresses}:
+                append_unique_email(cc_addresses, email)
+        subject, body, html_body = build_invoice_request_staff_email(invoice_request)
+        deliver_email(
+            to_addresses,
+            subject,
+            body,
+            cc_addresses=cc_addresses,
+            html_body=html_body,
+        )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Could not alert staff about invoice request %s.", request_id)
 
 
 def invoice_notification_reply_to_addresses():
@@ -23947,8 +24029,11 @@ def member_request_invoice():
         flash(translated_text("invoice_request_language_required", current_language()), "error")
         return redirect(url_for("member_account_preferences"))
     try:
-        _invoice_request, created = create_member_invoice_request(member.member_id)
+        invoice_request, created = create_member_invoice_request(member.member_id)
+        invoice_request_id = invoice_request.id
         db.session.commit()
+        if created:
+            notify_staff_of_invoice_request(invoice_request_id)
     except IntegrityError:
         db.session.rollback()
         existing = open_member_invoice_request(member.member_id)

@@ -212,6 +212,52 @@ class InvoiceOnDemandTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(MemberInvoiceRequest.query.count(), 0)
 
+    def configure_request_alert(self, **values):
+        defaults = {
+            "EMAIL_DELIVERY_MODE": "log",
+            "INVOICE_CONTACT_EMAIL": "frontdesk@example.com",
+            "INVOICE_REQUEST_NOTIFY_ENABLED": True,
+            "INVOICE_REQUEST_NOTIFY_TO": "",
+            "INVOICE_REQUEST_NOTIFY_CC": "owner@example.com, frontdesk@example.com",
+            "INVOICE_REQUEST_NOTIFY_LANGUAGE": "nl",
+        }
+        defaults.update(values)
+        for key, value in defaults.items():
+            self.addCleanup(app.config.__setitem__, key, app.config.get(key))
+            app.config[key] = value
+
+    def test_new_member_request_alerts_front_desk_once(self):
+        from dreamz_portal import EmailLog
+
+        self.configure_request_alert()
+        for _ in range(2):
+            self.assertEqual(self.request_invoice().status_code, 302)
+        self.assertEqual(MemberInvoiceRequest.query.count(), 1)
+        log = EmailLog.query.one()
+        self.assertEqual(log.to_addresses, "frontdesk@example.com")
+        self.assertEqual(log.cc_addresses, "owner@example.com")
+        self.assertEqual(log.subject, f"Factuuraanvraag: {MEMBER_ID} Member (#{MEMBER_ID})")
+        self.assertIn("Gym Assistant", log.body)
+        self.assertIn(f"member-{MEMBER_ID}@example.com", log.body)
+        self.assertIn("contract Dreamz 6 months", log.body)
+
+    def test_request_alert_is_off_by_default_and_failure_keeps_request(self):
+        from unittest.mock import patch
+        from dreamz_portal import EmailLog
+
+        self.configure_request_alert(INVOICE_REQUEST_NOTIFY_ENABLED=False)
+        self.staff_session()
+        self.member_session(language="nl")
+        self.assertEqual(self.request_invoice().status_code, 302)
+        self.assertEqual(EmailLog.query.count(), 0)
+        MemberInvoiceRequest.query.delete()
+        db.session.commit()
+
+        app.config["INVOICE_REQUEST_NOTIFY_ENABLED"] = True
+        with patch("dreamz_portal.deliver_email", side_effect=RuntimeError("smtp down")):
+            self.assertEqual(self.request_invoice().status_code, 302)
+        self.assertEqual(MemberInvoiceRequest.query.one().status, "pending_sync")
+
     def test_plan_rule_opens_requests_for_own_memberships_only(self):
         from dreamz_portal import invoice_configuration_issues
 
