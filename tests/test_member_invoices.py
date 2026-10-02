@@ -604,6 +604,30 @@ class MemberInvoicePilotTests(unittest.TestCase):
         self.assertEqual(issued.status, "issued")
         self.assertIsNotNone(issued.member_notified_at)
 
+    def test_papiamentu_invoice_email_greets_by_time_of_day(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from dreamz_portal import build_member_invoice_ready_email
+
+        invoice = SimpleNamespace(
+            language="pap",
+            invoice_number="DF-2026-000099",
+            member_name="Pilot Member",
+            service_period_start=date(2026, 9, 1),
+            service_period_end=date(2026, 9, 30),
+            total_amount=65.0,
+        )
+        for hour, greeting in ((8, "Bon dia"), (12, "Bon tardi"), (18, "Bon tardi"), (19, "Bon nochi")):
+            with patch(
+                "dreamz_portal.current_portal_datetime",
+                return_value=datetime(2026, 10, 2, hour, 30),
+            ):
+                _subject, body, html_body = build_member_invoice_ready_email(invoice)
+            self.assertTrue(body.startswith(f"{greeting} Pilot Member, bo faktura"), body[:60])
+            self.assertIn(f"{greeting} Pilot Member", html_body)
+        invoice.language = "nl"
+        self.assertTrue(build_member_invoice_ready_email(invoice)[1].startswith("Hoi Pilot Member,"))
+
     def test_invoice_ready_email_without_bcc_keeps_internal_reply_addresses(self):
         from unittest.mock import patch
 

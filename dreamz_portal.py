@@ -10818,6 +10818,18 @@ def invoice_notification_reply_to_addresses():
     return addresses
 
 
+def email_time_of_day_greeting(language, now=None):
+    """Greeting for the local (portal) time at which the e-mail is sent."""
+    hour = (now or current_portal_datetime()).hour
+    if hour < 12:
+        key = "email_greeting_morning"
+    elif hour < 19:
+        key = "email_greeting_afternoon"
+    else:
+        key = "email_greeting_evening"
+    return translated_text(key, language)
+
+
 def build_member_invoice_ready_email(invoice):
     language = normalize_language(invoice.language or DEFAULT_LANGUAGE)
     portal_url = app.config["MEMBER_PORTAL_PUBLIC_URL"].rstrip("/")
@@ -10829,7 +10841,10 @@ def build_member_invoice_ready_email(invoice):
         "email_invoice_ready_subject", language, number=invoice.invoice_number
     )
     intro = translated_text(
-        "email_invoice_ready_intro", language, name=invoice.member_name
+        "email_invoice_ready_intro",
+        language,
+        name=invoice.member_name,
+        greeting=email_time_of_day_greeting(language),
     )
     rows = [
         (translated_text("invoice_number", language), invoice.invoice_number),
