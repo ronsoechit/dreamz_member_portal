@@ -240,6 +240,9 @@ app.config["INVOICE_CONTACT_EMAIL"] = os.getenv(
     "frontdesk.dreamzfitness@gmail.com",
 ).strip()
 app.config["INVOICE_CONTACT_PHONE"] = os.getenv("INVOICE_CONTACT_PHONE", "+599 7964016").strip()
+app.config["INVOICE_NOTIFY_FROM_NAME"] = os.getenv("INVOICE_NOTIFY_FROM_NAME", "Dreamz Fitness Frontdesk").strip()
+app.config["INVOICE_NOTIFY_BCC"] = os.getenv("INVOICE_NOTIFY_BCC", "").strip()
+app.config["INVOICE_NOTIFY_ON_ISSUE"] = os.getenv("INVOICE_NOTIFY_ON_ISSUE", "false").lower() in ("1", "true", "yes")
 app.config["INVOICE_TAX_MODE"] = os.getenv("INVOICE_TAX_MODE", "inclusive").strip().lower()
 app.config["INVOICE_ABB_RATE"] = os.getenv("INVOICE_ABB_RATE", "0.06").strip()
 app.config["INVOICE_FORCE_LOCAL_STORAGE"] = os.getenv(
@@ -1314,6 +1317,8 @@ class MemberInvoice(db.Model):
     void_reason = db.Column(db.Text)
     period_reviewed_at = db.Column(db.DateTime)
     period_reviewed_by = db.Column(db.String)
+    member_notified_at = db.Column(db.DateTime)
+    member_notified_to = db.Column(db.String)
 
     source_event = db.relationship("GymAssistantJournalEvent")
     lines = db.relationship(
@@ -10678,6 +10683,136 @@ def staff_invoice_bulk_issue_rows():
     return sorted(rows, key=lambda row: (row["invoice"].member_name or "", row["invoice"].id))
 
 
+def invoice_notification_bcc_addresses():
+    addresses = []
+    for email in parse_email_list(app.config.get("INVOICE_NOTIFY_BCC") or ""):
+        append_unique_email(addresses, email)
+    return addresses
+
+
+def build_member_invoice_ready_email(invoice):
+    language = normalize_language(invoice.language or DEFAULT_LANGUAGE)
+    portal_url = app.config["MEMBER_PORTAL_PUBLIC_URL"].rstrip("/")
+    period = (
+        f"{fmt_policy_date(invoice.service_period_start, language)} – "
+        f"{fmt_policy_date(invoice.service_period_end, language)}"
+    )
+    subject = translated_text(
+        "email_invoice_ready_subject", language, number=invoice.invoice_number
+    )
+    intro = translated_text(
+        "email_invoice_ready_intro", language, name=invoice.member_name
+    )
+    rows = [
+        (translated_text("invoice_number", language), invoice.invoice_number),
+        (translated_text("invoice_service_period", language), period),
+        (translated_text("invoice_total", language), f"${invoice.total_amount:.2f}"),
+    ]
+    steps = translated_text(
+        "email_invoice_ready_steps",
+        language,
+        url=portal_url.removeprefix("https://"),
+        code_login=translated_text("continue_with_email", language),
+        account=translated_text("account", language),
+        invoices=translated_text("invoices", language),
+    )
+    note = translated_text("email_invoice_ready_note", language)
+    signoff = translated_text("email_signoff", language)
+    row_text = "\n".join(f"{label}: {value}" for label, value in rows)
+    body = f"""{intro}
+
+{row_text}
+
+{steps}
+
+{note}
+
+{signoff}
+Dreamz Fitness Bonaire
+"""
+    html_body = email_html_layout(
+        subject,
+        intro,
+        rows=rows,
+        note=f"{steps}\n\n{note}",
+        action_label=translated_text("email_invoice_ready_action", language),
+        action_url=f"{portal_url}/login",
+        signoff=signoff,
+    )
+    return subject, body, html_body
+
+
+def member_invoice_notification_recipient(invoice):
+    member = Member.query.filter_by(member_id=invoice.member_id).first()
+    return str((member.email if member else "") or "").strip()
+
+
+def send_member_invoice_ready_email(invoice):
+    """Tell the member an issued invoice is in the portal; the caller commits."""
+    if invoice.status != INVOICE_STATUS_ISSUED or not invoice.invoice_number:
+        raise ValueError("Only issued invoices can be announced to the member.")
+    if invoice.member_notified_at:
+        return "already_sent"
+    recipient = member_invoice_notification_recipient(invoice)
+    if not recipient:
+        return "not_sent"
+    bcc_addresses = [
+        email for email in invoice_notification_bcc_addresses()
+        if email.lower() != recipient.lower()
+    ]
+    # Replies go to the front desk; the internal copy holders are included so
+    # they see the member's answer as well.
+    reply_to_addresses = []
+    append_unique_email(reply_to_addresses, app.config.get("INVOICE_CONTACT_EMAIL"))
+    for email in bcc_addresses:
+        append_unique_email(reply_to_addresses, email)
+    subject, body, html_body = build_member_invoice_ready_email(invoice)
+    result = deliver_email(
+        [recipient],
+        subject,
+        body,
+        bcc_addresses=bcc_addresses,
+        html_body=html_body,
+        reply_to_addresses=reply_to_addresses,
+        from_name=app.config.get("INVOICE_NOTIFY_FROM_NAME") or None,
+    )
+    invoice.member_notified_at = datetime.now()
+    invoice.member_notified_to = recipient
+    return result
+
+
+def notify_member_after_invoice_issue(invoice_id):
+    """Best-effort automatic announcement; never undoes an issued invoice."""
+    if not app.config.get("INVOICE_NOTIFY_ON_ISSUE"):
+        return
+    try:
+        invoice = db.session.get(MemberInvoice, invoice_id)
+        if invoice and invoice.status == INVOICE_STATUS_ISSUED:
+            send_member_invoice_ready_email(invoice)
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("Could not announce issued invoice %s to the member.", invoice_id)
+
+
+def staff_invoice_notify_rows():
+    issued = (
+        MemberInvoice.query
+        .filter(
+            MemberInvoice.status == INVOICE_STATUS_ISSUED,
+            MemberInvoice.member_notified_at.is_(None),
+        )
+        .order_by(MemberInvoice.invoice_number.asc())
+        .all()
+    )
+    rows = []
+    for invoice in issued:
+        recipient = member_invoice_notification_recipient(invoice)
+        if recipient:
+            rows.append({"invoice": invoice, "recipient": recipient})
+    return rows
+
+
 def invoice_pdf_download_response(invoice):
     try:
         pdf_bytes = read_member_invoice_pdf(invoice)
@@ -10854,8 +10989,17 @@ def staff_invoice_pilot_context():
     ]
     outdated_ids = {invoice.id for invoice in outdated_drafts}
     invoices = [invoice for invoice in invoices if invoice.id not in outdated_ids]
+    notify_rows = staff_invoice_notify_rows()
     return {
         "bulk_issue_rows": staff_invoice_bulk_issue_rows(),
+        "invoice_notify_rows": notify_rows,
+        "invoice_notify_preview": (
+            build_member_invoice_ready_email(notify_rows[0]["invoice"])[:2]
+            if notify_rows else None
+        ),
+        "invoice_notify_bcc": invoice_notification_bcc_addresses(),
+        "invoice_notify_reply_to": app.config.get("INVOICE_CONTACT_EMAIL"),
+        "invoice_notify_automatic": bool(app.config.get("INVOICE_NOTIFY_ON_ISSUE")),
         "outdated_drafts": outdated_drafts,
         "invoice_config_issues": invoice_configuration_issues(),
         "invoice_request_candidates": (
@@ -15387,6 +15531,8 @@ def deliver_email(
     bcc_addresses=None,
     html_body=None,
     redact_log_content=False,
+    reply_to_addresses=None,
+    from_name=None,
 ):
     to_addresses = [email for email in (to_addresses or []) if email]
     cc_addresses = [email for email in (cc_addresses or []) if email]
@@ -15412,10 +15558,13 @@ def deliver_email(
         return "logged"
 
     msg = EmailMessage()
-    msg["From"] = formatted_sender()
+    msg["From"] = f"{from_name} <{SMTP_FROM}>" if from_name else formatted_sender()
     msg["To"] = ", ".join(to_addresses)
     if cc_addresses:
         msg["Cc"] = ", ".join(cc_addresses)
+    reply_to_addresses = [email for email in (reply_to_addresses or []) if email]
+    if reply_to_addresses:
+        msg["Reply-To"] = ", ".join(reply_to_addresses)
     msg["Subject"] = subject
     msg.set_content(body)
     if html_body:
@@ -23215,6 +23364,7 @@ def staff_issue_invoice(invoice_id):
             period_review_required=period_review_required,
         )
         db.session.commit()
+        notify_member_after_invoice_issue(invoice_id)
     except ValueError as exc:
         db.session.rollback()
         app.logger.warning("Invoice %s failed issue validation: %s", invoice_id, exc)
@@ -23304,6 +23454,7 @@ def staff_issue_latest_invoices():
             )
             db.session.commit()
             issued_count += 1
+            notify_member_after_invoice_issue(invoice_id)
         except ValueError as exc:
             db.session.rollback()
             app.logger.warning("Invoice %s failed bulk issue validation: %s", invoice_id, exc)
@@ -23321,6 +23472,59 @@ def staff_issue_latest_invoices():
             failed=failed_count,
         ),
         "error" if failed_count or not issued_count else "success",
+    )
+    return redirect(url_for("staff_invoices"))
+
+
+@app.post("/staff/invoices/notify")
+def staff_notify_invoice_members():
+    validate_csrf_token()
+    require_staff_session(required_role="admin")
+    if request.form.get("notify_confirmed") != "1":
+        flash(translated_text("staff_invoice_notify_incomplete", current_language()), "error")
+        return redirect(url_for("staff_invoices"))
+
+    ensure_runtime_schema()
+    selected_ids = {
+        int(value)
+        for value in request.form.getlist("invoice_ids")
+        if str(value).isdigit()
+    }
+    candidate_ids = [
+        row["invoice"].id
+        for row in staff_invoice_notify_rows()
+        if row["invoice"].id in selected_ids
+    ]
+    db.session.rollback()
+    sent_count = 0
+    failed_count = 0
+    for invoice_id in candidate_ids:
+        try:
+            invoice = (
+                MemberInvoice.query
+                .filter_by(id=invoice_id)
+                .populate_existing()
+                .with_for_update()
+                .first()
+            )
+            result = send_member_invoice_ready_email(invoice) if invoice else "not_sent"
+            db.session.commit()
+            if result in {"sent", "logged"}:
+                sent_count += 1
+            else:
+                failed_count += 1
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("Could not announce invoice %s to the member.", invoice_id)
+            failed_count += 1
+    flash(
+        translated_text(
+            "staff_invoice_notify_result",
+            current_language(),
+            sent=sent_count,
+            failed=failed_count,
+        ),
+        "error" if failed_count or not sent_count else "success",
     )
     return redirect(url_for("staff_invoices"))
 

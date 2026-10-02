@@ -108,6 +108,46 @@
 </section>
 {% endif %}
 
+{% if invoice_notify_rows %}
+<section class="mb-6 rounded-xl border border-blue-500/40 bg-gray-900/80 p-5">
+  <h2 class="text-lg font-semibold text-white">{{ t('staff_invoice_notify_title') }}</h2>
+  <p class="mt-2 text-sm leading-6 text-gray-300">{{ t('staff_invoice_notify_intro') }}</p>
+  <p class="mt-2 text-sm leading-6 text-gray-400">
+    {{ t('staff_invoice_notify_routing', reply_to=invoice_notify_reply_to or '—', bcc=(invoice_notify_bcc|join(', ')) or '—') }}
+    {{ t('staff_invoice_notify_automatic_on') if invoice_notify_automatic else t('staff_invoice_notify_automatic_off') }}
+  </p>
+  <form method="post" action="{{ url_for('staff_notify_invoice_members') }}" class="mt-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="grid gap-2 sm:grid-cols-2">
+      {% for row in invoice_notify_rows %}
+        <label class="flex items-start gap-3 rounded-lg border border-gray-800 bg-black/20 px-3 py-2 text-sm text-gray-200">
+          <input class="mt-1 h-4 w-4 accent-yellow-500" type="checkbox" name="invoice_ids" value="{{ row.invoice.id }}" checked>
+          <span>
+            <span class="font-semibold text-white">{{ row.invoice.member_name }}</span>
+            <span class="text-xs text-gray-500">#{{ row.invoice.member_id }} · {{ row.invoice.invoice_number }} · {{ row.invoice.language|upper }}</span>
+            <span class="block break-all text-xs text-gray-400">{{ row.recipient }}</span>
+          </span>
+        </label>
+      {% endfor %}
+    </div>
+    {% if invoice_notify_preview %}
+      <details class="mt-4 rounded-lg border border-gray-800 bg-black/20 p-3" open>
+        <summary class="cursor-pointer text-sm font-semibold text-gray-200">{{ t('staff_invoice_notify_preview') }}</summary>
+        <div class="mt-3 text-sm font-semibold text-white">{{ invoice_notify_preview[0] }}</div>
+        <pre class="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-300">{{ invoice_notify_preview[1] }}</pre>
+      </details>
+    {% endif %}
+    <label class="mt-4 flex gap-3 text-sm leading-5 text-gray-200">
+      <input class="mt-1 h-4 w-4 accent-yellow-500" type="checkbox" name="notify_confirmed" value="1" required>
+      <span>{{ t('staff_invoice_notify_confirm') }}</span>
+    </label>
+    <button type="submit" class="mt-4 rounded-lg bg-blue-500 px-5 py-3 text-sm font-semibold text-white hover:bg-blue-400">
+      {{ t('staff_invoice_notify_send') }}
+    </button>
+  </form>
+</section>
+{% endif %}
+
 {% if invoice_request_candidates %}
 <section class="mb-6 rounded-xl border border-gray-700 bg-gray-900/70 p-5">
   <h2 class="text-lg font-semibold text-white">{{ t('invoice_request_title') }}</h2>

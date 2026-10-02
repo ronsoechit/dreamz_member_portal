@@ -507,6 +507,114 @@ class MemberInvoicePilotTests(unittest.TestCase):
             "ready_for_review",
         )
 
+    def configure_notifications(self, **values):
+        defaults = {
+            "EMAIL_DELIVERY_MODE": "log",
+            "INVOICE_NOTIFY_BCC": "owner@example.com, manager@example.com",
+            "INVOICE_NOTIFY_ON_ISSUE": False,
+            "INVOICE_CONTACT_EMAIL": "frontdesk@example.com",
+        }
+        defaults.update(values)
+        for key, value in defaults.items():
+            self.addCleanup(app.config.__setitem__, key, app.config.get(key))
+            app.config[key] = value
+
+    def issue_draft_as_admin(self, invoice):
+        self.enable_issuing()
+        self.admin_session()
+        response = self.client.post("/staff/invoices/issue-latest", data={
+            "csrf_token": "csrf-test",
+            "bulk_review_confirmed": "1",
+            "invoice_ids": str(invoice.id),
+        })
+        self.assertEqual(response.status_code, 302)
+        db.session.expire_all()
+        return db.session.get(MemberInvoice, invoice.id)
+
+    def test_invoice_ready_email_is_sent_once_from_staff_list(self):
+        from dreamz_portal import EmailLog
+
+        self.configure_notifications()
+        self.add_pilot_member()
+        issued = self.issue_draft_as_admin(self.prepare_draft())
+        self.assertEqual(issued.status, "issued")
+        self.assertIsNone(issued.member_notified_at)
+        self.assertEqual(EmailLog.query.count(), 0)
+
+        body = self.client.get("/staff/invoices").get_data(as_text=True)
+        self.assertIn("Tell members their invoice is ready", body)
+        self.assertIn("pilot.member@example.com", body)
+        self.assertIn(f"Your Dreamz Fitness invoice {issued.invoice_number} is ready", body)
+
+        response = self.client.post("/staff/invoices/notify", data={
+            "csrf_token": "csrf-test",
+            "invoice_ids": str(issued.id),
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(EmailLog.query.count(), 0)
+
+        for _ in range(2):
+            response = self.client.post("/staff/invoices/notify", data={
+                "csrf_token": "csrf-test",
+                "notify_confirmed": "1",
+                "invoice_ids": str(issued.id),
+            })
+            self.assertEqual(response.status_code, 302)
+
+        db.session.expire_all()
+        log = EmailLog.query.one()
+        self.assertEqual(log.to_addresses, "pilot.member@example.com")
+        self.assertEqual(log.cc_addresses, "")
+        self.assertEqual(log.bcc_addresses, "owner@example.com, manager@example.com")
+        self.assertIn(issued.invoice_number, log.subject)
+        self.assertIn("$65.00", log.body)
+        self.assertIn("Membership invoices", log.body)
+        notified = db.session.get(MemberInvoice, issued.id)
+        self.assertIsNotNone(notified.member_notified_at)
+        self.assertEqual(notified.member_notified_to, "pilot.member@example.com")
+        self.assertNotIn(
+            "Tell members their invoice is ready",
+            self.client.get("/staff/invoices").get_data(as_text=True),
+        )
+
+    def test_invoice_ready_email_headers_route_replies_to_frontdesk(self):
+        from unittest.mock import patch
+
+        self.configure_notifications(EMAIL_DELIVERY_MODE="smtp", INVOICE_NOTIFY_ON_ISSUE=True)
+        self.add_pilot_member()
+        draft = self.prepare_draft()
+        with patch("dreamz_portal.smtplib.SMTP_SSL") as smtp:
+            issued = self.issue_draft_as_admin(draft)
+        send = smtp.return_value.__enter__.return_value.send_message
+        send.assert_called_once()
+        message = send.call_args.args[0]
+        self.assertEqual(message["To"], "pilot.member@example.com")
+        self.assertIsNone(message["Cc"])
+        self.assertIsNone(message["Bcc"])
+        self.assertTrue(message["From"].startswith("Dreamz Fitness Frontdesk <"))
+        self.assertEqual(
+            message["Reply-To"],
+            "frontdesk@example.com, owner@example.com, manager@example.com",
+        )
+        self.assertEqual(
+            send.call_args.kwargs["to_addrs"],
+            ["pilot.member@example.com", "owner@example.com", "manager@example.com"],
+        )
+        self.assertEqual(issued.status, "issued")
+        self.assertIsNotNone(issued.member_notified_at)
+
+    def test_failed_invoice_email_keeps_invoice_issued_and_unnotified(self):
+        from unittest.mock import patch
+
+        self.configure_notifications(EMAIL_DELIVERY_MODE="smtp", INVOICE_NOTIFY_ON_ISSUE=True)
+        self.add_pilot_member()
+        draft = self.prepare_draft()
+        with patch("dreamz_portal.smtplib.SMTP_SSL", side_effect=OSError("smtp down")):
+            issued = self.issue_draft_as_admin(draft)
+
+        self.assertEqual(issued.status, "issued")
+        self.assertIsNone(issued.member_notified_at)
+
     def test_unreadable_new_snapshot_immediately_invalidates_old_draft(self):
         self.add_pilot_member()
         invoice = self.prepare_draft()
