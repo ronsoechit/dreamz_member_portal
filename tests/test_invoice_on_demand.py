@@ -117,6 +117,16 @@ class InvoiceOnDemandTests(unittest.TestCase):
             staff_session["staff_username"] = "ron"
             staff_session["_csrf_token"] = csrf
 
+    def record_later_payment(self):
+        """The member sync saw a payment after the invoiced one."""
+        latest_invoiced = max(
+            invoice.payment_date
+            for invoice in MemberInvoice.query.filter_by(member_id=MEMBER_ID).all()
+        )
+        member = Member.query.filter_by(member_id=MEMBER_ID).one()
+        member.last_payment = latest_invoiced + timedelta(days=1)
+        db.session.commit()
+
     def request_invoice(self, *, csrf="csrf-member"):
         self.member_session(csrf=csrf)
         return self.client.post(
@@ -670,6 +680,7 @@ class InvoiceOnDemandTests(unittest.TestCase):
                 "review_details_confirmed": "1",
             },
         )
+        self.record_later_payment()
         self.request_invoice()
         second_request = MemberInvoiceRequest.query.order_by(MemberInvoiceRequest.id.desc()).first()
         new_event = self.event(suffix="b", transaction_id=200)
@@ -924,14 +935,25 @@ class InvoiceOnDemandTests(unittest.TestCase):
         preference = db.session.get(MemberPortalPreference, MEMBER_ID)
         preference.invoice_language = "es"
         db.session.commit()
+        # A later non-membership payment keeps the request button available.
+        self.record_later_payment()
         self.request_invoice()
         second_request = MemberInvoiceRequest.query.order_by(MemberInvoiceRequest.id.desc()).first()
+        self.assertNotEqual(second_request.id, first_request.id)
         self.sync(events=[source_event])
+        # The sync closes the request itself; a later prepare click changes nothing.
+        self.assertEqual(
+            MemberInvoiceRequestAudit.query.filter_by(
+                request_id=second_request.id, action="system_close"
+            ).count(),
+            1,
+        )
         self.staff_session()
         self.client.post(
             f"/staff/invoice-requests/{second_request.id}/prepare",
             data={"csrf_token": "csrf-staff"},
         )
+        self.assertEqual(MemberInvoice.query.count(), 1)
 
         db.session.refresh(first_request)
         db.session.refresh(second_request)
@@ -942,6 +964,99 @@ class InvoiceOnDemandTests(unittest.TestCase):
         self.assertEqual(second_request.status_reason, "invoice_already_issued")
         self.assertEqual(invoice.language, "nl")
         self.assertEqual(member_invoice_integrity_issues(invoice), [])
+
+    def test_sync_closes_existing_source_ready_request_for_invoiced_payment(self):
+        self.request_invoice()
+        source_event = self.event()
+        self.sync(events=[source_event])
+        first_request = MemberInvoiceRequest.query.one()
+        self.staff_session()
+        self.client.post(
+            f"/staff/invoice-requests/{first_request.id}/prepare",
+            data={"csrf_token": "csrf-staff"},
+        )
+        invoice = MemberInvoice.query.one()
+        app.config["INVOICE_ISSUING_ENABLED"] = True
+        self.client.post(
+            f"/staff/invoices/{invoice.id}/issue",
+            data={
+                "csrf_token": "csrf-staff",
+                "review_source_confirmed": "1",
+                "review_scope_confirmed": "1",
+                "review_details_confirmed": "1",
+            },
+        )
+        # A request bound before this check existed, as in production.
+        now = datetime.now()
+        stale = MemberInvoiceRequest(
+            member_id=MEMBER_ID,
+            open_member_key=MEMBER_ID,
+            status="source_ready",
+            requested_language="nl",
+            requested_at=now,
+            updated_at=now,
+            source_event_id=invoice.source_event_id,
+            source_payload_hash=invoice.source_event.source_payload_hash,
+            source_snapshot_sha256="d" * 64,
+            source_bound_at=now,
+        )
+        db.session.add(stale)
+        db.session.commit()
+
+        self.sync(events=[source_event])
+
+        db.session.refresh(stale)
+        self.assertEqual(stale.status, "issued")
+        self.assertEqual(stale.status_reason, "invoice_already_issued")
+        self.assertIsNone(stale.open_member_key)
+        self.assertEqual(stale.invoice_id, invoice.id)
+        self.assertEqual(MemberInvoice.query.count(), 1)
+        audit = MemberInvoiceRequestAudit.query.filter_by(request_id=stale.id).one()
+        self.assertEqual(audit.action, "system_close")
+        self.assertEqual(audit.from_status, "source_ready")
+
+    def test_request_button_hidden_when_latest_payment_is_invoiced(self):
+        from dreamz_portal import EmailLog
+
+        self.configure_request_alert()
+        self.request_invoice()
+        self.sync(events=[self.event()])
+        first_request = MemberInvoiceRequest.query.one()
+        self.staff_session()
+        self.client.post(
+            f"/staff/invoice-requests/{first_request.id}/prepare",
+            data={"csrf_token": "csrf-staff"},
+        )
+        invoice = MemberInvoice.query.one()
+        app.config["INVOICE_ISSUING_ENABLED"] = True
+        self.client.post(
+            f"/staff/invoices/{invoice.id}/issue",
+            data={
+                "csrf_token": "csrf-staff",
+                "review_source_confirmed": "1",
+                "review_scope_confirmed": "1",
+                "review_details_confirmed": "1",
+            },
+        )
+        member = Member.query.filter_by(member_id=MEMBER_ID).one()
+        member.last_payment = invoice.payment_date
+        db.session.commit()
+        alerts_before = EmailLog.query.filter(EmailLog.subject.like("Factuuraanvraag%")).count()
+
+        self.member_session(language="nl")
+        body = self.client.get("/account/invoices").get_data(as_text=True)
+        self.assertNotIn('action="/account/invoices/request"', body)
+        self.assertIn("Na je volgende betaling kun je hier een nieuwe factuur aanvragen.", body)
+        self.assertEqual(self.request_invoice().status_code, 302)
+        self.assertEqual(MemberInvoiceRequest.query.count(), 1)
+        self.assertEqual(
+            EmailLog.query.filter(EmailLog.subject.like("Factuuraanvraag%")).count(),
+            alerts_before,
+        )
+
+        self.record_later_payment()
+        body = self.client.get("/account/invoices").get_data(as_text=True)
+        self.assertIn('action="/account/invoices/request"', body)
 
     def test_source_conflict_is_invalidated_not_reported_as_payment_void(self):
         original = self.event(suffix="a")

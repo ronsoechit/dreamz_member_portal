@@ -231,7 +231,7 @@
     <h3 class="mt-1 text-xl font-semibold text-white">{{ t('invoices_intro') }}</h3>
     <p class="mt-3 max-w-3xl text-sm leading-6 text-gray-300">{{ t('invoice_membership_only_note') }}</p>
   </section>
-  {% if invoice_request or invoice_request_can_submit %}
+  {% if invoice_request or invoice_request_can_submit or invoice_request_latest_invoiced %}
     <section class="mb-4 rounded-xl border border-gray-700 bg-gray-900/70 p-5">
       <div class="text-xs font-semibold uppercase tracking-widest text-yellow-300">{{ t('invoice_request_title') }}</div>
       {% if invoice_request and invoice_request.status == 'pending_sync' %}
@@ -254,6 +254,9 @@
         <p class="mt-3 text-sm leading-6 text-green-200">{{ t('invoice_request_status_issued') }}</p>
       {% else %}
         <p class="mt-3 text-sm leading-6 text-gray-200">{{ t('invoice_request_intro') }}</p>
+      {% endif %}
+      {% if invoice_request_latest_invoiced %}
+        <p class="mt-3 text-sm leading-6 text-gray-300">{{ t('invoice_request_latest_already_invoiced') }}</p>
       {% endif %}
       {% if invoice_request_can_submit %}
         <form class="mt-4" method="post" action="{{ url_for('member_request_invoice') }}">

@@ -9190,6 +9190,7 @@ def sync_invoice_membership_events(payload, sync_run):
         elif source_event.eligibility_status == "eligible" and not source_event.is_voided:
             invoice_request.status = INVOICE_REQUEST_SOURCE_READY
             invoice_request.status_reason = None
+            close_invoice_request_if_already_issued(invoice_request, now=now)
         else:
             invoice_request.status = INVOICE_REQUEST_SOURCE_BLOCKED
             invoice_request.status_reason = (
@@ -9211,6 +9212,11 @@ def sync_invoice_membership_events(payload, sync_run):
         .all()
     ) if covered_ids & active_request_ids else []
     for invoice_request in bound_requests:
+        if (
+            invoice_request.status == INVOICE_REQUEST_SOURCE_READY
+            and close_invoice_request_if_already_issued(invoice_request, now=now)
+        ):
+            continue
         processed = processed_event_by_member.get(invoice_request.member_id)
         if not processed:
             continue
@@ -9956,6 +9962,63 @@ def persist_member_invoice_language_preference(member_id, language, *, commit=Tr
     if commit:
         db.session.commit()
     return preference
+
+
+def close_invoice_request_if_already_issued(invoice_request, now=None):
+    """Close a source-ready request whose payment is already invoiced; no new invoice."""
+    if (
+        not invoice_request
+        or invoice_request.status != INVOICE_REQUEST_SOURCE_READY
+        or not invoice_request.source_event_id
+    ):
+        return False
+    invoice = (
+        MemberInvoice.query
+        .filter_by(
+            source_event_id=invoice_request.source_event_id,
+            member_id=invoice_request.member_id,
+            status=INVOICE_STATUS_ISSUED,
+        )
+        .order_by(MemberInvoice.id.asc())
+        .first()
+    )
+    if not invoice:
+        return False
+    now = now or datetime.now()
+    db.session.flush()
+    audit_member_invoice_request_transition(
+        invoice_request,
+        action="system_close",
+        to_status=INVOICE_REQUEST_ISSUED,
+        transition_reason="invoice_already_issued",
+        actor="system:ga-journal",
+        created_at=now,
+    )
+    invoice_request.invoice_id = invoice.id
+    invoice_request.status = INVOICE_REQUEST_ISSUED
+    invoice_request.status_reason = "invoice_already_issued"
+    invoice_request.open_member_key = None
+    invoice_request.completed_at = now
+    invoice_request.updated_at = now
+    return True
+
+
+def member_latest_payment_already_invoiced(member):
+    """True when the member's latest known payment is covered by an issued invoice."""
+    latest_invoiced = (
+        db.session.query(db.func.max(MemberInvoice.payment_date))
+        .filter(
+            MemberInvoice.member_id == str(member.member_id),
+            MemberInvoice.status == INVOICE_STATUS_ISSUED,
+        )
+        .scalar()
+    )
+    if latest_invoiced is None:
+        return False
+    last_payment = member.last_payment
+    if isinstance(last_payment, datetime):
+        last_payment = last_payment.date()
+    return not last_payment or last_payment <= latest_invoiced
 
 
 def latest_member_invoice_request(member_id):
@@ -23987,10 +24050,15 @@ def account_detail_context(member, account_page):
             abort(404)
         invoice_request = latest_member_invoice_request(member.member_id)
         open_invoice_request = open_member_invoice_request(member.member_id)
+        latest_invoiced = member_latest_payment_already_invoiced(member)
         context["invoice_request"] = invoice_request
         context["invoice_request_can_submit"] = bool(
             invoice_on_demand_member_allowed(member.member_id)
             and open_invoice_request is None
+            and not latest_invoiced
+        )
+        context["invoice_request_latest_invoiced"] = bool(
+            open_invoice_request is None and latest_invoiced
         )
         context["invoices"] = (
             MemberInvoice.query
@@ -24043,6 +24111,12 @@ def member_request_invoice():
     if not confirmed_invoice_language_for_member(member.member_id):
         flash(translated_text("invoice_request_language_required", current_language()), "error")
         return redirect(url_for("member_account_preferences"))
+    if (
+        open_member_invoice_request(member.member_id) is None
+        and member_latest_payment_already_invoiced(member)
+    ):
+        flash(translated_text("invoice_request_latest_already_invoiced", current_language()), "success")
+        return redirect(url_for("member_account_invoices"))
     try:
         invoice_request, created = create_member_invoice_request(member.member_id)
         invoice_request_id = invoice_request.id
